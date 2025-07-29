@@ -27,8 +27,8 @@ class TestingController extends Controller
 
     public function healthCheck(Request $request)
     {
-        $paymentIntentID = 123;
-        $url = env('PARAQON_STRIPE_BASE_URLSSS', 'https://socket.paraqon.Starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
+        $paymentIntentID = 1234567;
+        $url = env('PARAQON_STRIPE_BASE_URLSSS', 'https://socket.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
         return [
             'message' => $url
         ];
