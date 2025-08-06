@@ -2,31 +2,19 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Store;
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
-use App\Models\Content;
-use Carbon\Carbon;
 use Illuminate\Http\Request;
-use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 
 class ServiceController extends Controller
 {
-    public function checkCurrentTime(Request $request)
+    public function checkCurrentTime(): array
     {
-        $now = now();
-        return response()->json([
-            'now_time' => $now
-        ], 200);
+        return ['now_time' => now()];
     }
 
-    public function checkOtherTimeZone(Request $request)
+    public function checkOtherTimeZone(Request $request): array
     {
-        $timeZone = (int) $request->timezone;
-        $now = now()->addHours($timeZone);
-        return response()->json([
-            'now_time' => $now
-        ], 200);
+        return ['now_time' => now()->addHours((int) $request->timezone)];
     }
 }

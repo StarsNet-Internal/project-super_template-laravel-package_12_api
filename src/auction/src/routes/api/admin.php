@@ -3,8 +3,8 @@
 // Default Imports
 use Illuminate\Support\Facades\Route;
 
-use StarsNet\Project\Auction\App\Http\Controllers\Admin\TestingController;
-use StarsNet\Project\Auction\App\Http\Controllers\Admin\ServiceController;
+use Starsnet\Project\Auction\App\Http\Controllers\Admin\TestingController;
+use Starsnet\Project\Auction\App\Http\Controllers\Admin\ServiceController;
 
 /*
 |--------------------------------------------------------------------------

@@ -2,178 +2,83 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
-
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
-use App\Constants\Model\ProductVariantDiscountType;
-
-use App\Models\ProductVariant;
-use App\Models\Store;
-use App\Models\Product;
-
-use Carbon\Carbon;
-use Illuminate\Support\Facades\Auth;
-
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
-use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
+use Illuminate\Support\Collection;
+
+// Enums
+use App\Enums\ReplyStatus;
+use App\Enums\Status;
+
+// Models
 use Starsnet\Project\Paraqon\App\Models\Deposit;
 
 class DepositController extends Controller
 {
-    public function getAllDeposits(Request $request)
+    public function getAllDeposits(): Collection
     {
-        // Get authenticated User information
-        $customer = $this->customer();
-
-        // Get Items
-        $deposits = Deposit::where('requested_by_customer_id', $customer->_id)
+        return Deposit::where('requested_by_customer_id', $this->customer()->id)
             ->with(['auctionRegistrationRequest.store'])
-            ->latest()
             ->get();
-
-        return $deposits;
     }
 
-    public function getDepositDetails(Request $request)
+    public function getDepositDetails(Request $request): Deposit
     {
-        // Extract attributes from $request
-        $depositID = $request->route('id');
-
-        // Get Deposit
+        /** @var ?Deposit $deposit */
         $deposit = Deposit::with(['auctionRegistrationRequest.store', 'depositStatuses'])
-            ->find($depositID);
-
-        if (is_null($deposit)) {
-            return response()->json([
-                'message' => 'Deposit not found'
-            ], 404);
-        }
-
-        $customer = $this->customer();
-
-        if ($deposit->requested_by_customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'Access denied'
-            ], 404);
-        }
+            ->find($request->route('id'));
+        if (is_null($deposit)) abort(404, 'Deposit not found');
+        if ($deposit->requested_by_customer_id != $this->customer()->id) abort(400, 'Access denied');
 
         return $deposit;
     }
 
-    public function updateDepositDetails(Request $request)
+    public function updateDepositDetails(Request $request): array
     {
-        // Extract attributes from $request
-        $depositID = $request->route('id');
+        /** @var ?Deposit $deposit */
+        $deposit = Deposit::find($request->route('id'));
+        if (is_null($deposit)) abort(404, 'Deposit not found');
+        if ($deposit->status != Status::ACTIVE->value) abort(404, 'Deposit not found');
 
-        // Get authenticated User information
         $customer = $this->customer();
+        if ($deposit->requested_by_customer_id != $customer->_id) abort(404, 'You do not have the permission to update this Deposit');
 
-        // Get Deposit
-        $deposit = Deposit::objectID($depositID)->first();
+        $deposit->update($request->all());
 
-        if (is_null($deposit)) {
-            return response()->json([
-                'message' => 'Deposit not found'
-            ], 404);
-        }
-
-        if ($deposit->status != Status::ACTIVE) {
-            return response()->json([
-                'message' => 'Deposit not found'
-            ], 404);
-        }
-
-        if ($deposit->requested_by_customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'You do not have the permission to update this Deposit'
-            ], 404);
-        }
-
-        // Update Deposit
-        $updateAttributes = $request->all();
-        $deposit->update($updateAttributes);
-
-        return response()->json([
-            'message' => 'Deposit updated successfully'
-        ], 200);
+        return ['message' => 'Deposit updated successfully'];
     }
 
-    public function cancelDeposit(Request $request)
+    public function cancelDeposit(Request $request): array
     {
-        // Extract attributes from $request
-        $depositID = $request->route('id');
+        /** @var ?Deposit $deposit */
+        $deposit = Deposit::find($request->route('id'));
+        if (is_null($deposit)) abort(404, 'Deposit not found');
+        if ($deposit->status != Status::ACTIVE->value) abort(404, 'Deposit not found');
 
-        // Get authenticated User information
         $customer = $this->customer();
+        if ($deposit->requested_by_customer_id != $customer->_id) abort(404, 'You do not have the permission to update this Deposit');
+        if ($deposit->reply_status != ReplyStatus::PENDING->value) abort(404, 'This Deposit has already been APPROVED/REJECTED');
 
-        // Get Deposit
-        $deposit = Deposit::objectID($depositID)->first();
-
-        if (is_null($deposit)) {
-            return response()->json([
-                'message' => 'Deposit not found'
-            ], 404);
-        }
-
-        if ($deposit->status != Status::ACTIVE) {
-            return response()->json([
-                'message' => 'Deposit not found'
-            ], 404);
-        }
-
-        if ($deposit->requested_by_customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'You do not have the permission to update this Deposit'
-            ], 404);
-        }
-
-        if ($deposit->reply_status != ReplyStatus::PENDING) {
-            return response()->json([
-                'message' => 'This Deposit has already been APPROVED/REJECTED.'
-            ], 404);
-        }
-
-        $registrationRequest = $deposit->auctionRegistrationRequest()
-            ->latest()
-            ->first();
-
-        if (is_null($registrationRequest)) {
-            return response()->json([
-                'message' => 'AuctionRegistrationRequest not found'
-            ], 404);
-        }
-
-        if ($registrationRequest->status != Status::ACTIVE) {
-            return response()->json([
-                'message' => 'AuctionRegistrationRequest not found'
-            ], 404);
-        }
-
-        if ($registrationRequest->reply_status != ReplyStatus::PENDING) {
-            return response()->json([
-                'message' => 'This AuctionRegistrationRequest has already been APPROVED/REJECTED.'
-            ], 404);
-        }
+        $registrationRequest = $deposit->auctionRegistrationRequest()->latest()->first();
+        if (is_null($registrationRequest)) abort(404, 'AuctionRegistrationRequest not found');
+        if ($registrationRequest->status != Status::ACTIVE->value) abort(404, 'AuctionRegistrationRequest not found');
+        if ($registrationRequest->reply_status != ReplyStatus::PENDING) abort(404, 'This AuctionRegistrationRequest has already been APPROVED/REJECTED.');
 
         // Update Deposit
         $depositAttributes = [
-            'status' => Status::ARCHIVED,
-            'reply_status' => ReplyStatus::REJECTED
+            'status' => Status::ARCHIVED->value,
+            'reply_status' => ReplyStatus::REJECTED->value
         ];
         $deposit->update($depositAttributes);
 
         // Update AuctionRegistrationRequest
         $requestAttributes = [
-            'status' => Status::ARCHIVED,
-            'reply_status' => ReplyStatus::REJECTED
+            'status' => Status::ARCHIVED->value,
+            'reply_status' => ReplyStatus::REJECTED->value
         ];
         $registrationRequest->update($requestAttributes);
 
-        return response()->json([
-            'message' => 'Deposit updated successfully'
-        ], 200);
+        return ['message' => 'Deposit updated successfully'];
     }
 }

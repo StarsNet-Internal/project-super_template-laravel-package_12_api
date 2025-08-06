@@ -1,52 +1,43 @@
 <?php
 
-namespace StarsNet\Project\Auction\App\Http\Controllers\Customer;
+namespace Starsnet\Project\Auction\App\Http\Controllers\Customer;
 
-use App\Constants\Model\ProductVariantDiscountType;
-use App\Constants\Model\Status;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Category;
-use App\Models\Hierarchy;
-use App\Models\Order;
-use App\Models\Product;
-use App\Models\ProductCategory;
-use App\Models\ProductVariant;
-use App\Models\Store;
-use App\Traits\Controller\AuthenticationTrait;
-use App\Traits\Controller\Cacheable;
-use App\Traits\Controller\ProductTrait;
-use App\Traits\Controller\Sortable;
-use App\Traits\Controller\StoreDependentTrait;
-use App\Traits\Controller\WishlistItemTrait;
-use App\Traits\StarsNet\TypeSenseSearchEngine;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
+// Enums
+use App\Enums\ProductVariantDiscountType;
+
+// Models
+use App\Models\Alias;
+use App\Models\Configuration;
+use App\Models\Order;
+use App\Models\Product;
+use App\Models\ProductVariant;
+use App\Models\Store;
+use Illuminate\Support\Collection;
+
 class ProductManagementController extends Controller
 {
-    use AuthenticationTrait,
-        ProductTrait,
-        Sortable,
-        WishlistItemTrait,
-        StoreDependentTrait;
-
-    use Cacheable;
-
     /** @var Store $store */
     protected $store;
 
     public function __construct(Request $request)
     {
-        $this->store = self::getStoreByValue($request->route('store_id'));
+        $this->store = Store::find($request->route('store_id'))
+            ?? Store::find(Alias::getValue($request->route('store_id')));
     }
 
-    private function getProductsInfoByAggregation(array $productIDs)
+    private function getProductsInfoByAggregation(array $productIDs): Collection
     {
         // Extract variables
         $productIDs = array_values($productIDs);
+        if (count($productIDs) === 0) return new Collection();
+
         $storeID = $this->store->_id;
-        $warehouseIDs = $this->store->warehouses()->statusActive()->get()->pluck('_id')->all();
+        $warehouseIDs = $this->store->warehouses()->statusActive()->get()->pluck('id')->all();
 
         // Get Products 
         $products = Product::raw(function ($collection) use ($productIDs, $storeID, $warehouseIDs) {
@@ -60,13 +51,11 @@ class ProductManagementController extends Controller
             ];
 
             // Find matching IDs
-            if (count($productIDs) > 0) {
-                $aggregate[]['$match'] = [
-                    '_id' => [
-                        '$in' => $productIDs
-                    ]
-                ];
-            }
+            $aggregate[]['$match'] = [
+                '_id' => [
+                    '$in' => $productIDs
+                ]
+            ];
 
             // Get ProductVariants
             $aggregate[]['$lookup'] = [
@@ -247,7 +236,7 @@ class ProductManagementController extends Controller
                         'branches' => [
                             [
                                 'case' => [
-                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PRICE]
+                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PRICE->value]
                                 ],
                                 'then' => [
                                     '$subtract' => [
@@ -258,7 +247,7 @@ class ProductManagementController extends Controller
                             ],
                             [
                                 'case' => [
-                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PERCENTAGE]
+                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PERCENTAGE->value]
                                 ],
                                 'then' => [
                                     '$divide' => [
@@ -355,22 +344,16 @@ class ProductManagementController extends Controller
     {
         // Extract attributes from $request
         $categoryIDs = $request->input('category_ids', []);
-        $keyword = $request->input('keyword');
-        if ($keyword === "") $keyword = null;
         $slug = $request->input('slug', 'by-keyword-relevance');
 
-        // Get sorting attributes via slugs
-        if (!is_null($slug)) {
-            $sortingValue = $this->getProductSortingAttributesBySlug('product-sorting', $slug);
-            switch ($sortingValue['type']) {
-                case 'KEY':
-                    $request['sort_by'] = $sortingValue['key'];
-                    $request['sort_order'] = $sortingValue['ordering'];
-                    break;
-                case 'KEYWORD':
-                    break;
-                default:
-                    break;
+        if ($slug) {
+            $config = Configuration::where('slug', 'product-sorting')->latest()->first();
+            $foundItem = collect($config?->sorting_list ?? [])->firstWhere('slug', $slug);
+            if ($foundItem && $foundItem['type'] === 'KEY') {
+                $request->merge([
+                    'sort_by' => $foundItem['key'],
+                    'sort_order' => $foundItem['ordering']
+                ]);
             }
         }
 
@@ -380,7 +363,7 @@ class ProductManagementController extends Controller
                 ->productCategories()
                 ->statusActive()
                 ->get()
-                ->pluck('_id')
+                ->pluck('id')
                 ->all();
         }
 
@@ -389,24 +372,9 @@ class ProductManagementController extends Controller
             $query->whereIn('_id', $categoryIDs);
         })
             ->statusActive()
-            ->when(!$keyword, function ($query) {
-                $query->limit(250);
-            })
             ->get()
-            ->pluck('_id')
+            ->pluck('id')
             ->all();
-
-        // Get matching keywords from Typesense
-        if (!is_null($keyword)) {
-            $typesense = new TypeSenseSearchEngine('products');
-            $productIDsByKeyword = $typesense->getIDsFromSearch(
-                $keyword,
-                'title.en,title.zh'
-            );
-            if (count($productIDsByKeyword) === 0) return new Collection();
-            $productIDs = array_intersect($productIDs, $productIDsByKeyword);
-        }
-        if (count($productIDs) === 0) return new Collection();
 
         // Filter Product(s)
         $products = $this->getProductsInfoByAggregation($productIDs);
@@ -416,30 +384,19 @@ class ProductManagementController extends Controller
             $product['highest_bid'] = collect($items)->max('subtotal_price') ?? '0.00';
         }
 
-        // Return data
         return $products;
     }
 
-    public function getAuctionHistory(Request $request)
+    public function getAuctionHistory(Request $request): array
     {
-        // Extract attributes from $request
-        $variantID = $request->route('product_variant_id');
-
-        return $this->getAuctionHistoryByProductVariantId($variantID);
+        return $this->getAuctionHistoryByProductVariantId($request->route('product_variant_id'));
     }
 
-    public function getAuctionHistoryByProductVariantId($variantID)
+    public function getAuctionHistoryByProductVariantId(string $variantID): array
     {
-        // Get ProductVariant, then validate
-        /** @var ProductVariant $variant */
+        /** @var ?ProductVariant $variant */
         $variant = ProductVariant::find($variantID);
-
-        if (is_null($variant)) {
-            return [];
-            return response()->json([
-                'message' => 'ProductVariant not found'
-            ], 404);
-        }
+        if (is_null($variant)) abort(404, 'ProductVariant not found');
 
         $orders = Order::where('cart_items.product_variant_id', $variantID)
             ->where('is_paid', true)
@@ -471,7 +428,6 @@ class ProductManagementController extends Controller
                     'account',
                 ];
                 $cartItem = collect($cartItem)->only($extractedFields)->toArray();
-
                 return $cartItem;
             });
         });

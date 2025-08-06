@@ -2,94 +2,66 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
+use Carbon\Carbon;
+use Illuminate\Http\Request;
 
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
+// Enums
+use App\Enums\ReplyStatus;
+use App\Enums\Status;
+use App\Enums\StoreType;
 
+// Models
 use App\Models\ProductVariant;
 use App\Models\Store;
-use Carbon\Carbon;
-
+use Illuminate\Support\Collection;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRequest;
 use Starsnet\Project\Paraqon\App\Models\BidHistory;
 
-use Illuminate\Http\Request;
-
 class AuctionRequestController extends Controller
 {
-    public function getAllAuctionRequests(Request $request)
+    public function getAllAuctionRequests(): Collection
     {
-        $customer = $this->customer();
-
-        $forms = AuctionRequest::where('requested_by_customer_id', $customer->_id)
+        return AuctionRequest::where('requested_by_customer_id', $this->customer()->id)
             ->with(['store', 'product'])
             ->get();
-
-        return $forms;
     }
 
-    public function createAuctionRequest(Request $request)
+    public function createAuctionRequest(Request $request): array
     {
-        // Extract attributes from $request
-        $productvariantId = $request->product_variant_id;
-        $storeId = $request->store_id;
+        $now = now();
 
-        // Get ProductVariant
-        $variant = ProductVariant::find($productvariantId);
+        /** @var ?ProductVariant $variant */
+        $variant = ProductVariant::find($request->product_variant_id);
+        if (is_null($variant)) abort(404, 'ProductVariant not found');
 
-        if (is_null($variant)) {
-            return response()->json([
-                'message' => 'Variant not found'
-            ], 404);
-        }
-
-        // Get Product
+        /** @var Product $product */
         $product = $variant->product;
         $customer = $this->customer();
 
-        if ($product->owned_by_customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'This product does not belong to the customer'
-            ], 404);
-        }
+        if ($product->owned_by_customer_id != $customer->_id) abort(403, 'This product does not belong to the customer');
+        if ($product->listing_status != "AVAILABLE") abort(403, 'This product can not apply for auction');
 
-        if ($product->listing_status != "AVAILABLE") {
-            return response()->json([
-                'message' => 'This product can not apply for auction'
-            ], 404);
-        }
-
-        // Get Auction/Store
-        $store = Store::find($storeId);
-
-        if (is_null($store)) {
-            return response()->json([
-                'message' => 'Auction not found'
-            ], 404);
-        }
+        /** @var Store $store */
+        $store = Store::find($request->store_id);
+        if (is_null($store)) abort(404, 'Auction not found');
 
         // Create AuctionRequest
         $updateAuctionRequestFields = [
-            'product_id' => $product->_id,
-            'product_variant_id' => $variant->_id,
-            'store_id' => $store->_id,
+            'product_id' => $product->id,
+            'product_variant_id' => $variant->id,
+            'store_id' => $store->id,
+            'customer_id' => $customer->id,
             'starting_bid' => $request->input('starting_bid', 0),
             'reserve_price' => $request->input('reserve_price', 0),
         ];
-
         $form = AuctionRequest::create($updateAuctionRequestFields);
-        $form->associateRequestedCustomer($customer);
 
         // Check if auto-approve needed
-        $now = now();
-        $upcomingStores = Store::where(
-            'type',
-            StoreType::OFFLINE
-        )
-            ->statuses([Status::ARCHIVED, Status::ACTIVE])
+        $upcomingStores = Store::where('type', StoreType::OFFLINE->value)
+            ->statuses([Status::ARCHIVED->value, Status::ACTIVE->value])
             ->orderBy('start_datetime')
             ->get();
 
@@ -103,15 +75,13 @@ class AuctionRequestController extends Controller
             }
         }
 
-        if (!is_null($nearestUpcomingStore) && $nearestUpcomingStore->_id == $storeId) {
+        if (!is_null($nearestUpcomingStore) && $nearestUpcomingStore->_id == $store->id) {
             $form->update([
-                'reply_status' => ReplyStatus::APPROVED,
+                'reply_status' => ReplyStatus::APPROVED->value,
                 'is_in_auction' => true
             ]);
 
-            $updateProductFields = [
-                'listing_status' => 'LISTED_IN_AUCTION'
-            ];
+            $updateProductFields = ['listing_status' => 'LISTED_IN_AUCTION'];
             $product->update($updateProductFields);
 
             // Create auction_lot
@@ -133,17 +103,13 @@ class AuctionRequestController extends Controller
                 'histories' => []
             ]);
         } else {
-            // Update Product
-            $updateProductFields = [
-                'listing_status' => 'PENDING_FOR_AUCTION',
-            ];
+            $updateProductFields = ['listing_status' => 'PENDING_FOR_AUCTION'];
             $product->update($updateProductFields);
         }
 
-        // Return message
-        return response()->json([
+        return [
             'message' => 'Created New AuctionRequest successfully',
-            '_id' => $form->_id
-        ], 200);
+            '_id' => $form->id
+        ];
     }
 }

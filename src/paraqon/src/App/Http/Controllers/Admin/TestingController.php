@@ -2,7 +2,7 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
-use App\Constants\Model\ShipmentDeliveryStatus;
+use App\Enums\ShipmentDeliveryStatus;
 use App\Http\Controllers\Controller;
 
 use Carbon\Carbon;
@@ -20,8 +20,8 @@ class TestingController extends Controller
 {
     public function healthCheck()
     {
-        $deposit = Deposit::find('670dee20cabe9346e20b9291');
-        return $deposit->online['payment_intent_id'];
+        // $deposit = Deposit::find('670dee20cabe9346e20b9291');
+        // return $deposit->online['payment_intent_id'];
 
         return response()->json([
             'message' => 'OK from package/paraqon'

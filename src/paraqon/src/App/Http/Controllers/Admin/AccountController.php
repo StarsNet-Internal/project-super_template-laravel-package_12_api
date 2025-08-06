@@ -2,45 +2,34 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Account;
-use App\Models\Address;
-
-
 use Illuminate\Http\Request;
-use Carbon\Carbon;
 
-// Validator
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Validation\Rule;
+// Models
+use App\Models\Account;
 
 class AccountController extends Controller
 {
-    public function updateAccountVerification(Request $request)
+    public function updateAccountVerification(Request $request): array
     {
-        $accountID = $request->route('id');
-        $account = Account::find($accountID);
+        /** @var ?Account $account */
+        $account = Account::find($request->route('id'));
+        if (is_null($account)) abort(404, 'Account not found');
 
-        $attributes = $request->all();
-        $account->update($attributes);
+        $account->update($request->all());
 
-        return response()->json([
-            'message' => 'Updated Verification document successfully'
-        ], 200);
+        return ['message' => 'Updated Verification document successfully'];
     }
 
-    public function updateAccountDetails(Request $request)
+    public function updateAccountDetails(Request $request): array
     {
-        $accountID = $request->route('id');
-        $account = Account::find($accountID);
+        /** @var ?Account $account */
+        $account = Account::find($request->route('id'));
+        if (is_null($account)) abort(404, 'Account not found');
 
-        // Update Account
-        $attributes = $request->all();
-        $account->update($attributes);
+        $account->update($request->all());
 
-        // Return success message
-        return response()->json([
-            'message' => 'Updated Account Details successfully'
-        ]);
+        return ['message' => 'Updated Account Details successfully'];
     }
 }

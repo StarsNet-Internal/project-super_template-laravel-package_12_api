@@ -2,19 +2,20 @@
 
 namespace Starsnet\Project\Paraqon\App\Models;
 
-// Constants
-use App\Enums\ReplyStatus;
-use App\Enums\Status;
+// Default
+use MongoDB\Laravel\Eloquent\Model;
+use MongoDB\Laravel\Relations\BelongsTo;
+use MongoDB\Laravel\Relations\EmbedsMany;
 
 // Traits
 use App\Models\Traits\ObjectIDTrait;
 use App\Models\Traits\StatusFieldTrait;
 
-// Laravel classes and MongoDB relationships, default import
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use MongoDB\Laravel\Eloquent\Model;
-use MongoDB\Laravel\Relations\EmbedsMany;
+// Enums
+use App\Enums\ReplyStatus;
+use App\Enums\Status;
 
+// Models
 use App\Models\Account;
 use App\Models\Customer;
 
@@ -23,20 +24,11 @@ class ConsignmentRequest extends Model
     use ObjectIDTrait,
         StatusFieldTrait;
 
-    /**
-     * Define database connection.
-     *
-     * @var string
-     */
+    // Connection
     protected $connection = 'mongodb';
-
-    /**
-     * The database collection used by the model.
-     *
-     * @var string
-     */
     protected $collection = 'consignment_requests';
 
+    // Attributes
     protected $attributes = [
         // Relationships
         'requested_by_customer_id' => null,
@@ -68,30 +60,16 @@ class ConsignmentRequest extends Model
         'items' => [],
         'requested_items_qty' => 0,
         'approved_items_qty' => 0,
-        'status' => Status::ACTIVE,
-        'reply_status' => ReplyStatus::PENDING,
+        'status' => Status::ACTIVE->value,
+        'reply_status' => ReplyStatus::PENDING->value,
 
         // Timestamps
         'deleted_at' => null
     ];
 
-    protected $dates = [
-        'deleted_at'
-    ];
-
-    protected $casts = [];
-
-    protected $appends = [];
-
-    /**
-     * Blacklisted model properties from doing mass assignment.
-     * None are blacklisted by default for flexibility.
-     * 
-     * @var array
-     */
     protected $guarded = [];
-
-    protected $hidden = [];
+    protected $appends = ['_id'];
+    protected $hidden = ['id'];
 
     // -----------------------------
     // Relationship Begins

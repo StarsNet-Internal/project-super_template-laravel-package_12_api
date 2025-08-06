@@ -2,184 +2,148 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
-use App\Constants\Model\CheckoutType;
-use App\Constants\Model\ShipmentDeliveryStatus;
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Order;
-use App\Models\Product;
-use App\Models\Store;
-use App\Traits\Controller\CheckoutTrait;
 use Illuminate\Http\Request;
-use Starsnet\Project\Paraqon\App\Models\Bid;
-use Starsnet\Project\Paraqon\App\Models\ConsignmentRequest;
-use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
-use Carbon\Carbon;
+use Illuminate\Support\Collection;
+
+// Enums
+use App\Enums\CheckoutType;
+use App\Enums\ShipmentDeliveryStatus;
+use App\Enums\StoreType;
+use App\Http\Starsnet\PinkiePay;
+
+// Models
+use App\Models\Order;
+use App\Models\Store;
 
 class OrderController extends Controller
 {
-    use CheckoutTrait;
-
-    public function getOrdersByStoreID(Request $request)
+    public function getOrdersByStoreID(Request $request): Collection
     {
-        // Extract attributes from $request
-        $storeID = $request->route('store_id');
-
-        // Get Customer
-        $customer = $this->customer();
-
-        // Get Orders
-        $orders = Order::where('store_id', $storeID)
-            ->where('customer_id', $customer->_id)
+        $orders = Order::where('store_id', $request->route('store_id'))
+            ->where('customer_id',  $this->customer()->id)
+            ->with(['store'])
             ->get();
 
         foreach ($orders as $order) {
             $order->checkout = $order->checkout()->latest()->first();
+
+            // Handle image directly from cart_items
+            $order->image = null;
+            if (!empty($order->cart_items) && count($order->cart_items) > 0) {
+                foreach ($order->cart_items as $item) {
+                    if (!empty($item['image'])) {
+                        $order->image = $item['image'];
+                        break; // Stop after finding first image
+                    }
+                }
+            }
         }
 
         return $orders;
     }
 
-    public function uploadPaymentProofAsCustomer(Request $request)
+    public function uploadPaymentProofAsCustomer(Request $request): array
     {
-        // Validate Request
-        $orderID = $request->route('order_id');
-
-        // Get Order
-        /** @var Order $order */
-        $order = Order::find($orderID);
-
-        if (is_null($order)) {
-            return response()->json([
-                'message' => 'Order not found'
-            ], 404);
-        }
+        /** @var ?Order $order */
+        $order = Order::find($request->route('order_id'));
+        if (is_null($order)) abort(404, 'Order not found');
 
         $customer = $this->customer();
-
-        if ($order->customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'Order does not belong to this Customer'
-            ], 401);
-        }
+        if ($order->customer_id != $customer->id) abort(401, 'Order does not belong to this Customer');
 
         // Get Checkout
         /** @var Checkout $checkout */
         $checkout = $order->checkout()->latest()->first();
+        if ($checkout->payment_method != CheckoutType::OFFLINE->value) abort(403, 'Order does not accept OFFLINE payment');
 
-        if ($checkout->payment_method != CheckoutType::OFFLINE) {
-            return response()->json([
-                'message' => 'Order does not accept OFFLINE payment'
-            ], 403);
-        }
-
-        // Update Checkout
-        $order = $checkout->order;
-        $checkout->updateOfflineImage($request->image);
+        $checkout->update([
+            'offline' => [
+                'image' => $request->image,
+                'uploaded_at' => now(),
+                'api_response' => null
+            ]
+        ]);
 
         // Update Order
-        if ($order->current_status !== ShipmentDeliveryStatus::PENDING) {
-            $order->updateStatus(ShipmentDeliveryStatus::PENDING);
+        if ($order->current_status !== ShipmentDeliveryStatus::PENDING->value) {
+            $order->updateStatus(ShipmentDeliveryStatus::PENDING->value);
         }
 
-        // Return data
-        return response()->json([
-            'message' => 'Uploaded image successfully'
-        ], 200);
+        return ['message' => 'Uploaded image successfully'];
     }
 
     public function payPendingOrderByOnlineMethod(Request $request)
     {
-        // Extract attributes from $request
-        $orderId = $request->route('order_id');
-        $successUrl = $request->success_url;
-        $cancelUrl = $request->cancel_url;
+        /** @var ?Order $order */
+        $order = Order::find($request->route('order_id'));
+        if (is_null($order)) abort(404, 'Order not found');
+        if ($this->customer()->id !== $order->customer_id) abort(403, 'Customer do not own this order');
 
-        // Validate
-        $customer = $this->customer();
-
-        $order = Order::find($orderId);
-
-        if (is_null($order)) {
-            return response()->json([
-                'message' => 'Order not found'
-            ], 404);
-        }
-
-        if ($order->customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'This Order does not belong to this user'
-            ], 404);
-        }
+        // Create paymentToken
+        $amount = $order->getTotalPrice();
+        $url = $this->serviceApiUrl . $this->createTokenPath;
 
         $checkout = $order->checkout()->latest()->first();
+        $checkout->update([
+            'online' => [
+                'transaction_id' => null,
+                'api_response' => null
+            ]
+        ]);
 
-        // Generate payment url
-        $returnUrl = $this->updateAsOnlineCheckout($checkout, $successUrl, $cancelUrl);
+        $pinkiePay = new PinkiePay($order, $request->success_url, $request->cancel_url);
+        $data = $pinkiePay->createPaymentToken();
+        $returnUrl = $data['shortened_url'];
 
-        // Return data
-        $data = [
+        return [
             'message' => 'Generated new payment url successfully',
             'return_url' => $returnUrl ?? null,
-            'order_id' => $order->_id
+            'order_id' => $order->id
         ];
-
-        return response()->json($data);
     }
 
-    public function getAllOfflineOrders(Request $request)
+    public function getAllOfflineOrders(): Collection
     {
-        // Get Store(s)
-        /** @var Store $store */
-        $stores = Store::whereType(StoreType::OFFLINE)
-            ->get();
-
-        // Get authenticated User information
-        $customer = $this->customer();
+        /** @var array $offlineStoreIDs */
+        $offlineStoreIDs = Store::where('type', StoreType::OFFLINE->value)->pluck('id')->all();
 
         // Get Order(s)
         /** @var Collection $orders */
-        $orders = Order::byStores($stores)
-            ->byCustomer($customer)
+        $orders = Order::whereIn('store_id', $offlineStoreIDs)
+            ->where('customer_id', $this->customer()->id)
+            ->with(['store'])
             ->get();
 
         foreach ($orders as $order) {
             $order->checkout = $order->checkout()->latest()->first();
+
+            // Handle image directly from cart_items
+            $order->image = null;
+            if (!empty($order->cart_items) && count($order->cart_items) > 0) {
+                foreach ($order->cart_items as $item) {
+                    if (!empty($item['image'])) {
+                        $order->image = $item['image'];
+                        break; // Stop after finding first image
+                    }
+                }
+            }
         }
 
-        // Return data
         return $orders;
     }
 
-    public function updateOrderDetails(Request $request)
+    public function updateOrderDetails(Request $request): array
     {
-        // Extract attributes from $request
-        $orderID = $request->route('order_id');
-
-        // Get OrderShipmentDeliveryStatus
-        $order = Order::find($orderID);
-
-        if (is_null($order)) {
-            return response()->json([
-                'message' => 'Order not found'
-            ], 404);
-        }
-
-        // Get Customer, validate ownership
-        $customer = $this->customer();
-
-        if ($customer->_id !== $order->customer_id) {
-            return response()->json([
-                'message' => 'Customer do not own this order'
-            ], 404);
-        }
+        /** @var ?Order $order */
+        $order = Order::find($request->route('order_id'));
+        if (is_null($order)) abort(404, 'Order not found');
+        if ($this->customer()->id !== $order->customer_id) abort(403, 'Customer do not own this order');
 
         // Update Order
         $order->update($request->all());
 
-        return response()->json([
-            'message' => "Updated Order Successfully"
-        ], 200);
+        return ['message' => 'Updated Order Successfully'];
     }
 }

@@ -1,48 +1,30 @@
 <?php
 
-namespace StarsNet\Project\Auction\App\Http\Controllers\Customer;
+namespace Starsnet\Project\Auction\App\Http\Controllers\Customer;
 
-use App\Constants\Model\Status;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Store;
 use Illuminate\Http\Request;
 
-use App\Constants\Model\OrderPaymentMethod;
-use App\Constants\Model\ReplyStatus;
+// Enums
+use App\Enums\ReplyStatus;
+use App\Enums\Status;
 
-use App\Traits\Utils\RoundingTrait;
-use Illuminate\Support\Facades\Http;
-use StarsNet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
-use StarsNet\Project\Paraqon\App\Models\Deposit;
+// Models
+use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 
 class AuctionRegistrationRequestController extends Controller
 {
-    public function updateAuctionRegistrationRequest(Request $request)
+    public function updateAuctionRegistrationRequest(Request $request): array
     {
-        $customer = $this->customer();
+        /** @var ?AuctionRegistrationRequest $auctionRegistrationRequest */
         $auctionRegistrationRequest = AuctionRegistrationRequest::find($request->route('auction_registration_request_id'));
-
-        if (is_null($auctionRegistrationRequest)) {
-            return response()->json([
-                'message' => 'AuctionRegistrationRequest not found'
-            ], 404);
-        }
-
-        if ($auctionRegistrationRequest->requested_by_customer_id !== $customer->_id) {
-            return response()->json([
-                'message' => 'AuctionRegistrationRequest does not belong to this customer'
-            ], 401);
-        }
+        if (is_null($auctionRegistrationRequest)) abort(404, 'AuctionRegistrationRequest not found');
+        if ($auctionRegistrationRequest->requested_by_customer_id !== $this->customer()->id) abort(403, 'AuctionRegistrationRequest does not belong to this customer');
 
         $replyStatus = $request->reply_status;
-
-        if (!in_array($replyStatus, [
-            ReplyStatus::APPROVED,
-            ReplyStatus::REJECTED
-        ])) {
-            return response()->json([
-                'message' => 'reply_status should be either APPROVED/REJECTED'
-            ], 400);
+        if (!in_array($replyStatus, [ReplyStatus::APPROVED->value, ReplyStatus::REJECTED->value])) {
+            abort(400, 'reply_status should be either APPROVED/REJECTED');
         }
 
         $newPaddleID = null;
@@ -66,19 +48,16 @@ class AuctionRegistrationRequestController extends Controller
             }
         }
 
-        $account = $this->account();
-        $requestUpdateAttributes = [
-            'approved_by_account_id' => $account->_id,
+        $auctionRegistrationRequest->update([
+            'approved_by_account_id' => $this->account()->id,
             'paddle_id' => $newPaddleID,
-            'status' => Status::ACTIVE,
+            'status' => Status::ACTIVE->value,
             'reply_status' => $replyStatus
-        ];
-        $auctionRegistrationRequest->update($requestUpdateAttributes);
+        ]);
 
-        // Return client secret to generate link
-        return response()->json([
+        return [
             'message' => 'Updated AuctionRegistrationRequest successfully',
             'auction_registration_request_id' => $auctionRegistrationRequest->_id
-        ], 200);
+        ];
     }
 }

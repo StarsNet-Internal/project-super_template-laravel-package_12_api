@@ -1,23 +1,25 @@
 <?php
 
-namespace StarsNet\Project\Auction\App\Http\Controllers\Customer;
+namespace Starsnet\Project\Auction\App\Http\Controllers\Customer;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
-use StarsNet\Project\Paraqon\App\Models\ConsignmentRequest;
-use Illuminate\Support\Facades\Auth;
+
+// Models
+use Starsnet\Project\Paraqon\App\Models\ConsignmentRequest;
 
 class ConsignmentRequestController extends Controller
 {
-    public function createConsignmentRequest(Request $request)
+    public function createConsignmentRequest(Request $request): array
     {
-        $customer = $this->customer();
-        $data = array_merge($request->all(), ['requested_by_customer_id' => $customer->id]);
+        $data = array_merge($request->all(), ['requested_by_customer_id' => $this->customer()->id]);
+        /** @var ?ConsignmentRequest $form */
         $form = ConsignmentRequest::create($data);
 
-        return response()->json([
+        return [
             'message' => 'Created New ConsignmentRequest successfully',
-            '_id' => $form->_id
-        ], 200);
+            '_id' => $form->id
+        ];
     }
 }

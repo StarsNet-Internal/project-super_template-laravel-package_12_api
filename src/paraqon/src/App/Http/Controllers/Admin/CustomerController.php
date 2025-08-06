@@ -2,74 +2,59 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
-use Illuminate\Support\Facades\Auth;
-use App\Constants\Model\LoginType;
-use App\Constants\Model\Status;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Configuration;
+use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+
+// Enums
+use App\Enums\LoginType;
+use App\Enums\Status;
+
+// Models
+use App\Models\Account;
 use App\Models\Customer;
 use App\Models\Product;
 use App\Models\User;
-use App\Models\Account;
-use Illuminate\Http\Request;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
-use Starsnet\Project\Paraqon\App\Models\AuctionRequest;
 use Starsnet\Project\Paraqon\App\Models\Bid;
-use Starsnet\Project\Paraqon\App\Models\ConsignmentRequest;
-use Starsnet\Project\Paraqon\App\Models\PassedAuctionRecord;
 
 class CustomerController extends Controller
 {
-    public function getAllCustomers(Request $request)
+    public function getAllCustomers(): Collection
     {
-        // Get Customer(s)
-        /** @var Collection $customers */
-        $customers = Customer::whereIsDeleted(false)
+        return Customer::with([
+            'account',
+            'account.user'
+        ])
             ->whereHas('account', function ($query) {
                 $query->whereHas('user', function ($query2) {
-                    $query2->where('type', '!=', LoginType::TEMP);
+                    $query2->where('type', '!=', LoginType::TEMP->value)
+                        ->where('is_deleted', false);
                 });
             })
-            ->with([
-                'account',
-                'account.user'
-            ])
             ->get();
-
-        // Return Customer(s)
-        return $customers;
     }
 
-    public function getCustomerDetails(Request $request)
+    public function getCustomerDetails(Request $request): Customer
     {
-        // Extract attributes from $request
-        $customerID = $request->route('id');
-
-        // Get Customer, then validate
-        /** @var Customer $customer */
+        /** @var ?Customer $customer */
         $customer = Customer::with([
             'account',
             'account.user',
             'account.notificationSetting'
         ])
-            ->find($customerID);
+            ->find($request->route('id'));
+        if (is_null($customer)) abort(404, 'Customer not found');
 
-        if (is_null($customer)) {
-            return response()->json([
-                'message' => 'Customer not found'
-            ], 404);
-        }
-
-        // Return Customer
-        return response()->json($customer, 200);
+        return $customer;
     }
 
-    public function getAllOwnedProducts(Request $request)
+    public function getAllOwnedProducts(Request $request): Collection
     {
-        $customerId = $request->route('customer_id');
-
+        /** @var Collection $products */
         $products = Product::statusActive()
-            ->where('owned_by_customer_id', $customerId)
+            ->where('owned_by_customer_id', $request->route('customer_id'))
             ->get();
 
         foreach ($products as $product) {
@@ -79,124 +64,73 @@ class CustomerController extends Controller
         return $products;
     }
 
-    public function getAllOwnedAuctionLots(Request $request)
+    public function getAllOwnedAuctionLots(Request $request): Collection
     {
-        $customerId = $request->route('customer_id');
-
-        $auctionLots = AuctionLot::where('owned_by_customer_id', $customerId)
-            ->where('status', '!=', Status::DELETED)
-            ->with([
-                'product',
-                'productVariant',
-                'store',
-                'latestBidCustomer',
-                'winningBidCustomer'
-            ])
-            ->get();
-
-        foreach ($auctionLots as $auctionLot) {
-            $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
-        }
-
-        return $auctionLots;
+        return AuctionLot::with([
+            'product',
+            'productVariant',
+            'store',
+            'latestBidCustomer',
+            'winningBidCustomer'
+        ])
+            ->where('owned_by_customer_id', $request->route('customer_id'))
+            ->where('status', '!=', Status::DELETED->value)
+            ->get()
+            ->each(function ($auctionLot) {
+                $auctionLot->setAttribute(
+                    'current_bid',
+                    $auctionLot->getCurrentBidPrice()
+                );
+            });
     }
 
-    public function getAllBids(Request $request)
+    public function getAllBids(Request $request): Collection
     {
-        $customerId = $request->route('customer_id');
-
-        $bids = Bid::where('customer_id', $customerId)
-            ->with([
-                'store',
-                'product',
-                'auctionLot'
-            ])
+        return Bid::with(['store', 'product', 'auctionLot'])
+            ->where('customer_id', $request->route('customer_id'))
             ->get();
-
-        return $bids;
     }
 
-    public function hideBid(Request $request)
+    public function hideBid(Request $request): array
+    {
+        Bid::where('_id', $request->route('bid_id'))->update(['is_hidden' => true]);
+
+        return ['message' => 'Bid updated is_hidden as true'];
+    }
+
+    public function loginAsCustomer(Request $request): array
     {
         // Extract attributes from $request
-        $bidId = $request->route('bid_id');
-
-        Bid::where('_id', $bidId)->update(['is_hidden' => true]);
-
-        return response()->json([
-            'message' => 'Bid updated is_hidden as true'
-        ], 200);
-    }
-
-    public function loginAsCustomer(Request $request)
-    {
-        // Declare local constants
-        $roleName = 'customer';
-
-        // Extract attributes from $request
-        $loginType = $request->input('type', LoginType::EMAIL);
-        $loginType = strtoupper($loginType);
+        $loginType = strtoupper($request->input('type', LoginType::EMAIL->value));
 
         // Attempt to find User via Account Model
-        $user = $this->findUserByCredentials(
-            $loginType,
-            $request->email,
-            $request->area_code,
-            $request->phone,
-        );
-
-        if (is_null($user)) {
-            return response()->json([
-                'message' => 'User not found.'
-            ], 404);
+        $userID = null;
+        switch ($loginType) {
+            case LoginType::EMAIL->value:
+            case LoginType::TEMP->value:
+                $account = Account::where('email', $request->email)->first();
+                $userID = optional($account)->user_id;
+                break;
+            case LoginType::PHONE->value:
+                $account = Account::where('area_code', $request->area_code)
+                    ->where('phone', $request->phone)
+                    ->first();
+                $userID = optional($account)->user_id;
+                break;
+            default:
+                break;
         }
 
-        // Create token
-        $accessToken = $user->createToken($roleName)->accessToken;
+        /** @var ?User $user */
+        $user = User::find($userID);
+        if (is_null($user)) abort(404, 'User not found.');
 
-        // Return data
-        $data = [
+        // Create token
+        $accessToken = $user->createToken('customer')->accessToken;
+
+        return [
             'token' => $accessToken,
             'user' => $user
         ];
-
-        return response()->json($data, 200);
-    }
-
-    private function findUserByCredentials(
-        string $loginType,
-        ?string $email,
-        ?string $areaCode,
-        ?string $phone
-    ) {
-        $userID = $this->findUserIDByCredentials(
-            $loginType,
-            $email,
-            $areaCode,
-            $phone
-        );
-        return User::find($userID);
-    }
-
-    private function findUserIDByCredentials(
-        string $loginType,
-        ?string $email,
-        ?string $areaCode,
-        ?string $phone
-    ) {
-        switch ($loginType) {
-            case LoginType::EMAIL:
-            case LoginType::TEMP:
-                $account = Account::where('email', $email)
-                    ->first();
-                return optional($account)->user_id;
-            case LoginType::PHONE:
-                $account = Account::where('area_code', $areaCode)
-                    ->where('phone', $phone)
-                    ->first();
-                return optional($account)->user_id;
-            default:
-                return null;
-        }
     }
 }

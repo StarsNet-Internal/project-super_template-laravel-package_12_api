@@ -2,89 +2,57 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
-
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
-
-use App\Models\ProductVariant;
-use App\Models\Store;
-use Carbon\Carbon;
-
-use Starsnet\Project\Paraqon\App\Models\AuctionLot;
-use Starsnet\Project\Paraqon\App\Models\AuctionRequest;
-use Starsnet\Project\Paraqon\App\Models\BidHistory;
-
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Arr;
+
+// Enums
+use App\Enums\Status;
+
+// Models
 use Starsnet\Project\Paraqon\App\Models\Notification;
 
 class NotificationController extends Controller
 {
-    public function getAllNotifications(Request $request)
+    public function getAllNotifications(Request $request): Collection
     {
-        // Extract attributes from request
-        $queryParams = $request->query();
+        // Exclude pagination/sorting params before filtering
+        $filterParams = Arr::except($request->query(), ['per_page', 'page', 'sort_by', 'sort_order']);
 
-        // Get auth user info
-        $account = $this->account();
+        $query = Notification::where('account_id', $this->account()->id)
+            ->where('status', '!=', Status::DELETED->value);
 
-        // Get Notifications
-        $notificationQuery = Notification::where('account_id', $account->_id)
-            ->where('status', '!=', Status::DELETED);
-
-        foreach ($queryParams as $key => $value) {
-            if (in_array($key, ['per_page', 'page', 'sort_by', 'sort_order'])) {
-                continue;
-            }
-
-            $notificationQuery->where($key, filter_var($value, FILTER_VALIDATE_BOOLEAN));
+        foreach ($filterParams as $key => $value) {
+            $query->where($key, filter_var($value, FILTER_VALIDATE_BOOLEAN));
         }
 
-        $notifications = $notificationQuery->latest()
-            ->get();
-
-        return $notifications;
+        return $query->get();
     }
 
-    public function markNotificationsAsRead(Request $request)
+    public function markNotificationsAsRead(Request $request): array
     {
-        // Extract attributes from request
-        $notificationID = $request->input('id');
-        $path = $request->input('path');
-
-        // Get auth user info
         $account = $this->account();
+        $query = Notification::where('account_id', $account->_id)
+            ->where('is_read', false);
 
-        // Metadata for dev purpose
-        $updatedCount = 0;
-        $readNotificationIDs = [];
-
-        // Update Notifications as read
-        if (!is_null($notificationID)) {
-            $notificationQuery = Notification::where('account_id', $account->_id)
-                ->where('_id', $notificationID);
-
-            $readNotificationIDs = $notificationQuery->pluck('_id')->all();
-            $updatedCount = $notificationQuery->update(['is_read' => true]);
-        } else if (!is_null($path)) {
-            $notificationQuery = Notification::where('account_id', $account->_id)
-                ->where('path', $path);
-
-            $readNotificationIDs = $notificationQuery->pluck('_id')->all();
-            $updatedCount = $notificationQuery->update(['is_read' => true]);
+        if ($request->filled('id')) {
+            $query->where('id', $request->input('id'));
+        } elseif ($request->filled('path')) {
+            $query->where('path', $request->input('path'));
         } else {
-            return response()->json([
-                'message' => 'Invalid input type',
-            ], 404);
+            abort(400, 'Either id or path parameter is required');
         }
 
-        // Get Notifications unread count
-        $unreadNotificationCount = Notification::where('account_id', $account->_id)
+        $readNotificationIDs = $query->pluck('id')->all();
+        $updatedCount = $query->update(['is_read' => true]);
+
+        $unreadNotificationCount = Notification::where('account_id', $account->id)
             ->where('is_read', false)
             ->count();
 
-        return response()->json([
+        return [
             'message' => 'Notification updated is_read as true',
             'data' => [
                 'account_id' => $account->_id,
@@ -92,36 +60,22 @@ class NotificationController extends Controller
                 'read_notification_ids' => $readNotificationIDs,
                 'unread_notification_count' => $unreadNotificationCount,
             ]
-        ], 200);
+        ];
     }
 
-    public function deleteNotification(Request $request)
+    public function deleteNotification(Request $request): array
     {
-        // Extract attributes from request
-        $notificationID = $request->route('id');
+        /** @var ?Notification $notification */
+        $notification = Notification::find($request->route('id'));
+        if (is_null($notification)) abort(404, 'Notification not found');
 
-        // Find Notification
-        $notification = Notification::find($notificationID);
-
-        // Get auth user info
         $account = $this->account();
-
-        if (is_null($notification)) {
-            return response()->json([
-                'message' => 'Notification not found',
-            ], 404);
-        }
-
-        if ($notification->account_id != $account->_id) {
-            return response()->json([
-                'message' => 'This Notification does not belong to this account_id',
-            ], 404);
-        }
+        if ($notification->account_id != $account->_id) abort(404, 'This Notification does not belong to this account_id');
 
         // Delete Notification
         $updatedCount = $notification->update([
-            'status' => Status::ACTIVE,
-            'deleted_at' => $notification->freshTimestamp()
+            'status' => Status::ACTIVE->value,
+            'deleted_at' => now()
         ]);
 
         // Get Notifications unread count
@@ -129,15 +83,15 @@ class NotificationController extends Controller
             ->where('is_read', false)
             ->count();
 
-        return response()->json([
+        return [
             'message' => 'Notification deleted',
             '_id' => $notification->id,
             'data' => [
-                'account_id' => $account->_id,
+                'account_id' => $account->id,
                 'read_notification_count' => $updatedCount,
                 'read_notification_ids' => [$notification->id],
                 'unread_notification_count' => $unreadNotificationCount,
             ]
-        ], 200);
+        ];
     }
 }

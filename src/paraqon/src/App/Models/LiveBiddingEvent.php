@@ -2,70 +2,37 @@
 
 namespace Starsnet\Project\Paraqon\App\Models;
 
-// Constants
+// Default
+use MongoDB\Laravel\Eloquent\Model;
+use MongoDB\Laravel\Relations\BelongsTo;
 
 // Traits
-use App\Traits\Model\ObjectIDTrait;
-use App\Traits\Model\StatusFieldTrait;
+use App\Models\Traits\ObjectIDTrait;
 
-// Laravel classes and MongoDB relationships, default import
-use Illuminate\Support\Collection;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
-use Jenssegers\Mongodb\Eloquent\Model as Eloquent;
-use Jenssegers\Mongodb\Relations\EmbedsMany;
-use Jenssegers\Mongodb\Relations\EmbedsOne;
-
+// Models
 use App\Models\Store;
 
-class LiveBiddingEvent extends Eloquent
+class LiveBiddingEvent extends Model
 {
     use ObjectIDTrait;
 
-    /**
-     * Define database connection.
-     *
-     * @var string
-     */
+    // Connection
     protected $connection = 'mongodb';
-
-    /**
-     * The database collection used by the model.
-     *
-     * @var string
-     */
     protected $collection = 'live_bidding_events';
 
+    // Attributes
     protected $attributes = [
         // Relationships
         'store_id' => null,
-
         // Default
         'action' => null,
         'value_1' => null,
         'value_2' => null,
-
-        // Timestamps
     ];
 
-    protected $dates = [];
-
-    protected $casts = [];
-
-    protected $appends = [];
-
-    /**
-     * Blacklisted model properties from doing mass assignment.
-     * None are blacklisted by default for flexibility.
-     * 
-     * @var array
-     */
     protected $guarded = [];
-
-    protected $hidden = [];
+    protected $appends = ['_id'];
+    protected $hidden = ['id'];
 
     // -----------------------------
     // Relationship Begins
@@ -80,14 +47,6 @@ class LiveBiddingEvent extends Eloquent
 
     // -----------------------------
     // Relationship Ends
-    // -----------------------------
-
-    // -----------------------------
-    // Accessor Begins
-    // -----------------------------
-
-    // -----------------------------
-    // Accessor Ends
     // -----------------------------
 
     // -----------------------------

@@ -2,111 +2,65 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
-use App\Constants\Model\ProductVariantDiscountType;
-use App\Constants\Model\Status;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Category;
-use App\Models\Configuration;
-use App\Models\Product;
-use App\Models\ProductCategory;
-use App\Models\Store;
-use App\Traits\Controller\Sortable;
-use App\Traits\Controller\StoreDependentTrait;
-use App\Traits\Starsnet\TypeSenseSearchEngine;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
+
+// Enums
+use App\Enums\ProductVariantDiscountType;
+use App\Enums\Status;
+
+// Models
+use App\Models\Alias;
+use App\Models\Category;
+use App\Models\Product;
+use App\Models\Store;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
 class ProductManagementController extends Controller
 {
-    use Sortable,
-        StoreDependentTrait;
-
     /** @var Store $store */
     protected $store;
 
     public function __construct(Request $request)
     {
-        $this->store = self::getStoreByValue($request->route('store_id'));
+        $this->store = Store::find($request->route('store_id'))
+            ?? Store::find(Alias::getValue($request->route('store_id')));
     }
 
-    public function filterAuctionProductsByCategories(Request $request)
+    public function filterAuctionProductsByCategories(Request $request): Collection
     {
         // Extract attributes from $request
-        $categoryIDs = $request->input('category_ids', []);
-        $categoryIDs = array_unique($categoryIDs);
-        $keyword = $request->input('keyword');
-        if ($keyword === "") $keyword = null;
-        $slug = $request->input('slug', 'by-keyword-relevance');
+        $categoryIDs = array_unique((array) $request->input('category_ids'));
 
-        // Get sorting attributes via slugs
-        if (!is_null($slug)) {
-            $sortingValue = $this->getProductSortingAttributesBySlug('product-sorting', $slug);
-            switch ($sortingValue['type']) {
-                case 'KEY':
-                    $request['sort_by'] = $sortingValue['key'];
-                    $request['sort_order'] = $sortingValue['ordering'];
-                    break;
-                case 'KEYWORD':
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        // Get all ProductCategory(s)
-        if (count($categoryIDs) === 0) {
-            $categoryIDs = $this->store
-                ->productCategories()
-                ->statusActive()
-                ->get()
-                ->pluck('_id')
-                ->all();
-        }
-
-        // Get Product(s) from selected ProductCategory(s)
+        // Get Product(s) based on its AuctionLot's store_id
         $productIDs = AuctionLot::where('store_id', $this->store->id)
-            ->statuses([Status::ACTIVE, Status::ARCHIVED])
+            ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
             ->get()
             ->pluck('product_id')
             ->all();
 
+        // Get all Products if given category_id
         if (count($categoryIDs) > 0) {
-            $allProductCategoryIDs = Category::slug('all-products')->pluck('_id')->all();
+            $allProductCategoryIDs = Category::where('slug', 'all-products')->pluck('_id')->all();
             if (!array_intersect($categoryIDs, $allProductCategoryIDs)) {
                 $productIDs = Product::objectIDs($productIDs)
                     ->whereHas('categories', function ($query) use ($categoryIDs) {
                         $query->whereIn('_id', $categoryIDs);
                     })
-                    ->statuses([Status::ACTIVE, Status::ARCHIVED])
-                    ->when(!$keyword, function ($query) {
-                        $query->limit(250);
-                    })
+                    ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
                     ->get()
                     ->pluck('_id')
                     ->all();
             }
         }
 
-        // Get matching keywords from Typesense
-        if (!is_null($keyword)) {
-            $typesense = new TypeSenseSearchEngine('products');
-            $productIDsByKeyword = $typesense->getIDsFromSearch(
-                $keyword,
-                'title.en,title.zh,title.cn'
-            );
-            if (count($productIDsByKeyword) === 0) return new Collection();
-            $productIDs = array_intersect($productIDs, $productIDsByKeyword);
-        }
-        if (count($productIDs) === 0) return new Collection();
-
         // Filter Product(s)
         $products = $this->getProductsInfoByAggregation($productIDs, $this->store->_id);
-        $products = $products->filter(function ($item) {
-            return $item->auction_lot_id != '0';
-        })->values();
+        $products = $products->filter(fn($item) => $item->auction_lot_id != '0')->values();
 
         // Get WatchlistItem 
         $customer = $this->customer();
@@ -121,7 +75,7 @@ class ProductManagementController extends Controller
             $auctionLot = AuctionLot::find($auctionLotID);
 
             $product->current_bid = $auctionLot->getCurrentBidPrice();
-            $product->is_reserve_price_met = $product->current_bid >= $product->reserve_price;
+            $product->is_reserve_price_met = $product->current_bid >= $auctionLot->reserve_price;
 
             $product->title = $auctionLot->title;
             $product->short_description = $auctionLot->short_description;
@@ -150,11 +104,10 @@ class ProductManagementController extends Controller
             );
         }
 
-        // Return data
         return $products;
     }
 
-    public function filterAuctionProductsByCategoriesV2(Request $request)
+    public function filterAuctionProductsByCategoriesV2(Request $request): Collection
     {
         // Extract attributes from $request
         $categoryIDs = $request->input('category_ids', []);
@@ -170,29 +123,27 @@ class ProductManagementController extends Controller
 
         // Get Product(s) from selected ProductCategory(s)
         $productIDs = AuctionLot::where('store_id', $this->store->id)
-            ->statuses([Status::ACTIVE, Status::ARCHIVED])
+            ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
             ->pluck('product_id');
 
         // Use as Collection here, and use ->all() only if needed later
-        if (!empty($categoryIDs)) {
-            $allProductCategoryIDs = Category::slug('all-products')->pluck('_id');
+        if (count($categoryIDs) > 0) {
+            $allProductCategoryIDs = Category::where('slug', 'all-products')->pluck('_id');
 
             if ($categoryIDs && !$allProductCategoryIDs->intersect($categoryIDs)->isNotEmpty()) {
                 $productIDs = Product::whereIn('_id', $productIDs)
                     ->whereHas('categories', function ($query) use ($categoryIDs) {
                         $query->whereIn('_id', $categoryIDs);
                     })
-                    ->statuses([Status::ACTIVE, Status::ARCHIVED])
+                    ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
                     ->pluck('_id');
             }
         }
 
         // Filter Product(s)
-        $products = Product::objectIDs($productIDs)->get();
+        $products = Product::whereIn('id', $productIDs)->get();
         $auctionLots = AuctionLot::whereIn('product_id', $productIDs)
-            ->with([
-                'watchlistItems'
-            ])
+            ->with(['watchlistItems'])
             ->get()
             ->map(function ($lot) {
                 $lot->watchlist_item_count = $lot->watchlistItems->count();
@@ -254,11 +205,10 @@ class ProductManagementController extends Controller
             }
         );
 
-        // Return data
         return $products;
     }
 
-    public function getRelatedAuctionProductsUrls(Request $request)
+    public function getRelatedAuctionProductsUrls(Request $request): array
     {
         // Extract attributes from $request
         $productID = $request->input('product_id');
@@ -271,7 +221,7 @@ class ProductManagementController extends Controller
 
         // Get Product(s) registered for this auction/store
         $productIDs = AuctionLot::where('store_id', $storeID)
-            ->statuses([Status::ARCHIVED, Status::ACTIVE])
+            ->statuses([Status::ARCHIVED->value, Status::ACTIVE->value])
             ->whereNotIn('product_id', $excludedProductIDs)
             ->pluck('product_id')
             ->unique()
@@ -350,15 +300,6 @@ class ProductManagementController extends Controller
                         $product->related_category_score += $set['weighting'];
                     }
                 }
-
-                // foreach ($childrenCategorySets as $set) {
-                //     foreach ($set['ids'] as $id) {
-                //         if (in_array($id, $productCategoryIDs)) {
-                //             $product->related_category_score += $set['weighting'];
-                //             break;
-                //         }
-                //     }
-                // }
             }
 
             $products = $products->filter(function ($product) {
@@ -374,36 +315,27 @@ class ProductManagementController extends Controller
         *   Stage 3:
         *   Generate URLs
         */
-        $productIDsSet = $products
-            ->pluck('_id')
+        $urls = collect($products)
+            ->pluck('id')
             ->chunk($itemsPerPage)
+            ->map(fn($chunk) => route('paraqon.products.ids', [
+                'store_id' => $this->store->_id,
+                'ids' => $chunk->all(),
+                'sort_by' => 'default'
+            ]))
             ->all();
 
-        $urls = [];
-        foreach ($productIDsSet as $IDsSet) {
-            $url = route('paraqon.products.ids', [
-                'store_id' => $this->store->_id,
-                'ids' => $IDsSet->all(),
-                'sort_by' => 'default'
-            ]);
-            $urls[] = $url;
-        }
-
-        // Return urls
         return $urls;
     }
 
-    public function getAuctionProductsByIDs(Request $request)
+    public function getAuctionProductsByIDs(Request $request): array
     {
         // Extract attributes from $request
         $productIDs = $request->ids;
 
         // Append attributes to each Product
-        $products = $this->getProductsInfoByAggregation($productIDs, $this->store->_id);
-
-        $products = $products->filter(function ($item) {
-            return $item->auction_lot_id != '0';
-        })->values();
+        $products = $this->getProductsInfoByAggregation($productIDs, $this->store->id);
+        $products = $products->filter(fn($item) => $item->auction_lot_id != '0')->values();
 
         // Get WatchlistItem 
         $customer = $this->customer();
@@ -454,44 +386,17 @@ class ProductManagementController extends Controller
         return $sortedProducts;
     }
 
-    public function getAllWishlistAuctionLots(Request $request)
+    public function getAllWishlistAuctionLots(Request $request): Collection
     {
         // Extract attributes from $request
         $categoryIDs = $request->input('category_ids', []);
-        $keyword = $request->input('keyword');
-        if ($keyword === "") $keyword = "*";
-        $gate = $request->input('logic_gate', 'OR');
-        $slug = $request->input('slug', 'by-keyword-relevance');
-
-        // Get sorting attributes via slugs
-        $sortingValue = $this->getProductSortingAttributesBySlug('product-sorting', $slug);
-        switch ($sortingValue['type']) {
-            case 'KEY':
-                $request['sort_by'] = $sortingValue['key'];
-                $request['sort_order'] = $sortingValue['ordering'];
-                break;
-            case 'KEYWORD':
-                break;
-            default:
-                break;
-        }
-
-        // Get matching keywords from Typesense
-        $matchingProductIDs = [];
-        if (!is_null($keyword)) {
-            $typesense = new TypeSenseSearchEngine('products');
-            $matchingProductIDs = $typesense->getIDsFromSearch(
-                $keyword,
-                'title.en,title.zh,title.cn'
-            );
-        }
 
         // Get authenticated User information
         $customer = $this->customer();
 
         // Get WishlistItem(s)
         $wishlistItems = $customer->wishlistItems()
-            ->byStore($this->store)
+            ->where('store_id', $this->store->id)
             ->when($categoryIDs, function ($query) use ($categoryIDs) {
                 return $query->whereHas('product', function ($query2) use ($categoryIDs) {
                     return $query2->whereHas('categories', function ($query3) use ($categoryIDs) {
@@ -499,21 +404,14 @@ class ProductManagementController extends Controller
                     });
                 });
             })
-            ->when($keyword, function ($query) use ($matchingProductIDs) {
-                return $query->byProductIDs($matchingProductIDs);
-            })
             ->get();
 
         // Get Products
         $productIDs = $wishlistItems->pluck('product_id')->all();
-        if (count($productIDs) == 0) {
-            return new Collection();
-        }
+        if (count($productIDs) == 0) return new Collection();
 
         $products = $this->getProductsInfoByAggregation($productIDs, $this->store->_id);
-        $products = $products->filter(function ($item) {
-            return $item->auction_lot_id != '0';
-        })->values();
+        $products = $products->filter(fn($item) => $item->auction_lot_id != '0')->values();
 
         foreach ($products as $product) {
             $auctionLotID = $product->auction_lot_id;
@@ -529,15 +427,12 @@ class ProductManagementController extends Controller
             );
         }
 
-        // Return data
         return $products;
     }
 
-    private function getProductsInfoByAggregation(array $productIDs, ?string $storeID = null)
+    private function getProductsInfoByAggregation(array $productIDs, ?string $storeID = null): Collection
     {
         $productIDs = array_values($productIDs);
-
-        // Get Products 
         if (count($productIDs) == 0) return new Collection();
 
         $products = Product::raw(function ($collection) use ($productIDs, $storeID) {
@@ -551,13 +446,11 @@ class ProductManagementController extends Controller
             ];
 
             // Find matching IDs
-            if (count($productIDs) > 0) {
-                $aggregate[]['$match'] = [
-                    '_id' => [
-                        '$in' => $productIDs
-                    ]
-                ];
-            }
+            $aggregate[]['$match'] = [
+                '_id' => [
+                    '$in' => $productIDs
+                ]
+            ];
 
             // Get AuctionLot
             $aggregate[]['$lookup'] = [
@@ -573,7 +466,7 @@ class ProductManagementController extends Controller
                                     [
                                         '$in' => [
                                             '$status',
-                                            [Status::ACTIVE, Status::ARCHIVED]
+                                            [Status::ACTIVE->value, Status::ARCHIVED->value]
                                         ]
                                     ]
                                 ],
@@ -752,7 +645,7 @@ class ProductManagementController extends Controller
                         'branches' => [
                             [
                                 'case' => [
-                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PRICE]
+                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PRICE->value]
                                 ],
                                 'then' => [
                                     '$subtract' => [
@@ -763,7 +656,7 @@ class ProductManagementController extends Controller
                             ],
                             [
                                 'case' => [
-                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PERCENTAGE]
+                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PERCENTAGE->value]
                                 ],
                                 'then' => [
                                     '$divide' => [
@@ -811,30 +704,6 @@ class ProductManagementController extends Controller
             ];
 
             $aggregate[]['$addFields'] = [
-                // 'current_bid' => [
-                //     '$cond' => [
-                //         'if' => [
-                //             '$gt' => [
-                //                 ['$size' => '$auction_lots'],
-                //                 0
-                //             ]
-                //         ],
-                //         'then' => ['$first' => '$auction_lots.current_bid'],
-                //         'else' => 0
-                //     ],
-                // ],
-                // 'is_reserve_price_met' => [
-                //     '$cond' => [
-                //         'if' => [
-                //             '$gte' => [
-                //                 ['$first' => '$auction_lots.current_bid'],
-                //                 ['$first' => '$auction_lots.reserve_price'],
-                //             ],
-                //         ],
-                //         'then' => true,
-                //         'else' => false
-                //     ],
-                // ],
                 'is_bid_placed' => ['$last' => '$auction_lots.is_bid_placed'],
                 'auction_lot_id' => [
                     '$cond' => [
