@@ -1,22 +1,36 @@
 {
-    "name": "starsnet/project",
-    "minimum-stability": "stable",
-    "description": "External APIs and functionalities for Laravel-based (Laravel 12) Super E-commerce Project Template",
-    "type": "project",
-    "version": "1.0.0",
-    "require": {},
-    "autoload": {
-        "psr-4": {
-            "StarsNet\\Project\\Auction\\": "src/auction/src/",
-            "StarsNet\\Project\\Paraqon\\": "src/paraqon/src/"
-        }
-    },
-    "extra": {
-        "laravel": {
-            "providers": [
-                "StarsNet\\Project\\Auction\\ProjectServiceProvider",
-                "StarsNet\\Project\\Paraqon\\ProjectServiceProvider"
-            ]
-        }
+  "name": "starsnet/project",
+  "minimum-stability": "stable",
+  "description": "External APIs and functionalities for Laravel-based (Laravel 12) Super E-commerce Project Template",
+  "type": "project",
+  "version": "1.0.0",
+  "require": {},
+  "autoload": {
+    "psr-4": {
+      "StarsNet\\Project\\Auction\\": "src/auction/src/",
+      "StarsNet\\Project\\Easeca\\": "src/easeca/src/",
+      "StarsNet\\Project\\Esgone\\": "src/esgone/src/",
+      "StarsNet\\Project\\Paraqon\\": "src/paraqon/src/",
+      "StarsNet\\Project\\Rmhc\\": "src/rmhc/src/",
+      "StarsNet\\Project\\ShoppingCart\\": "src/shopping-cart/src/",
+      "StarsNet\\Project\\Stripe\\": "src/stripe/src/",
+      "StarsNet\\Project\\WhiskyWhiskers\\": "src/whisky-whiskers/src/",
+      "StarsNet\\Project\\WhiskyWhiskersUpgrade\\": "src/whisky-whiskers-upgrade/src/"
     }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "StarsNet\\Project\\Auction\\ProjectServiceProvider",
+        "StarsNet\\Project\\Easeca\\ProjectServiceProvider",
+        "StarsNet\\Project\\Esgone\\ProjectServiceProvider",
+        "StarsNet\\Project\\Paraqon\\ProjectServiceProvider",
+        "StarsNet\\Project\\Rmhc\\ProjectServiceProvider",
+        "StarsNet\\Project\\ShoppingCart\\ProjectServiceProvider",
+        "StarsNet\\Project\\Stripe\\ProjectServiceProvider",
+        "StarsNet\\Project\\WhiskyWhiskers\\ProjectServiceProvider",
+        "StarsNet\\Project\\WhiskyWhiskersUpgrade\\ProjectServiceProvider"
+      ]
+    }
+  }
 }
