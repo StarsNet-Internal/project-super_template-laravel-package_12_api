@@ -2,53 +2,38 @@
 
 namespace Starsnet\Project\Paraqon\App\Models;
 
-// Constants
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\Status;
+// Default
+use MongoDB\Laravel\Eloquent\Model;
+use MongoDB\Laravel\Relations\BelongsTo;
+use MongoDB\Laravel\Relations\HasOne;
+use MongoDB\Laravel\Relations\HasMany;
 
 // Traits
-use App\Traits\Model\ObjectIDTrait;
-use App\Traits\Model\StatusFieldTrait;
+use App\Models\Traits\ObjectIDTrait;
+use App\Models\Traits\StatusFieldTrait;
 
-// Laravel classes and MongoDB relationships, default import
-use Illuminate\Support\Collection;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
-use Jenssegers\Mongodb\Eloquent\Model as Eloquent;
-use Jenssegers\Mongodb\Relations\EmbedsMany;
-use Jenssegers\Mongodb\Relations\EmbedsOne;
+// Enums
+use App\Enums\ReplyStatus;
+use App\Enums\Status;
 
-use App\Models\Account;
-use App\Models\Configuration;
+// Models
 use App\Models\Customer;
 use App\Models\Product;
 use App\Models\ProductVariant;
 use App\Models\Store;
-use Illuminate\Support\Facades\Log;
 use Starsnet\Project\Paraqon\App\Models\Bid;
+use Starsnet\Project\Paraqon\App\Models\BidHistory;
 
-class AuctionLot extends Eloquent
+class AuctionLot extends Model
 {
     use ObjectIDTrait,
         StatusFieldTrait;
 
-    /**
-     * Define database connection.
-     *
-     * @var string
-     */
+    // Connection
     protected $connection = 'mongodb';
-
-    /**
-     * The database collection used by the model.
-     *
-     * @var string
-     */
     protected $collection = 'auction_lots';
 
+    // Attributes
     protected $attributes = [
         // Relationships
         'auction_request_id' => null,
@@ -66,8 +51,8 @@ class AuctionLot extends Eloquent
         'permission_type' => null,
         'permission_requests' => [],
 
-        'status' => Status::ACTIVE,
-        'reply_status' => ReplyStatus::PENDING,
+        'status' => Status::ACTIVE->value,
+        'reply_status' => ReplyStatus::PENDING->value,
         'remarks' => null,
 
         // Booleans
@@ -83,23 +68,9 @@ class AuctionLot extends Eloquent
         'deleted_at' => null
     ];
 
-    protected $dates = [
-        'deleted_at'
-    ];
-
-    protected $casts = [];
-
-    protected $appends = [];
-
-    /**
-     * Blacklisted model properties from doing mass assignment.
-     * None are blacklisted by default for flexibility.
-     * 
-     * @var array
-     */
     protected $guarded = [];
-
-    protected $hidden = [];
+    protected $appends = ['_id'];
+    protected $hidden = ['id'];
 
     // -----------------------------
     // Relationship Begins
@@ -192,14 +163,6 @@ class AuctionLot extends Eloquent
     // -----------------------------
 
     // -----------------------------
-    // Accessor Begins
-    // -----------------------------
-
-    // -----------------------------
-    // Accessor Ends
-    // -----------------------------
-
-    // -----------------------------
     // Action Begins
     // -----------------------------
 
@@ -217,14 +180,11 @@ class AuctionLot extends Eloquent
         if (is_null($bidType) || $bidType != 'ADVANCED') {
             if (count($allBids) > 2 && !is_null($newBidCustomerID)) {
                 $winningBid = $bidHistory->histories()->last();
-
                 if ($winningBid->winning_bid_customer_id == $newBidCustomerID) {
-                    if (
-                        max($reservePrice, $winningBid->current_bid, $newBidValue) == $reservePrice // Case 0A
-                        || min($reservePrice, $winningBid->current_bid, $newBidValue) == $reservePrice // Case 0C
-                    ) {
-                        return $bidHistory->current_bid;
-                    }
+                    $currentBid = $winningBid->current_bid;
+                    if ($currentBid < $newBidValue && $newBidValue < $reservePrice) return $currentBid; // Case 0A
+                    if ($newBidValue > $currentBid && $currentBid > $reservePrice) return $currentBid; // Case 0B
+                    if ($newBidValue >= $reservePrice && $reservePrice > $currentBid) return $reservePrice; // Case 0C
                 }
             }
         }

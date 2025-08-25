@@ -2,114 +2,65 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
-use App\Constants\Model\LoginType;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Account;
-use App\Models\Warehouse;
-use App\Traits\Controller\AuthenticationTrait;
-use App\Constants\Model\VerificationCodeType;
-
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 
-use App\Events\Customer\Authentication\CustomerLogin;
+// Enums
+use App\Enums\LoginType;
+use App\Enums\VerificationCodeType;
+
+// Models
+use App\Models\Account;
 use App\Models\User;
-
-use App\Events\Customer\Authentication\CustomerRegistration;
 use App\Models\VerificationCode;
 use Starsnet\Project\Paraqon\App\Models\Notification;
 
 class AuthenticationController extends Controller
 {
-    use AuthenticationTrait;
-
-    public function login(Request $request)
+    public function login(Request $request): array
     {
         // Declare local constants
-        $roleName = 'customer';
-
-        // Extract attributes from $request
-        $loginType = $request->input('type', LoginType::EMAIL);
-        $loginType = strtoupper($loginType);
+        $loginType = strtoupper($request->input('type', LoginType::EMAIL->value));
 
         // Attempt to find User via Account Model
-        $user = $this->findUserByCredentials(
-            $loginType,
-            $request->email,
-            $request->area_code,
-            $request->phone,
-        );
+        $user = $this->findUserByCredentials($loginType, $request->email, $request->area_code, $request->phone);
+        if (is_null($user)) abort(404, 'Credentials are not valid');
 
-        if (is_null($user)) {
-            return response()->json([
-                'message' => 'Credentials are not valid.'
-            ], 404);
+        // Check if too many failed login attempts
+        /** @var ?Account $account */
+        $account = $user->account;
+        if (is_null($account)) abort(404, 'Account not found');
+        if (isset($account->failed_login_count) && $account->failed_login_count >= 5) {
+            abort(423, 'Too many failed attempts. Your account has been temporarily locked for security reasons');
         }
 
         // Get login_id from found user
-        $credentials =
-            [
-                'login_id' => $user->login_id,
-                'password' => $request->password
-            ];
-
-        // Check if too many failed login attempts
-        $account = $user->account;
-
-        if (
-            isset($account->failed_login_count)
-            && $account->failed_login_count >= 5
-        ) {
-            return response()->json([
-                'message' => 'Too many failed attempts. Your account has been temporarily locked for security reasons.'
-            ], 423);
-        }
-
+        $credentials = ['login_id' => $user->login_id, 'password' => $request->password];
         if (!Auth::attempt($credentials)) {
             // For incorrect password, increment failed_login_count on account
             $newFailedLoginCount = $account->failed_login_count + 1;
             $account->update(['failed_login_count' => $newFailedLoginCount]);
-
-            return response()->json([
-                'message' => 'Credentials are not valid.'
-            ], 404);
+            abort(404, 'Credentials are not valid');
         }
 
         // Get User, then validate
         $user = $this->user();
-
-        if ($user->isDeleted()) {
-            return response()->json([
-                'message' => 'Account not found'
-            ], 403);
-        }
-
-        if ($user->isDisabled()) {
-            return response()->json([
-                'message' => 'This account is disabled'
-            ], 403);
-        }
-
-        if ($user->isStaff()) {
-            return response()->json([
-                'message' => 'This account is a staff account'
-            ], 403);
-        }
+        if ($user->is_deleted === true) abort(403, 'Account not found.');
+        if ($user->is_disabled === true) abort(403, 'Account is disabled.');
+        if ($user->is_staff === true) abort(403, 'Account is a staff-only account.');
+        $user->account;
 
         // Disable all old LOGIN type VerificationCode
         $user->verificationCodes()
-            ->where('type', 'LOGIN')
+            ->where('type', VerificationCodeType::LOGIN->value)
             ->where('is_used', false)
             ->update(['is_used' => true]);
 
         // Generate new VerificationCode
-        $code = $this->generateVerificationCodeByType(
-            'LOGIN',
-            15,
-            $user,
-            $loginType
-        );
+        $code = $this->generateVerificationCodeByType(VerificationCodeType::LOGIN->value, 15, $user, $loginType);
 
         // Clear failed login count
         $account->update(['failed_login_count' => 0]);
@@ -117,71 +68,35 @@ class AuthenticationController extends Controller
         // Check is_2fa_verification_required
         $is2faVerificationRequired = $account->is_2fa_verification_required ?? true;
 
-        // Return response
-        return response()->json([
+        return [
             'message' => 'Login credentials are valid, we have sent you a 2FA verification code',
             'code' => $code,
             'is_2fa_verification_required' => $is2faVerificationRequired
-        ], 200);
+        ];
     }
 
-    public function twoFactorAuthenticationlogin(Request $request)
+    public function twoFactorAuthenticationlogin(Request $request): array
     {
-        // Declare local constants
-        $roleName = 'customer';
+        $now = now();
 
         // Extract attributes from $request
-        $loginType = $request->input('type', LoginType::EMAIL);
-        $loginType = strtoupper($loginType);
+        $loginType = strtoupper($request->input('type', LoginType::EMAIL->value));
         $code = $request->code;
 
         // Attempt to find User via Account Model
-        $user = $this->findUserByCredentials(
-            $loginType,
-            $request->email,
-            $request->area_code,
-            $request->phone,
-        );
-
-        if (is_null($user)) {
-            return response()->json([
-                'message' => 'Credentials are not valid.'
-            ], 404);
-        }
+        $user = $this->findUserByCredentials($loginType, $request->email, $request->area_code, $request->phone);
+        if (is_null($user)) abort(404, 'Credentials are not valid');
 
         // Get login_id from found user
-        $credentials =
-            [
-                'login_id' => $user->login_id,
-                'password' => $request->password
-            ];
-
-        if (!Auth::attempt($credentials)) {
-            return response()->json([
-                'message' => 'Credentials are not valid.'
-            ], 404);
-        }
+        $credentials = ['login_id' => $user->login_id, 'password' => $request->password];
+        if (!Auth::attempt($credentials)) abort(404, 'Credentials are not valid');
 
         // Get User, then validate
         $user = $this->user();
-
-        if ($user->isDeleted()) {
-            return response()->json([
-                'message' => 'Account not found'
-            ], 403);
-        }
-
-        if ($user->isDisabled()) {
-            return response()->json([
-                'message' => 'This account is disabled'
-            ], 403);
-        }
-
-        if ($user->isStaff()) {
-            return response()->json([
-                'message' => 'This account is a staff account'
-            ], 403);
-        }
+        if ($user->is_deleted === true) abort(403, 'Account not found.');
+        if ($user->is_disabled === true) abort(403, 'Account is disabled.');
+        if ($user->is_staff === true) abort(403, 'Account is a staff-only account.');
+        $user->account;
 
         // Find VerificationCode
         $verificationCode = $user->verificationCodes()
@@ -190,111 +105,82 @@ class AuthenticationController extends Controller
             ->orderBy('_id', 'desc')
             ->first();
 
-        if (is_null($verificationCode)) {
-            return response()->json([
-                'message' => 'Invalid Verfication Code'
-            ], 404);
-        }
-
-        if ($verificationCode->isDisabled()) {
-            return response()->json([
-                'message' => 'Verfication Code is disabled'
-            ], 403);
-        }
-
-        if ($verificationCode->isUsed()) {
-            return response()->json([
-                'message' => 'Verfication Code has already been used'
-            ], 403);
-        }
-
-        if ($verificationCode->isExpired()) {
-            return response()->json([
-                'message' => 'Verfication Code expired'
-            ], 403);
-        }
-
-        if ($verificationCode->code != $code) {
-            return response()->json([
-                'message' => 'Verfication Code is incorrect'
-            ], 403);
-        }
+        if (is_null($verificationCode)) abort(404, 'Invalid Verfication Code');
+        if ($verificationCode->is_disabled === true) abort(403, 'Verfication Code is disabled');
+        if ($verificationCode->is_used === true) abort(403, 'Verfication Code has already been used');
+        if ($verificationCode->expires_at < $now) abort(403, 'VerificationCode is expired');
 
         // Update VerificationCode
-        $verificationCode->use();
+        $verificationCode->update([
+            'is_used' => true,
+            'used_at' => $now
+        ]);
 
         // Create token
-        $accessToken = $user->createToken($roleName)->accessToken;
+        $accessToken = $user->createToken('customer')->accessToken;
 
-        // Fire event
-        event(new CustomerLogin($user));
+        // Update last_logged_in_at
+        $user->touchLastLoggedInAt();
 
-        // Return data
-        $data = [
+        return [
             'token' => $accessToken,
             'user' => $user
         ];
-
-        return response()->json($data, 200);
     }
 
-    public function migrateToRegistered(Request $request)
+    public function migrateToRegistered(Request $request): array
     {
+        $now = now();
+
+        // Extract attributes from $request
+        $loginType = $request->input('type');
+        $password = $request->input('password', 'password');
+
         // Get User, then validate
         $user = $this->user();
-
-        if (!$user->isTypeTemp()) {
-            return response()->json([
-                'message' => 'This User does not have permission',
-            ], 401);
-        }
+        if ($user->type !== LoginType::TEMP->value) abort(401, 'User does not have permission.');
 
         // Find if user exists
-        $ifAccountExists = Account::where('email', $request->email)
-            ->exists();
+        $ifAccountExists = Account::where('email', $request->email)->exists();
+        if ($ifAccountExists) abort(401, 'This email address has already been taken: ' . $request->email);
 
-        if ($ifAccountExists) {
-            return response()->json([
-                'message' => 'This email address has already been taken: ' . $request->email,
-            ], 401);
+        $ifAccountExists = Account::where('area_code', $request->area_code)->where('phone', $request->phone)->exists();
+        if ($ifAccountExists) abort(401, 'This phone has already been taken: +' . $request->area_code . ' ' . $request->phone);
+
+        $loginID = $request->email;
+        if ($loginType == LoginType::PHONE->value) {
+            $loginID = $request->area_code . $request->phone;
         }
-
-        $ifAccountExists = Account::where('area_code', $request->area_code)
-            ->where('phone', $request->phone)
-            ->exists();
-
-        if ($ifAccountExists) {
-            return response()->json([
-                'message' => 'This phone has already been taken: +' . $request->area_code . ' ' . $request->phone,
-            ], 401);
-        }
-
-        // Override request value
-        $request->merge([
-            'type' => LoginType::EMAIL,
-        ]);
 
         // Update User
-        $this->updateUserViaRegistration($user, $request);
-        // $user->generateVerificationCodeByType(
-        //     VerificationCodeType::ACCOUNT_VERIFICATION,
-        //     60
-        // );
+        $user->update([
+            'login_id' => $loginID,
+            'type' => $loginType,
+            'password' => Hash::make($password),
+            'password_updated_at' => now()
+        ]);
 
         // Update Account
         /** @var ?Account $account */
         $account = $user->account;
-        if ($account instanceof Account) {
-            $this->updateAccountViaRegistration($account, $request);
-        }
 
-        // Update User, then update Account
-        $userUpdateAttributes = [
-            'login_id' => $request->email
-        ];
-        $user->update($userUpdateAttributes);
+        // Formulate client_no
+        $code = $now->format('ym');
+        $existingAccounts = Account::where('client_no', 'regex', '/CT' . $code . '/i')
+            ->orderBy('client_no', 'desc')
+            ->pluck('client_no')
+            ->all();
+        $nextSequence = empty($existingAccounts)
+            ? 1
+            : ((int) substr($existingAccounts[0], -4)) + 1;
+        $nextClientCode = 'CT' . $code . str_pad($nextSequence, 4, '0', STR_PAD_LEFT);
 
         $accountUpdateAttributes = [
+            'username' => $request->username,
+            'avatar' => $request->avatar,
+            'gender' => $request->gender,
+            'country' => $request->country,
+
             'email' => $request->email,
             'area_code' => $request->area_code,
             'phone' => $request->phone,
@@ -312,34 +198,25 @@ class AuthenticationController extends Controller
             'address_proof_verification' => $request->input('address_proof_verification'),
             'photo_id_verification' => $request->input('photo_id_verification'),
             'legal_name_verification' => $request->input('legal_name_verification'),
+            'first_name' => $request->input('first_name'),
+            'last_name' => $request->input('last_name'),
 
             // Boolean
             'is_2fa_verification_required' => $request->input('is_2fa_verification_required'),
 
             // Admin Created Accounts
             'is_created_by_admin' => $request->input('is_created_by_admin', false),
-            'is_default_password_changed' => $request->input('is_default_password_changed', false)
+            'is_default_password_changed' => $request->input('is_default_password_changed', false),
+
+            'client_no' => $nextClientCode
         ];
         $account->update($accountUpdateAttributes);
 
         // Update Notification Settings
         $setting = $account->notificationSetting;
 
-        $notificationChannels = ["EMAIL", "SMS"];
-        switch ($request->area_code) {
-            case '852': {
-                    $notificationChannels = ["EMAIL"];
-                    break;
-                }
-            case '86':
-            default: {
-                    $notificationChannels = ["EMAIL"];
-                    break;
-                }
-        }
-
         $setting->update([
-            "channels" => $notificationChannels,
+            "channels" => ["EMAIL"],
             "language" => "EN",
             "is_accept" => [
                 "marketing_info" => true,
@@ -354,118 +231,58 @@ class AuthenticationController extends Controller
             "is_notifiable" => true,
         ]);
 
-        // Return success message
-        return response()->json([
+        return [
             'message' => 'Registered as new Customer successfully',
             'id' => $user->id,
             'warehouse_id' => null
-        ], 200);
+        ];
     }
 
-    public function changeEmailRequest()
+    public function changeEmailRequest(): array
     {
         // Get User, then validate
         $user = $this->user();
-
-        if (is_null($user)) {
-            return response()->json([
-                'message' => 'User not found'
-            ], 404);
-        }
-
-        if ($user->isDisabled()) {
-            return response()->json([
-                'message' => 'This account is disabled'
-            ], 403);
-        }
+        if ($user->is_disabled === true) abort(403, 'User is disabled.');
 
         // Get Account, then validate
         $account = $this->account();
-
-        if (is_null($account)) {
-            return response()->json([
-                'message' => 'Account not found'
-            ], 404);
-        }
+        if (is_null($account)) abort(404, 'Account not found.');
 
         // Get email (address), then validate
         /** @var ?string $email */
         $email = $account->email;
-
-        if (is_null($email)) {
-            return response()->json([
-                'message' => 'Email not found'
-            ], 404);
-        }
+        if (is_null($email)) abort(404, 'Email not found.');
 
         // Generate new VerificationCode
-        $code = $this->generateVerificationCodeByType(
-            VerificationCodeType::CHANGE_EMAIL,
-            15,
-            $user,
-            'EMAIL'
-        );
+        $this->generateVerificationCodeByType(VerificationCodeType::CHANGE_EMAIL->value, 15, $user, 'EMAIL');
 
-        // Return success message
-        return response()->json([
-            'message' => 'Email sent to ' . $email,
-        ]);
+        return ['message' => 'Email sent to ' . $email];
     }
 
-    public function changePhoneRequest()
+    public function changePhoneRequest(): array
     {
         // Get User, then validate
         $user = $this->user();
-
-        if (is_null($user)) {
-            return response()->json([
-                'message' => 'User not found'
-            ], 404);
-        }
-
-        if ($user->isDisabled()) {
-            return response()->json([
-                'message' => 'This account is disabled'
-            ], 403);
-        }
+        if ($user->is_disabled === true) abort(403, 'User is disabled.');
 
         // Get Account, then validate
         $account = $this->account();
-
-        if (is_null($account)) {
-            return response()->json([
-                'message' => 'Account not found'
-            ], 404);
-        }
+        if (is_null($account)) abort(404, 'Account not found.');
 
         // Get phone info, then validate
         $areaCode = $account->area_code;
         $phone = $account->phone;
-
-        if (is_null($areaCode) || is_null($phone)) {
-            return response()->json([
-                'message' => 'Phone not found'
-            ], 404);
-        }
+        if (is_null($areaCode) || is_null($phone)) abort(404, 'Phone not found');
 
         // Generate new VerificationCode
-        $code = $this->generateVerificationCodeByType(
-            VerificationCodeType::CHANGE_PHONE,
-            15,
-            $user,
-            'PHONE'
-        );
+        $this->generateVerificationCodeByType(VerificationCodeType::CHANGE_PHONE->value, 15, $user, 'PHONE');
 
-        // Return success message
-        return response()->json([
-            'message' => 'SMS sent to +' . $areaCode . ' ' . $phone,
-        ]);
+        return ['message' => 'SMS sent to +' . $areaCode . ' ' . $phone];
     }
 
-    public function changePhone(Request $request)
+    public function changePhone(Request $request): array
     {
-        // Declare local constants
-        $loginType = LoginType::PHONE;
+        $now = now();
 
         // Extract attributes from $request
         $verificationCode = $request->input('verification_code');
@@ -473,193 +290,95 @@ class AuthenticationController extends Controller
         $phone = $request->input('phone');
 
         // Get VerificationCode, then validate
-        $code = VerificationCode::where(
-            'type',
-            VerificationCodeType::CHANGE_PHONE
-        )
-            ->where('code', $verificationCode)
+        $code = VerificationCode::where('code', $verificationCode)
+            ->where('type', VerificationCodeType::CHANGE_PHONE->value)
             ->latest()
             ->first();
 
-        if (is_null($code)) {
-            return response()->json([
-                'message' => 'Invalid verification_code'
-            ], 404);
-        }
-
-        if ($code->isDisabled()) {
-            return response()->json([
-                'message' => 'verification_code is disabled'
-            ], 403);
-        }
-
-        if ($code->isUsed()) {
-            return response()->json([
-                'message' => 'verification_code has already been used'
-            ], 403);
-        }
-
-        if ($code->isExpired()) {
-            return response()->json([
-                'message' => 'verification_code expired'
-            ], 403);
-        }
+        if (is_null($code)) abort(404, 'VerificationCode not found.');
+        if ($code->is_disabled === true) abort(403, 'VerificationCode is disabled.');
+        if ($code->is_used === true) abort(403, 'VerificationCode is already used.');
+        if ($code->expires_at < $now) abort(403, 'VerificationCode is expired.');
 
         // Get User, then validate
         /** @var ?User $user */
         $user = $code->user;
-
-        if (is_null($user)) {
-            return response()->json([
-                'message' => 'Invalid verification_code / User not found'
-            ], 404);
-        }
-
-        if ($user->isDisabled()) {
-            return response()->json([
-                'message' => 'This account is disabled'
-            ], 403);
-        }
+        if (is_null($user)) abort(404, 'User not found.');
+        if ($user->is_disabled === true) abort(403, 'Account is disabled.');
 
         // Validate if new credentials are duplicated
         $newLoginID = $areaCode . $phone;
-        if ($this->checkIfUserExists($loginType, $newLoginID)) {
-            return response()->json([
-                'message' => 'Update failed, User/phone already exists',
-            ], 403);
-        }
+        $isLoginIDtaken = User::where('login_id', $newLoginID)->exists();
+        if ($isLoginIDtaken) abort(403, 'Phone is already taken.');
 
-        // Update User and Account
-        $this->updatePhoneUserCredentials($user, $areaCode, $phone);
+        // Update User
+        $user->update(['login_id' => $newLoginID]);
+
+        // Update Account
+        $account = $user->account;
+        $account->update([
+            'area_code' => $areaCode,
+            'phone' => $phone
+        ]);
 
         // Update VerificationCode
-        $code->use();
+        $code->update([
+            'is_used' => true,
+            'used_at' => $now
+        ]);
 
-        // Return success message
-        return response()->json([
+        return [
             'message' => 'Updated phone successfully',
-        ], 200);
+        ];
     }
 
-    public function forgetPassword(Request $request)
+    public function forgetPassword(Request $request): array
     {
         // Extract attributes from $request
-        $loginType = $request->input('type', LoginType::EMAIL);
-        $loginType = strtoupper($loginType);
+        $loginType = strtoupper($request->input('type', LoginType::EMAIL->value));
 
         // Validate Request
-        if (!in_array($loginType, [LoginType::EMAIL, LoginType::PHONE])) {
-            return response()->json([
-                'message' => 'Incorrect type input'
-            ], 401);
-        }
-
-        if ($loginType == LoginType::EMAIL && is_null($request->email)) {
-            return response()->json([
-                'message' => 'Missing email'
-            ], 401);
-        }
-
-        if (
-            $loginType == LoginType::PHONE
-            && is_null($request->area_code)
-            && is_null($request->phone)
-        ) {
-            return response()->json([
-                'message' => 'Missing area_code or phone'
-            ], 401);
-        }
+        if (!in_array($loginType, [LoginType::EMAIL->value, LoginType::PHONE->value])) abort(422, 'Incorrect type');
+        if ($loginType == LoginType::EMAIL->value && is_null($request->email)) abort(401, 'Missing email');
+        if ($loginType == LoginType::PHONE->value && is_null($request->area_code) && is_null($request->phone))  abort(401, 'Missing area_code or phone');
 
         // Attempt to find User via Account Model
-        $user = $this->findUserByCredentials(
-            $loginType,
-            $request->email,
-            $request->area_code,
-            $request->phone,
-        );
-
-        if (is_null($user)) {
-            return response()->json([
-                'message' => 'User not found'
-            ], 404);
-        }
-
-        if ($user->isDisabled()) {
-            return response()->json([
-                'message' => 'This account is disabled'
-            ], 403);
-        }
+        $user = $this->findUserByCredentials($loginType, $request->email, $request->area_code, $request->phone,);
+        if (is_null($user)) abort(404, 'Account not found');
+        if ($user->is_disabled === true) abort(403, 'Account is disabled.');
 
         // Create VerificationCode
-        $code = $this->generateVerificationCodeByType(
-            VerificationCodeType::FORGET_PASSWORD,
-            30,
-            $user,
-            $loginType
-        );
+        $this->generateVerificationCodeByType(VerificationCodeType::FORGET_PASSWORD->value, 30, $user, $loginType);
 
         // Get Account, then validate
         /** @var ?Account $account */
         $account = $user->account;
+        if (is_null($account)) abort(404, 'Account not found');
 
-        if (is_null($account)) {
-            return response()->json([
-                'message' => 'Account not found'
-            ], 404);
-        }
-
-        // Return response
         switch ($loginType) {
-            case LoginType::EMAIL:
-                // Get email (address), then validate
+            case LoginType::EMAIL->value:
                 $email = $account->email;
-
-                if (is_null($email)) {
-                    return response()->json([
-                        'message' => 'Email not found'
-                    ], 404);
-                }
-
-                // Return success message
-                return response()->json([
-                    'message' => 'Email sent to ' . $email,
-                ], 200);
-            case LoginType::PHONE:
-                // Get phone info, then validate
+                if (is_null($email)) abort(404, 'Email not found');
+                return ['message' => 'Email sent to ' . $email];
+            case LoginType::PHONE->value:
                 $areaCode = $account->area_code;
                 $phone = $account->phone;
-
-                if (is_null($areaCode) || is_null($phone)) {
-                    return response()->json([
-                        'message' => 'Phone not found'
-                    ], 404);
-                }
-
-                // Return success message
-                return response()->json([
-                    'message' => 'SMS sent to +' . $areaCode . ' ' . $phone,
-                ], 200);
+                if (is_null($areaCode) || is_null($phone)) abort(404, 'Phone not found');
+                return ['message' => 'SMS sent to +' . $areaCode . ' ' . $phone];
             default:
-                // Default error message
-                return response()->json([
-                    'message' => 'Incorrect type input'
-                ], 401);
+                abort(401, 'Incorrect type input');
+                return ['message' => 'Incorrect type input'];
         }
     }
 
-    private function findUserIDByCredentials(
-        string $loginType,
-        ?string $email,
-        ?string $areaCode,
-        ?string $phone
-    ) {
+    private function findUserIDByCredentials(string $loginType, ?string $email, ?string $areaCode, ?string $phone): ?string
+    {
         switch ($loginType) {
-            case LoginType::EMAIL:
-            case LoginType::TEMP:
-                $account = Account::where('email', $email)
-                    ->first();
+            case LoginType::EMAIL->value:
+            case LoginType::TEMP->value:
+                $account = Account::where('email', $email)->first();
                 return optional($account)->user_id;
-            case LoginType::PHONE:
+            case LoginType::PHONE->value:
                 $account = Account::where('area_code', $areaCode)
                     ->where('phone', $phone)
                     ->first();
@@ -669,58 +388,32 @@ class AuthenticationController extends Controller
         }
     }
 
-    private function findUserByCredentials(
-        string $loginType,
-        ?string $email,
-        ?string $areaCode,
-        ?string $phone
-    ) {
-        $userID = $this->findUserIDByCredentials(
-            $loginType,
-            $email,
-            $areaCode,
-            $phone
-        );
+    private function findUserByCredentials(string $loginType, ?string $email, ?string $areaCode, ?string $phone): ?User
+    {
+        $userID = $this->findUserIDByCredentials($loginType, $email, $areaCode, $phone);
         return User::find($userID);
     }
 
-    private function generateVerificationCodeByType(
-        string $codeType,
-        int $minutesAllowed = 15,
-        User $user,
-        ?string $notificationType = 'EMAIL'
-    ) {
-        $code = (string) mt_rand(100000, 999999);;
-        $expiryDate = now()->addMinutes($minutesAllowed);
+    private function generateVerificationCodeByType(string $codeType, int $minutesAllowed = 15, User $user, ?string $notificationType = 'EMAIL')
+    {
+        $code = (string) random_int(100000, 999999);
 
-        $verificationCodeAttributes = [
+        $user->verificationCodes()->create([
             'type' => $codeType,
             'code' => $code,
-            'expires_at' => $expiryDate,
+            'expires_at' => now()->addMinutes($minutesAllowed),
             'notification_type' => $notificationType
-        ];
-        $user->verificationCodes()
-            ->create($verificationCodeAttributes);
+        ]);
 
         return $code;
     }
 
-    public function getAuthUserInfo()
+    public function getAuthUserInfo(): array
     {
         // Get User, then validate
         $user = $this->user();
-
-        if (is_null($user)) {
-            return response()->json([
-                'message' => 'User not found'
-            ], 404);
-        }
-
-        if ($user->isDisabled()) {
-            return response()->json([
-                'message' => 'This account is disabled'
-            ], 403);
-        }
+        if (is_null($user)) abort(404, 'User not found');
+        if ($user->is_disabled === true) abort(403, 'Account is disabled.');
 
         // Get Role 
         $user->role = $user->getRole();
@@ -732,11 +425,6 @@ class AuthenticationController extends Controller
             ->count();
         $user->unread_notification_count = $unreadNotificationCount;
 
-        // Return data
-        $data = [
-            'user' => $user
-        ];
-
-        return response()->json($data, 200);
+        return ['user' => $user];
     }
 }

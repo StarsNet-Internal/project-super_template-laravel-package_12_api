@@ -4,10 +4,11 @@ namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
 use App\Http\Controllers\Controller;
 use App\Models\Store;
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
+use App\Enums\Status;
+use App\Enums\StoreType;
 use App\Models\Content;
 use App\Models\Customer;
+use App\Models\CustomerGroup;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
@@ -27,30 +28,11 @@ class TestingController extends Controller
 
     public function healthCheck(Request $request)
     {
-        $paymentIntentID = 1234567;
-        $url = env('PARAQON_STRIPE_BASE_URLSSS', 'https://socket.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
-        return [
-            'message' => $url
-        ];
-
-        // $now = now();
-        // $upcomingStores = Store::where(
-        //     'type',
-        //     StoreType::OFFLINE
-        // )
-        //     ->orderBy('start_datetime')
-        //     ->get();
-
-        // $nearestUpcomingStore = null;
-        // foreach ($upcomingStores as $store) {
-        //     $startTime = $store->start_datetime;
-        //     $startTime = Carbon::parse($startTime);
-        //     if ($now < $startTime) {
-        //         $nearestUpcomingStore = $store;
-        //         break;
-        //     }
-        // }
-        // return $nearestUpcomingStore;
+        // $paymentIntentID = 1234567890;
+        // $url = env('PARAQON_STRIPE_BASE_URLSSS', 'https://socket.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
+        // return [
+        //     'message' => $url
+        // ];
 
         return response()->json([
             'message' => 'OK from package/paraqon'

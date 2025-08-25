@@ -2,49 +2,30 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Product;
-use App\Models\Store;
-use App\Models\Customer;
-use App\Models\Configuration;
-use App\Models\ProductVariant;
-use App\Models\Order;
 use Illuminate\Http\Request;
-use Carbon\Carbon;
 
-use App\Constants\Model\WarehouseInventoryHistoryType;
-use App\Constants\Model\CheckoutType;
-use App\Constants\Model\OrderDeliveryMethod;
-use App\Constants\Model\OrderPaymentMethod;
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\ShipmentDeliveryStatus;
+// Enums
+use App\Enums\Status;
+use App\Enums\ReplyStatus;
+use App\Enums\OrderPaymentMethod;
 
-use App\Traits\Utils\RoundingTrait;
-use Illuminate\Support\Str;
+// Models
+use App\Models\Store;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
-use Starsnet\Project\Paraqon\App\Models\AuctionLot;
-use Starsnet\Project\Paraqon\App\Models\ProductStorageRecord;
-
-// Validator
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Validation\Rule;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
-use Starsnet\Project\Paraqon\App\Models\BidHistory;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
 
 class DepositController extends Controller
 {
-    use RoundingTrait;
-
-    public function getAllDeposits(Request $request)
+    public function getAllDeposits(Request $request): Collection
     {
         // Extract attributes from $request
         $auctionType = $request->input('auction_type', 'ONLINE');
 
-        // Get Items
-        $deposits = Deposit::with([
+        return Deposit::with([
             'auctionRegistrationRequest.store',
             'depositStatuses'
         ])
@@ -55,113 +36,55 @@ class DepositController extends Controller
             })
             ->latest()
             ->get();
-
-        return $deposits;
     }
 
-    public function getDepositDetails(Request $request)
+    public function getDepositDetails(Request $request): ?Deposit
     {
-        // Extract attributes from $request
-        $depositID = $request->route('id');
-
-        // Get Deposit
-        $deposit = Deposit::with([
+        return Deposit::with([
             'auctionRegistrationRequest.store',
-            'requestedCustomer',
             'approvedAccount',
-            'depositStatuses'
+            'depositStatuses',
+            'requestedCustomer'
         ])
-            ->find($depositID);
-
-        if (is_null($deposit)) {
-            return response()->json([
-                'message' => 'Deposit not found'
-            ], 404);
-        }
-
-        return $deposit;
+            ->find($request->route('id'));
     }
 
-    public function updateDepositDetails(Request $request)
+    public function updateDepositDetails(Request $request): array
     {
-        // Extract attributes from $request
-        $depositID = $request->route('id');
+        /** @var ?Deposit $deposit */
+        $deposit = Deposit::find($request->route('id'));
+        if (is_null($deposit)) abort(404, 'Deposit not found');
 
-        // Get Deposit
-        $deposit = Deposit::find($depositID);
+        $deposit->update($request->all());
 
-        if (is_null($deposit)) {
-            return response()->json([
-                'message' => 'Deposit not found'
-            ], 404);
-        }
-
-        // Update Deposit
-        $updateAttributes = $request->all();
-        $deposit->update($updateAttributes);
-
-        return response()->json([
-            'message' => 'Deposit updated successfully'
-        ], 200);
+        return ['message' => 'Deposit updated successfully'];
     }
 
-    public function approveDeposit(Request $request)
+    public function approveDeposit(Request $request): array
     {
-        // Extract attributes from $request
-        $depositID = $request->route('id');
-        $replyStatus = $request->reply_status;
-
-        // Validation 
-        $replyStatus = strtoupper($replyStatus);
-
-        if (!in_array($replyStatus, [
-            ReplyStatus::APPROVED,
-            ReplyStatus::REJECTED
-        ])) {
-            return response()->json([
-                'message' => 'reply_status invalid'
-            ], 400);
+        /** @var ?Deposit $deposit */
+        $deposit = Deposit::find($request->route('id'));
+        if (is_null($deposit)) abort(404, 'Deposit not found');
+        if (in_array($deposit->reply_status, [ReplyStatus::APPROVED->value, ReplyStatus::REJECTED->value])) {
+            abort(400, 'Deposit has already been ' . $deposit->reply_status);
         }
 
-        // Get Deposit
-        $deposit = Deposit::find($depositID);
-
-        if (is_null($deposit)) {
-            return response()->json([
-                'message' => 'Deposit not found'
-            ], 404);
-        }
-
-        if (in_array($deposit->reply_status, [
-            ReplyStatus::APPROVED,
-            ReplyStatus::REJECTED
-        ])) {
-            return response()->json([
-                'message' => 'Deposit has already been APPROVED/REJECTED'
-            ], 400);
-        }
-
-        // Get AuctionRegistrationRequest
+        /** @var ?AuctionRegistrationRequest $auctionRegistrationRequest */
         $auctionRegistrationRequest = $deposit->auctionRegistrationRequest;
-
-        if (is_null($auctionRegistrationRequest)) {
-            return response()->json([
-                'message' => 'AuctionRegistrationRequest not found'
-            ], 404);
-        }
+        if (is_null($auctionRegistrationRequest)) abort(404, 'AuctionRegistrationRequest not found');
 
         // Get current Account
         $account = $this->account();
 
         // Update Deposit and AuctionRegistrationRequest
+        $replyStatus = strtoupper($request->reply_status);
         switch ($replyStatus) {
-            case ReplyStatus::APPROVED:
+            case ReplyStatus::APPROVED->value:
                 // Update Deposit
-                $depositUpdateAttributes = [
-                    'approved_by_account_id' => $account->_id,
-                    'reply_status' => ReplyStatus::APPROVED
-                ];
-                $deposit->update($depositUpdateAttributes);
+                $deposit->update([
+                    'approved_by_account_id' => $account->id,
+                    'reply_status' => ReplyStatus::APPROVED->value
+                ]);
                 $deposit->updateStatus('on-hold');
 
                 // Get and Update paddle_id
@@ -169,7 +92,7 @@ class DepositController extends Controller
                 $store = Store::find($storeID);
 
                 $newPaddleID = null;
-                if (!is_null($store)) {
+                if ($store instanceof Store) {
                     $auctionType = $store->auction_type;
 
                     if ($auctionType == 'ONLINE') {
@@ -192,35 +115,31 @@ class DepositController extends Controller
                         } else {
                             $newPaddleID = $auctionRegistrationRequest->paddle_id;
                         }
-                    } else if ($auctionType == 'LIVE') {
-                        $newPaddleID = $request->paddle_id ?? $auctionRegistrationRequest->paddle_id;
                     } else {
                         $newPaddleID = $request->paddle_id ?? $auctionRegistrationRequest->paddle_id;
                     }
                 }
 
-                $requestUpdateAttributes = [
+                $auctionRegistrationRequest->update([
                     'approved_by_account_id' => $account->_id,
                     'paddle_id' => $newPaddleID,
-                    'status' => Status::ACTIVE,
-                    'reply_status' => ReplyStatus::APPROVED
-                ];
-                $auctionRegistrationRequest->update($requestUpdateAttributes);
+                    'status' => Status::ACTIVE->value,
+                    'reply_status' => ReplyStatus::APPROVED->value
+                ]);
                 break;
-            case ReplyStatus::REJECTED:
+            case ReplyStatus::REJECTED->value:
                 // Update Deposit
-                $depositUpdateAttributes = [
+                $deposit->update([
                     'approved_by_account_id' => $account->_id,
-                    'reply_status' => ReplyStatus::REJECTED
-                ];
-                $deposit->update($depositUpdateAttributes);
+                    'reply_status' => ReplyStatus::REJECTED->value
+                ]);
                 $deposit->updateStatus('rejected');
 
                 // Update AuctionRegistrationRequest
                 $requestUpdateAttributes = [
                     'approved_by_account_id' => $account->_id,
-                    'status' => Status::ACTIVE,
-                    'reply_status' => ReplyStatus::REJECTED
+                    'status' => Status::ACTIVE->value,
+                    'reply_status' => ReplyStatus::REJECTED->value
                 ];
                 $auctionRegistrationRequest->update($requestUpdateAttributes);
                 break;
@@ -228,59 +147,34 @@ class DepositController extends Controller
                 break;
         }
 
-        return response()->json([
+        return [
             'message' => 'Deposit updated successfully'
-        ], 200);
+        ];
     }
 
-    public function cancelDeposit(Request $request)
+    public function cancelDeposit(Request $request): array
     {
-        // Extract attributes from $request
-        $depositID = $request->route('id');
-
-        // Get Deposit
-        $deposit = Deposit::objectID($depositID)->first();
-
-        if (is_null($deposit)) {
-            return response()->json([
-                'message' => 'Deposit not found'
-            ], 404);
-        }
-
-        if ($deposit->status != Status::ACTIVE) {
-            return response()->json([
-                'message' => 'Deposit not found'
-            ], 404);
-        }
-
-        if ($deposit->reply_status != ReplyStatus::PENDING) {
-            return response()->json([
-                'message' => 'This Deposit has already been APPROVED/REJECTED.'
-            ], 404);
-        }
+        /** @var ?Deposit $deposit */
+        $deposit = Deposit::find($request->route('id'));
+        if (is_null($deposit)) abort(404, 'Deposit not found');
+        if ($deposit->status != Status::ACTIVE->value) abort(404, 'Deposit not found');
+        if ($deposit->reply_status != ReplyStatus::PENDING->value) abort(404, 'This Deposit has already been ' . $deposit->reply_status);
 
         // Update Deposit
-        $depositAttributes = [
-            'status' => Status::ARCHIVED,
-            'reply_status' => ReplyStatus::REJECTED
-        ];
-        $deposit->update($depositAttributes);
+        $deposit->update([
+            'status' => Status::ARCHIVED->value,
+            'reply_status' => ReplyStatus::REJECTED->value
+        ]);
 
         // Return Deposit
-        if ($deposit->payment_method == OrderPaymentMethod::ONLINE) {
-
+        if ($deposit->payment_method == OrderPaymentMethod::ONLINE->value) {
             try {
                 $paymentIntentID = $deposit->online['payment_intent_id'];
-                $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.Starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
+                $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
 
-                $response = Http::post(
-                    $url
-                );
-
+                $response = Http::post($url);
                 if ($response->status() === 200) {
-                    $deposit->update([
-                        'refund_id' => $response['id']
-                    ]);
+                    $deposit->update(['refund_id' => $response['id']]);
                     $deposit->updateStatus('cancelled');
                 } else {
                     $deposit->updateStatus('return-failed');
@@ -290,8 +184,6 @@ class DepositController extends Controller
             }
         }
 
-        return response()->json([
-            'message' => 'Deposit cancelled successfully'
-        ], 200);
+        return ['message' => 'Deposit cancelled successfully'];
     }
 }

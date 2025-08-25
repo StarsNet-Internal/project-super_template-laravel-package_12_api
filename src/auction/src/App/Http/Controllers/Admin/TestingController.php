@@ -1,6 +1,6 @@
 <?php
 
-namespace StarsNet\Project\Auction\App\Http\Controllers\Admin;
+namespace Starsnet\Project\Auction\App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 

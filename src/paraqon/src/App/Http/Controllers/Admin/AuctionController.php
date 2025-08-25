@@ -2,332 +2,238 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Product;
-use App\Models\Store;
-use App\Models\Customer;
-use App\Models\Configuration;
-use App\Models\ProductVariant;
-use App\Models\Order;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use Carbon\Carbon;
 
-use App\Constants\Model\WarehouseInventoryHistoryType;
-use App\Constants\Model\CheckoutType;
-use App\Constants\Model\OrderDeliveryMethod;
-use App\Constants\Model\OrderPaymentMethod;
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\ShipmentDeliveryStatus;
-use App\Models\ProductCategory;
-use App\Traits\Utils\RoundingTrait;
-use Illuminate\Support\Str;
-use Starsnet\Project\Paraqon\App\Models\AuctionLot;
-use Starsnet\Project\Paraqon\App\Models\ProductStorageRecord;
+// Enums
+use App\Enums\Status;
+use App\Enums\CheckoutType;
+use App\Enums\OrderPaymentMethod;
+use App\Enums\ReplyStatus;
+use App\Enums\ShipmentDeliveryStatus;
 
-// Validator
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Validation\Rule;
+// Models
+use App\Models\Customer;
+use App\Models\Order;
+use App\Models\Product;
+use App\Models\ProductCategory;
+use App\Models\ShoppingCartItem;
+use App\Models\Store;
+use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
-use Starsnet\Project\Paraqon\App\Models\BidHistory;
 
 class AuctionController extends Controller
 {
-    use RoundingTrait;
-
-    public function syncCategoriesToProduct(Request $request)
+    public function syncCategoriesToProduct(Request $request): array
     {
-        // Extract attributes from $request
-        $productID = $request->route('product_id');
-        $categoryIDs = $request->input('ids', []);
+        /** @var ?Product $product */
+        $product = Product::find($request->route('product_id'));
+        if (is_null($product)) abort(404, 'Product not found');
 
-        // Get Product, then validate
-        /** @var Product $product */
-        $product = Product::find($productID);
-
-        if (is_null($product)) {
-            return response()->json([
-                'message' => 'Product not found'
-            ], 404);
-        }
-
-        $existingAssignedCategoryIDs = $product->category_ids;
-
-        // Find all Categories
-        $existingAssignedCategories = ProductCategory::objectIDs($existingAssignedCategoryIDs)
-            ->get();
-
-        // Detach relationships
+        // Detach existing relationships
+        /** @var Collection $existingAssignedCategories */
+        $existingAssignedCategories = ProductCategory::whereIn('_id', $product->category_ids)->get();
         foreach ($existingAssignedCategories as $category) {
-            $category->products()->detach([$product->_id]);
+            $category->products()->detach([$product->id]);
         }
 
-        $newCategories = ProductCategory::objectIDs($categoryIDs)
-            ->get();
-
-        // Attach relationships
+        // Attach new relationships
+        /** @var Collection $newCategories */
+        $newCategories = ProductCategory::whereIn('_id', (array) $request->ids)->get();
         foreach ($newCategories as $category) {
-            $category->products()->attach([$product->_id]);
+            $category->products()->attach([$product->id]);
         }
 
-        // Return success message
-        return response()->json([
-            'message' => 'Sync'
-        ], 200);
+        return ['message' => 'Sync'];
     }
 
-    public function getAllAuctionRegistrationRequests(Request $request)
+    public function getAllAuctionRegistrationRequests(Request $request): Collection
     {
-        $storeID = $request->route('store_id');
+        /** @var ?Store $store */
+        $store = Store::find($request->route('store_id'));
+        if (is_null($store)) abort(404, 'Store not found');
 
-        $store = Store::find($storeID);
-
-        if (is_null($store)) {
-            return response()->json([
-                'message' => 'Store not found'
-            ], 404);
-        }
-
-        $auctionRegistrationRequests = AuctionRegistrationRequest::where('store_id', $storeID)
-            ->where('status', '!=', Status::DELETED)
+        return AuctionRegistrationRequest::where('store_id', $store->id)
+            ->where('status', '!=', Status::DELETED->value)
             ->with([
                 'requestedCustomer',
                 'requestedCustomer.account',
                 'deposits' => function ($q) {
-                    $q->where('status', '!=', Status::DELETED);
+                    $q->where('status', '!=', Status::DELETED->value);
                 }
             ])
             ->latest()
             ->get();
-
-        return $auctionRegistrationRequests;
     }
 
-    public function getAllRegisteredUsers(Request $request)
+    public function getAllRegisteredUsers(Request $request): Collection
     {
-        $storeID = $request->route('store_id');
-        $replyStatus = $request->input('reply_status', ReplyStatus::APPROVED);
-
-        $registeredCustomers = AuctionRegistrationRequest::where('store_id', $storeID)
-            // ->where('status', Status::ACTIVE)
+        /** @var Collection $registeredCustomers */
+        $registeredCustomers = AuctionRegistrationRequest::where('store_id', $request->route('store_id'))
+            ->where('reply_status', $request->reply_status ?? ReplyStatus::APPROVED->value)
             ->whereNotNull('paddle_id')
-            ->where('reply_status', $replyStatus)
             ->latest()
-            ->get();
+            ->get()
+            ->keyBy('requested_by_customer_id');
 
-        $registeredCustomerIDs = $registeredCustomers
-            ->pluck('requested_by_customer_id')
-            ->all();
-
-        $customers = Customer::objectIDs($registeredCustomerIDs)
-            ->with(['account', 'account.user'])
-            ->get();
-
-        foreach ($customers as $customer) {
-            $customerID = $customer->_id;
-            $paddleId = optional($registeredCustomers->first(function ($item) use ($customerID) {
-                return $item->requested_by_customer_id == $customerID;
-            }))->paddle_id;
-            $customer->paddle_id = $paddleId ?? '';
-        }
-
-        return $customers;
+        return Customer::whereIn('_id', $registeredCustomers->keys())
+            ->with(['account.user'])
+            ->get()
+            ->each(function ($customer) use ($registeredCustomers) {
+                $customer->paddle_id = $registeredCustomers[$customer->id]->paddle_id ?? '';
+            });
     }
 
-    public function removeRegisteredUser(Request $request)
+    public function removeRegisteredUser(Request $request): array
     {
-        $storeID = $request->route('store_id');
-        $customerID = $request->route('customer_id');
-
-        $registeredCustomerRequest = AuctionRegistrationRequest::where('store_id', $storeID)
-            ->where('requested_by_customer_id', $customerID)
-            // ->where('status', Status::ACTIVE)
+        /** @var AuctionRegistrationRequest $registeredCustomerRequest*/
+        $registeredCustomerRequest = AuctionRegistrationRequest::where('store_id', $request->route('store_id'))
+            ->where('requested_by_customer_id', $request->route('customer_id'))
             ->latest()
             ->first();
+        if (is_null($registeredCustomerRequest)) abort(404, 'Customer is not registered to this Auction');
 
-        if (is_null($registeredCustomerRequest)) {
-            return response()->json([
-                'message' => 'Customer is not successfully registered to this Auction'
-            ], 404);
-        }
+        $registeredCustomerRequest->update(['reply_status' => ReplyStatus::REJECTED->value]);
 
-        $updateAttributes = [
-            'reply_status' => ReplyStatus::REJECTED
-        ];
-        $registeredCustomerRequest->update($updateAttributes);
-
-        return response()->json([
-            'message' => 'AuctionRegistrationRequest is now updated as REJECTED'
-        ], 200);
+        return ['message' => 'AuctionRegistrationRequest is now updated as REJECTED'];
     }
 
-    public function addRegisteredUser(Request $request)
+    public function addRegisteredUser(Request $request): array
     {
-        // Extract attributes from $request
-        $storeID = $request->route('store_id');
-        $customerID = $request->route('customer_id');
+        /** @var ?Store $store */
+        $store = Store::find($request->route('store_id'));
+        if (is_null($store)) abort(404, 'Auction not found');
 
-        // Check if there's existing AuctionRegistrationRequest
-        $oldForm =
-            AuctionRegistrationRequest::where('requested_by_customer_id', $customerID)
-            ->where('store_id', $storeID)
+        /** @var ?AuctionRegistrationRequest $oldForm */
+        $oldForm = AuctionRegistrationRequest::where('requested_by_customer_id', $request->route('customer_id'))
+            ->where('store_id', $request->route('store_id'))
             ->first();
-
-        // Check if store exists
-        $store = Store::find($storeID);
-        if (is_null($store)) {
-            return response()->json([
-                'message' => 'Auction not found',
-            ], 404);
-        }
-
-        // Auth
-        $account = $this->account();
         if (!is_null($oldForm)) {
-            $oldFormAttributes = [
-                'approved_by_account_id' => $account->_id,
-                'status' => Status::ACTIVE,
+            $oldForm->update([
+                'approved_by_account_id' => $this->account()->id,
+                'status' => Status::ACTIVE->value,
                 'paddle_id' => $request->paddle_id ?? $oldForm->paddle_id,
-                'reply_status' => ReplyStatus::APPROVED,
-            ];
-            $oldForm->update($oldFormAttributes);
+                'reply_status' => ReplyStatus::APPROVED->value,
+            ]);
 
-            return response()->json([
+            return [
                 'message' => 'Re-activated previously created AuctionRegistrationRequest successfully',
-                'id' => $oldForm->_id,
-            ], 200);
-        }
-
-        // Auto-assign paddle_id
-        $auctionType = $store->auction_type;
-
-        if ($auctionType == 'ONLINE') {
-            $paddleId = null;
-
-            $allPaddles = AuctionRegistrationRequest::where('store_id', $storeID)
-                ->pluck('paddle_id')
-                ->filter(fn($id) => is_numeric($id))
-                ->map(fn($id) => (int) $id)
-                ->sort()
-                ->values();
-            $latestPaddleId = $allPaddles->last();
-
-            if (is_null($latestPaddleId)) {
-                $paddleId = $store->paddle_number_start_from ?? 1;
-            } else {
-                $paddleId = $latestPaddleId + 1;
-            }
-
-            $createAttributes = [
-                'requested_by_customer_id' => $customerID,
-                'store_id' => $storeID,
-                'paddle_id' => $paddleId,
-                'status' => Status::ACTIVE,
-                'reply_status' => ReplyStatus::APPROVED
+                'id' => $oldForm->id
             ];
-            $newForm = AuctionRegistrationRequest::create($createAttributes);
-
-            // Return Auction Store
-            return response()->json([
-                'message' => 'Created New AuctionRegistrationRequest successfully',
-                'id' => $newForm->_id,
-            ], 200);
         }
 
-        if ($auctionType == 'LIVE') {
-            $createAttributes = [
-                'requested_by_customer_id' => $customerID,
-                'store_id' => $storeID,
+        if ($store->auction_type == 'ONLINE') {
+            /** @var ?int $latestPaddleId */
+            $latestPaddleId = AuctionRegistrationRequest::where('store_id', $request->route('store_id'))
+                ->whereNotNull('paddle_id')
+                ->orderByDesc('paddle_id')
+                ->value('paddle_id');
+
+            /** @var int $newPaddleId */
+            $newPaddleId = is_int($latestPaddleId)
+                ? $latestPaddleId + 1
+                : ($store->paddle_number_start_from ?? 1);
+
+            /** @var AuctionRegistrationRequest $newForm */
+            $newForm = AuctionRegistrationRequest::create([
+                'requested_by_customer_id' => $request->route('customer_id'),
+                'store_id' => $request->route('store_id'),
+                'paddle_id' => $newPaddleId,
+                'status' => Status::ACTIVE->value,
+                'reply_status' => ReplyStatus::APPROVED->value
+            ]);
+
+            return [
+                'message' => 'Created New AuctionRegistrationRequest successfully',
+                'id' => $newForm->id
+            ];
+        } else if ($store->auction_type == 'LIVE') {
+            /** @var AuctionRegistrationRequest $newForm */
+            $newForm = AuctionRegistrationRequest::create([
+                'requested_by_customer_id' => $request->route('customer_id'),
+                'store_id' => $request->route('store_id'),
                 'paddle_id' => $request->paddle_id,
-                'status' => Status::ACTIVE,
-                'reply_status' => ReplyStatus::APPROVED
-            ];
-            $newForm = AuctionRegistrationRequest::create($createAttributes);
+                'status' => Status::ACTIVE->value,
+                'reply_status' => ReplyStatus::APPROVED->value
+            ]);
 
-            // Return Auction Store
-            return response()->json([
+            return [
                 'message' => 'Created New AuctionRegistrationRequest successfully',
-                'id' => $newForm->_id,
-            ], 200);
+                'id' => $newForm->id
+            ];
         }
+
+        return [
+            'message' => 'Created New AuctionRegistrationRequest successfully',
+            'id' => null
+        ];
     }
 
-    public function getAllAuctionRegistrationRecords(Request $request)
+    public function getAllAuctionRegistrationRecords(Request $request): Collection
     {
-        $storeID = $request->route('store_id');
-
-        $forms = AuctionRegistrationRequest::where('store_id', $storeID)
+        return AuctionRegistrationRequest::where('store_id', $request->route('store_id'))
             ->with(['deposits'])
             ->get();
-
-        return $forms;
     }
 
-    public function getAllCategories(Request $request)
+    public function getAllCategories(Request $request): Collection
     {
-        // Extract attributes from $request
-        $storeID = $request->route('store_id');
-        $statuses = (array) $request->input('status', Status::$typesForAdmin);
+        /** @var ?Store $store */
+        $store = Store::find($request->route('store_id'));
+        if (is_null($store)) abort(404, 'Auction not found');
 
-        // Store
-        $store = Store::find($storeID);
-
-        // Get all active ProductCategory(s)
-        $categories = $store
-            ->productCategories()
-            ->statusesAllowed(
-                Status::$typesForAdmin,
-                $statuses
-            )
+        $statuses = (array) $request->input('status', Status::defaultStatuses());
+        /** @var Collection $categories */
+        $categories = $store->productCategories()
+            ->statusesAllowed(Status::defaultStatuses(), $statuses)
             ->get();
 
-        // Get all product ids
-        $productIDs = AuctionLot::where('store_id', $storeID)
-            ->get()
+        /** @var array $productIDs */
+        $productIDs = AuctionLot::where('store_id', $request->route('store_id'))
             ->pluck('product_id')
             ->all();
 
         foreach ($categories as $category) {
-            $category->lot_count = count(array_intersect(
-                $category->item_ids,
-                $productIDs
-            ));
-            // $category->product_count = count($productIDs);
-            // $category->item_count = count($category->item_ids);
+            $category->lot_count = count(array_intersect($category->item_ids, $productIDs));
         }
 
         return $categories;
     }
 
-    public function getAllAuctions(Request $request)
+    public function getAllAuctions(Request $request): Collection
     {
-        $auctionType = $request->input('auction_type');
-        $statuses = (array) $request->input('status', Status::$typesForAdmin);
-
-        $stores = Store::where('auction_type', $auctionType)
-            ->statusesAllowed(Status::$typesForAdmin, $statuses)
+        $statuses = (array) $request->input('status', Status::values());
+        /** @var Collection $stores */
+        $stores = Store::where('auction_type', $request->input('auction_type'))
+            ->statusesAllowed(Status::values(), $statuses)
             ->latest()
             ->get();
 
         foreach ($stores as $store) {
-            $store->auction_lot_count = AuctionLot::where('store_id', $store->_id)->count();
+            $store->auction_lot_count = AuctionLot::where('store_id', $store->_id)
+                ->statusesAllowed([Status::ACTIVE->value, Status::ARCHIVED->value])
+                ->count();
 
             $store->registered_user_count = AuctionRegistrationRequest::where('store_id', $store->_id)
-                ->where('reply_status', ReplyStatus::APPROVED)
+                ->where('reply_status', ReplyStatus::APPROVED->value)
                 ->count();
         }
 
         return $stores;
     }
 
-    public function updateAuctionStatuses(Request $request)
+    public function updateAuctionStatuses(): array
     {
         $now = now();
 
-        // Make stores ACTIVE
+        // Update Stores from ARCHIVED to ACTIVE when store's time is between start and end
+        /** @var Collection $archivedStores */
         $archivedStores = Store::where('type', 'OFFLINE')
-            ->where('status', Status::ARCHIVED)
+            ->where('status', Status::ARCHIVED->value)
             ->get();
 
         $archivedStoresUpdateCount = 0;
@@ -336,21 +242,21 @@ class AuctionController extends Controller
             $endTime = Carbon::parse($store->end_datetime);
 
             if ($now >= $startTime && $now < $endTime) {
-                $store->update(['status' => Status::ACTIVE]);
+                $store->update(['status' => Status::ACTIVE->value]);
 
                 // Update all AuctionLots as ACTIVE status
-                $storeID = $store->_id;
-                AuctionLot::where('store_id', $storeID)
-                    ->where('status', Status::ARCHIVED)
-                    ->update(['status' => Status::ACTIVE]);
+                AuctionLot::where('store_id', $store->id)
+                    ->where('status', Status::ARCHIVED->value)
+                    ->update(['status' => Status::ACTIVE->value]);
 
                 $archivedStoresUpdateCount++;
             }
         }
 
-        // Make stores ARCHIVED
+        // Update Stores from ACTIVE to ARCHIVED when store's time should be ended
+        /** @var Collection $activeStores */
         $activeStores = Store::where('type', 'OFFLINE')
-            ->where('status', Status::ACTIVE)
+            ->where('status', Status::ACTIVE->value)
             ->get();
 
         $activeStoresUpdateCount = 0;
@@ -358,49 +264,43 @@ class AuctionController extends Controller
             $endTime = Carbon::parse($store->end_datetime);
 
             if ($now >= $endTime) {
-                $store->update(['status' => Status::ARCHIVED]);
-
-                // Update all AuctionLots as ARCHIVED status
-                // $storeID = $store->_id;
-                // AuctionLot::where('store_id', $storeID)
-                //     ->update(['status' => Status::ARCHIVED]);
-
+                $store->update(['status' => Status::ARCHIVED->value]);
                 $activeStoresUpdateCount++;
             }
         }
 
-        return response()->json([
+        return [
             'now_time' => $now,
             'message' => "Updated {$archivedStoresUpdateCount} Auction(s) as ACTIVE, and {$activeStoresUpdateCount} Auction(s) as ARCHIVED"
-        ], 200);
+        ];
     }
 
-    public function archiveAllAuctionLots(Request $request)
+    public function archiveAllAuctionLots(Request $request): array
     {
-        $storeID = $request->route('store_id');
-        $store = Store::find($storeID);
+        /** @var ?Store $store */
+        $store = Store::find($request->route('store_id'));
+        if (is_null($store)) abort(404, 'Store not found');
 
-        $allAuctionLots = AuctionLot::where('store_id', $storeID)
-            ->where('status', Status::ACTIVE)
+        /** @var Collection $allAuctionLots */
+        $allAuctionLots = AuctionLot::where('store_id', $request->route('store_id'))
+            ->where('status', Status::ACTIVE->value)
             ->get();
 
-        $incrementRulesDocument = Configuration::where('slug', 'bidding-increments')->latest()->first();
+        /** @var AuctionLot $lot */
         foreach ($allAuctionLots as $lot) {
             try {
-                $isBidPlaced = $lot->is_bid_placed;
                 $currentBid = $lot->getCurrentBidPrice();
 
-                $product = Product::find($lot->product_id);
                 // Reject auction lot
-                if ($isBidPlaced == false || $lot->reserve_price > $currentBid) {
+                if ($lot->is_bid_placed == false || $lot->reserve_price > $currentBid) {
                     // Update Product
-                    $product->update(['listing_status' => 'AVAILABLE']);
+                    Product::where('id', $lot->product_id)->update(['listing_status' => 'AVAILABLE']);
 
                     // Update Auction Lot
                     $lot->update([
                         'winning_bid_customer_id' => null,
                         'current_bid' => $currentBid,
-                        'status' => Status::ARCHIVED,
+                        'status' => Status::ARCHIVED->value,
                         'is_paid' => false
                     ]);
 
@@ -409,14 +309,13 @@ class AuctionController extends Controller
                         'customer_id' => $lot->owned_by_customer_id,
                         'product_id' => $lot->product_id,
                         'product_variant_id' => $lot->product_variant_id,
-                        'auction_lot_id' => $lot->_id,
+                        'auction_lot_id' => $lot->id,
                         'remarks' => 'Not met reserved price'
                     ]);
                 } else {
                     // Get final highest bidder info
-                    $allBids = $lot->bids()
-                        ->where('is_hidden', false)
-                        ->get();
+                    /** @var Collection $allBids */
+                    $allBids = $lot->bids()->where('is_hidden', false)->get();
                     $highestBidValue = $allBids->pluck('bid')->max();
                     $higestBidderCustomerID = $lot->bids()
                         ->where('bid', $highestBidValue)
@@ -428,7 +327,7 @@ class AuctionController extends Controller
                     $lot->update([
                         'winning_bid_customer_id' => $higestBidderCustomerID,
                         'current_bid' => $currentBid,
-                        'status' => Status::ARCHIVED,
+                        'status' => Status::ARCHIVED->value,
                     ]);
                 }
             } catch (\Throwable $th) {
@@ -438,20 +337,18 @@ class AuctionController extends Controller
 
         $store->update(["remarks" => "SUCCESS"]);
 
-        return response()->json([
-            'message' => 'Archived Store Successfully, updated ' . $allAuctionLots->count() . ' Auction Lots.'
-        ], 200);
+        return ['message' => 'Archived Store Successfully, updated ' . $allAuctionLots->count() . ' Auction Lots.'];
     }
 
     public function generateAuctionOrders(Request $request)
     {
-        // Get Store
-        $storeID = $request->route('store_id');
-        $store = Store::find($storeID);
+        /** @var ?Store $store */
+        $store = Store::find($request->route('store_id'));
+        if (is_null($store)) abort(404, 'Store not found');
 
         // Get Auction Lots
-        $unpaidAuctionLots = AuctionLot::where('store_id', $storeID)
-            ->where('status', Status::ARCHIVED)
+        $unpaidAuctionLots = AuctionLot::where('store_id', $request->route('store_id'))
+            ->where('status', Status::ARCHIVED->value)
             ->whereNotNull('winning_bid_customer_id')
             ->get();
 
@@ -472,7 +369,7 @@ class AuctionController extends Controller
                 $customer = Customer::find($customerID);
                 foreach ($winningLots as $lot) {
                     $attributes = [
-                        'store_id' => $storeID,
+                        'store_id' => $request->route('store_id'),
                         'product_id' => $lot->product_id,
                         'product_variant_id' => $lot->product_variant_id,
                         'qty' => 1,
@@ -483,7 +380,30 @@ class AuctionController extends Controller
                 }
 
                 // Get ShoppingCartItem(s)
-                $cartItems = $customer->getAllCartItemsByStore($store);
+                $cartItems = ShoppingCartItem::where('customer_id', $customer->id)
+                    ->where('store_id', $store->id)
+                    ->get()
+                    ->append([
+                        // Product information related
+                        'product_title',
+                        'product_variant_title',
+                        'image',
+                        // Calculation-related
+                        'local_discount_type',
+                        'original_price_per_unit',
+                        'discounted_price_per_unit',
+                        'original_subtotal_price',
+                        'subtotal_price',
+                        'original_point_per_unit',
+                        'discounted_point_per_unit',
+                        'original_subtotal_point',
+                        'subtotal_point',
+                    ])
+                    ->each(function ($item) {
+                        $item->is_checkout = true;
+                        $item->is_refundable = false;
+                        $item->global_discount = null;
+                    });
 
                 // Start Shopping Cart calculations
                 // Get subtotal Price
@@ -518,46 +438,39 @@ class AuctionController extends Controller
                 $rawCalculation = [
                     'currency' => 'HKD',
                     'price' => [
-                        'subtotal' => $subtotalPrice,
-                        'total' => $totalPrice, // Deduct price_discount.local and .global
+                        'subtotal' => number_format($subtotalPrice, 2, '.', ''),
+                        'total' => number_format(ceil($totalPrice), 2, '.', ''),
                     ],
                     'price_discount' => [
-                        'local' => 0,
-                        'global' => 0,
+                        'local' => '0.00',
+                        'global' => '0.00',
                     ],
                     'point' => [
-                        'subtotal' => 0,
-                        'total' => 0,
+                        'subtotal' => '0.00',
+                        'total' => '0.00',
                     ],
-                    'service_charge' => $totalServiceCharge,
-                    'storage_fee' => $storageFee,
-                    'shipping_fee' => $shippingFee
+                    'service_charge' => number_format($totalServiceCharge, 2, '.', ''),
+                    'storage_fee' => number_format($storageFee, 2, '.', ''),
+                    'shipping_fee' => number_format($shippingFee, 2, '.', '')
                 ];
-
-                $rationalizedCalculation = $this->rationalizeRawCalculation($rawCalculation);
-                $roundedCalculation = $this->roundingNestedArray($rationalizedCalculation); // Round off values
-
-                // Round up calculations.price.total only
-                $roundedCalculation['price']['total'] = ceil($roundedCalculation['price']['total']);
-                $roundedCalculation['price']['total'] .= '.00';
 
                 // Return data
                 $checkoutDetails = [
                     'cart_items' => $cartItems,
                     'gift_items' => [],
                     'discounts' => [],
-                    'calculations' => $roundedCalculation,
+                    'calculations' => $rawCalculation,
                     'is_voucher_applied' => false,
                     'is_enough_membership_points' => true
                 ];
 
                 // Validate, and update attributes
                 $totalPrice = $checkoutDetails['calculations']['price']['total'];
-                $paymentMethod = CheckoutType::OFFLINE;
+                $paymentMethod = CheckoutType::OFFLINE->value;
 
                 // Create Order
                 $orderAttributes = [
-                    'is_paid' => $request->input('is_paid', false),
+                    'is_paid' => $request->boolean('is_paid', false),
                     'payment_method' => $paymentMethod,
                     'discounts' => $checkoutDetails['discounts'],
                     'calculations' => $checkoutDetails['calculations'],
@@ -592,25 +505,22 @@ class AuctionController extends Controller
                     $attributes = $item->toArray();
                     unset($attributes['_id'], $attributes['is_checkout']);
 
-                    // Update WarehouseInventory(s)
-                    $variantID = $attributes['product_variant_id'];
-                    $variantIDs[] = $variantID;
-                    $qty = $attributes['qty'];
-                    /** @var ProductVariant $variant */
-                    $variant = ProductVariant::find($variantID);
+                    $variantIDs[] = $attributes['product_variant_id'];
                     $order->createCartItem($attributes);
                 }
 
                 // Update Order
-                $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED);
+                $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED->value);
                 $order->updateStatus($status);
 
                 // Create Checkout
-                $checkout = $this->createBasicCheckout($order, $paymentMethod);
+                $this->createBasicCheckout($order, $paymentMethod);
 
                 // Delete ShoppingCartItem(s)
-                $variants = ProductVariant::objectIDs($variantIDs)->get();
-                $customer->clearCartByStore($store, $variants);
+                ShoppingCartItem::where('customer_id', $customer->id)
+                    ->where('store_id', $store->id)
+                    ->whereIn('product_variant_id', $variantIDs)
+                    ->delete();
 
                 $generatedOrderCount++;
             } catch (\Throwable $th) {
@@ -618,34 +528,10 @@ class AuctionController extends Controller
             }
         }
 
-        return response()->json([
-            'message' => "Generated All {$generatedOrderCount} Auction Store Orders Successfully"
-        ], 200);
+        return ['message' => "Generated All {$generatedOrderCount} Auction Store Orders Successfully"];
     }
 
-    private function rationalizeRawCalculation(array $rawCalculation)
-    {
-        return [
-            'currency' => $rawCalculation['currency'],
-            'price' => [
-                'subtotal' => max(0, $rawCalculation['price']['subtotal']),
-                'total' => max(0, $rawCalculation['price']['total']),
-            ],
-            'price_discount' => [
-                'local' => $rawCalculation['price_discount']['local'],
-                'global' => $rawCalculation['price_discount']['global'],
-            ],
-            'point' => [
-                'subtotal' => max(0, $rawCalculation['point']['subtotal']),
-                'total' => max(0, $rawCalculation['point']['total']),
-            ],
-            'service_charge' => max(0, $rawCalculation['service_charge']),
-            'shipping_fee' => max(0, $rawCalculation['shipping_fee']),
-            'storage_fee' => max(0, $rawCalculation['storage_fee'])
-        ];
-    }
-
-    private function createBasicCheckout(Order $order, string $paymentMethod = CheckoutType::ONLINE)
+    private function createBasicCheckout(Order $order, string $paymentMethod = CheckoutType::ONLINE->value)
     {
         $attributes = [
             'payment_method' => $paymentMethod
@@ -655,100 +541,21 @@ class AuctionController extends Controller
         return $checkout;
     }
 
-    // public function createAuctionStore(Request $request)
-    // {
-    //     // Extract attributes from $request
-    //     $attributes = $request->all();
-
-    //     // Create Store
-    //     /** @var Store $store */
-    //     $store = Store::createOfflineStore($attributes);
-
-    //     // Create Warehouse
-    //     $warehouseTitle = 'auction_warehouse_' . $store->_id;
-    //     $warehouse = $store->warehouses()->create([
-    //         'type' => 'AUCTION',
-    //         'slug' => Str::slug($warehouseTitle),
-    //         'title' => [
-    //             'en' => $warehouseTitle,
-    //             'zh' => $warehouseTitle,
-    //             'cn' => $warehouseTitle
-    //         ],
-    //         'is_system' => true,
-    //     ]);
-
-    //     // Create one default Category
-    //     $categoryTitle = 'all_products' . $store->_id;;
-    //     $category = $store->productCategories()->create([
-    //         'slug' => Str::slug($categoryTitle),
-    //         'title' => [
-    //             'en' => $categoryTitle,
-    //             'zh' => $categoryTitle,
-    //             'cn' => $categoryTitle
-    //         ],
-    //         'is_system' => true,
-    //     ]);
-
-    //     // Return success message
-    //     return response()->json([
-    //         'message' => 'Created new Auction successfully',
-    //         '_id' => $store->_id,
-    //         'warehouse_id' => $warehouse->_id,
-    //         'category_id' => $category->_id,
-    //     ], 200);
-    // }
-
-    public function getAllUnpaidAuctionLots(Request $request)
+    public function getAllUnpaidAuctionLots(Request $request): Collection
     {
-        $storeID = $request->route('store_id');
-
-        // Query
-        $unpaidAuctionLots = AuctionLot::where('store_id', $storeID)
+        return AuctionLot::where('store_id', $request->route('store_id'))
             ->whereNotNull('winning_bid_customer_id')
             ->where('is_paid', false)
-            ->with([
-                'product',
-                'store',
-                // 'winningBidCustomer',
-                // 'winningBidCustomer.account'
-            ])
+            ->with(['product', 'store'])
             ->get();
-
-        // Return success message
-        return $unpaidAuctionLots;
     }
 
-    public function returnAuctionLotToOriginalCustomer(Request $request)
+    public function returnAuctionLotToOriginalCustomer(Request $request): array
     {
-        // Validate Request
-        $validator = Validator::make($request->all(), [
-            'id' => [
-                'required',
-                'exists:App\Models\Order,_id'
-            ],
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json($validator->errors(), 400);
-        }
-
-        // Extract attributes from $request
-        $orderID = $request->input('id');
-
         // Get Order
-        $order = Order::find($orderID);
-
-        if (is_null($order)) {
-            return response()->json([
-                'message' => 'Order ID ' . $orderID . ' not found.'
-            ], 404);
-        }
-
-        if ($order->payment_method != OrderPaymentMethod::OFFLINE) {
-            return response()->json([
-                'message' => 'This order ID ' . $orderID . ' is an Online Payment Order, items cannot be returned.'
-            ], 404);
-        }
+        $order = Order::find($request->input('id'));
+        if (!$order) abort(404, 'Order not found');
+        if ($order->payment_method != OrderPaymentMethod::OFFLINE->value) abort(404, 'This order ID ' . $order->id . ' is an Online Payment Order, items cannot be returned.');
 
         // Get variant IDs
         $storeID = $order->store_id;
@@ -763,50 +570,29 @@ class AuctionController extends Controller
             $lot->update(["winning_bid_customer_id" => null]);
         }
 
-
-        // Validate AuctionLot(s)
-        // foreach ($unpaidAuctionLots as $key => $lot) {
-        //     $lotID = $lot->_id;
-
-        //     if (!is_null($lot->winning_bid_customer_id)) {
-        //         return response()->json([
-        //             'message' => 'Auction lot ' . $lotID . ' does not have a winning customer.'
-        //         ]);
-        //     }
-
-        //     if ($lot->is_paid === true) {
-        //         return response()->json([
-        //             'message' => 'Auction lot ' . $lotID . ' has already been paid.'
-        //         ]);
-        //     }
-        // }
-
         // Update Product status, and reset AuctionLot WinningCustomer
         $productIDs = $unpaidAuctionLots->pluck('product_id');
-        Product::objectIDs($productIDs)->update(['listing_status' => 'AVAILABLE']);
+        Product::whereIn('_id', $productIDs)->update(['listing_status' => 'AVAILABLE']);
 
-        // Return success message
-        return response()->json([
+        return [
             'message' => 'Updated listing_status for ' . count($productIDs) . ' Product(s).'
-        ], 200);
+        ];
     }
 
-    public function closeAllNonDisabledLots(Request $request)
+    public function closeAllNonDisabledLots(Request $request): array
     {
-        $storeId = $request->route('store_id');
-
-        AuctionLot::where('store_id', $storeId)
-            ->where('status', '!=', Status::DELETED)
+        AuctionLot::where('store_id', $request->route('store_id'))
+            ->where('status', '!=', Status::DELETED->value)
             ->whereNotNull('lot_number')
             ->where('is_disabled', false)
             ->update([
-                'status' => 'ACTIVE',
+                'status' => Status::ACTIVE->value,
                 'is_disabled' => true,
                 'is_closed' => true
             ]);
 
-        return response()->json([
+        return [
             'message' => 'Close all Lots successfully'
-        ], 200);
+        ];
     }
 }

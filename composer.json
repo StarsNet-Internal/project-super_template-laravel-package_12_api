@@ -1,22 +1,22 @@
 {
-  "name": "starsnet/project",
-  "minimum-stability": "stable",
-  "description": "External APIs and functionalities for Laravel-based (Laravel 12) Super E-commerce Project Template",
-  "type": "project",
-  "version": "1.0.0",
-  "require": {},
-  "autoload": {
-    "psr-4": {
-      "StarsNet\\Project\\Auction\\": "src/auction/src/",
-      "StarsNet\\Project\\Paraqon\\": "src/paraqon/src/"
+    "name": "starsnet/project",
+    "minimum-stability": "stable",
+    "description": "External APIs and functionalities for Laravel-based (Laravel 12) Super E-commerce Project Template",
+    "type": "project",
+    "version": "1.0.0",
+    "require": {},
+    "autoload": {
+        "psr-4": {
+            "StarsNet\\Project\\Auction\\": "src/auction/src/",
+            "StarsNet\\Project\\Paraqon\\": "src/paraqon/src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "StarsNet\\Project\\Auction\\ProjectServiceProvider",
+                "StarsNet\\Project\\Paraqon\\ProjectServiceProvider"
+            ]
+        }
     }
-  },
-  "extra": {
-    "laravel": {
-      "providers": [
-        "StarsNet\\Project\\Auction\\ProjectServiceProvider",
-        "StarsNet\\Project\\Paraqon\\ProjectServiceProvider"
-      ]
-    }
-  }
 }

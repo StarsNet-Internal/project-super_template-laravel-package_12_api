@@ -2,54 +2,44 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Constants\Model\ProductVariantDiscountType;
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\Status;
-
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+
+// Enums
+use App\Enums\Status;
+use App\Enums\ProductVariantDiscountType;
+
+// Models
 use App\Models\Product;
 
 class ProductController extends Controller
 {
-    public function getAllProducts(Request $request)
+    public function getAllProducts(Request $request): Collection
     {
         // Extract attributes from $request
-        $statuses = (array) $request->input('status', Status::$typesForAdmin);
+        $statuses = (array) $request->input('status', Status::values());
 
-        // Retrieve required models
-        $products = Product::statusesAllowed(Status::$typesForAdmin, $statuses)->with([
-            'variants' => function ($productVariant) {
-                $productVariant->with([
-                    'discounts' => function ($discount) {
-                        $discount->applicableForCustomer()->select('product_variant_id', 'type', 'value', 'start_datetime', 'end_datetime');
-                    },
-                ])
-                    ->statuses([
-                        Status::DRAFT,
-                        Status::ACTIVE,
-                        Status::ARCHIVED
+        $getKeys = ['_id', 'title', 'images', 'status', 'updated_at', 'created_at', 'product_interface', 'prefix', 'stock_no', 'owned_by_customer_id', 'reserve_price', 'bid_incremental_settings'];
+        /** @var Collection $products */
+        $products = Product::statusesAllowed(Status::values(), $statuses)
+            ->with([
+                'variants' => function ($productVariant) {
+                    $productVariant->with([
+                        'discounts' => function ($discount) {
+                            $discount->applicableForCustomer()->select('product_variant_id', 'type', 'value', 'start_datetime', 'end_datetime');
+                        },
                     ])
-                    ->select(
-                        'product_id',
-                        'price',
-                        'point'
-                    );
-            },
-            'reviews',
-            'wishlistItems',
-            'warehouseInventories'
-        ])->get([
-            '_id',
-            'title',
-            'images',
-            'status',
-            'updated_at',
-            'created_at',
-            'product_interface'
-        ]);
+                        ->statuses([Status::DRAFT->value, Status::ACTIVE->value, Status::ARCHIVED->value])
+                        ->select('product_id', 'price', 'point');
+                },
+                'reviews',
+                'wishlistItems',
+                'warehouseInventories'
+            ])->get($getKeys);
 
-        foreach ($products as $key => $product) {
+        foreach ($products as $product) {
             // Collect ProductVariants, and calculate the discountedPrice
             $collectedVariants = collect($product->variants->map(
                 function ($variant) {
@@ -59,10 +49,10 @@ class ProductController extends Controller
                         $selectedDiscount = $variant->discounts[0];
 
                         switch ($selectedDiscount['type']) {
-                            case ProductVariantDiscountType::PRICE:
+                            case ProductVariantDiscountType::PRICE->value:
                                 $discountedPrice -= $selectedDiscount['value'];
                                 break;
-                            case ProductVariantDiscountType::PERCENTAGE:
+                            case ProductVariantDiscountType::PERCENTAGE->value:
                                 $discountedPrice *= (1 - $selectedDiscount['value'] / 100);
                                 break;
                             default:
@@ -89,10 +79,47 @@ class ProductController extends Controller
             $product['wishlist_item_count'] = collect($product->wishlistItems)->count() ?? 0;
             $product['first_variant_id'] = optional($collectedVariants->first())->_id;
             $product['product_interface'] = $product->product_interface;
+            $product['prefix'] = $product->prefix;
+            $product['stock_no'] = $product->stock_no;
+            $product['owned_by_customer_id'] = $product->owned_by_customer_id;
+
+            $product['reserve_price'] = $product->reserve_price;
+            $product['bid_incremental_settings'] = $product->bid_incremental_settings;
 
             unset($product['variants'], $product['reviews'], $product['warehouseInventories'], $product['wishlistItems']);
         }
 
         return $products;
+    }
+
+    public function createProduct(Request $request)
+    {
+        // Create Product
+        /** @var Product $product */
+        $product = Product::create($request->except(['stock_no']));
+
+        $yearPrefix = date('y'); // e.g. "25"
+        $pattern = '/^' . $yearPrefix . '\d{6}$/';
+
+        // Get the largest stock_no matching {yy}{6 digits}
+        $maxStockNo = Product::where('stock_no', 'regexp', $pattern)
+            ->max('stock_no');
+
+        if ($maxStockNo) {
+            $increment = (int) substr($maxStockNo, 2);
+            $nextIncrement = $increment + 1;
+        } else {
+            $nextIncrement = 1;
+        }
+
+        $stockNo = $yearPrefix . str_pad($nextIncrement, 6, '0', STR_PAD_LEFT);
+
+        $product->update(['stock_no' => $stockNo]);
+
+        // Return success message
+        return response()->json([
+            'message' => 'Created New Product successfully',
+            '_id' => $product->_id
+        ], 200);
     }
 }

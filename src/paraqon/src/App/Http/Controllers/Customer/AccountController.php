@@ -2,45 +2,22 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
-
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
-
-use App\Models\ProductVariant;
-use App\Models\Store;
-use Carbon\Carbon;
-
-use Starsnet\Project\Paraqon\App\Models\AuctionLot;
-use Starsnet\Project\Paraqon\App\Models\AuctionRequest;
-use Starsnet\Project\Paraqon\App\Models\BidHistory;
-
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 
 class AccountController extends Controller
 {
-    public function updateAccountVerification(Request $request)
+    public function updateAccountVerification(Request $request): array
     {
         $account = $this->account();
-
-        $updateFields = $request->all();
-        $account->update($updateFields);
-
-        return response()->json([
-            'message' => 'Updated Verification document successfully'
-        ], 200);
+        $account->update($request->all());
+        return ['message' => 'Updated Verification document successfully'];
     }
 
-    public function getAllCustomerGroups(Request $request)
+    public function getAllCustomerGroups(): Collection
     {
-        $customer = $this->customer();
-
-        $groups = $customer->groups()
-            ->statusActive()
-            ->latest()
-            ->get();
-
-        return $groups;
+        return $this->customer()->groups()->statusActive()->get();
     }
 }

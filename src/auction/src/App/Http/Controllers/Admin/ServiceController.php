@@ -1,60 +1,49 @@
 <?php
 
-namespace StarsNet\Project\Auction\App\Http\Controllers\Admin;
+namespace Starsnet\Project\Auction\App\Http\Controllers\Admin;
 
-use App\Constants\Model\CheckoutApprovalStatus;
-use App\Constants\Model\CheckoutType;
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\ShipmentDeliveryStatus;
-use App\Constants\Model\Status;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Checkout;
-use App\Models\Customer;
-use App\Models\Account;
-use App\Models\Order;
-
-use App\Models\Product;
-use App\Models\ProductVariant;
-use App\Models\Store;
-use App\Traits\Utils\RoundingTrait;
-use Carbon\Carbon;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
-use StarsNet\Project\Paraqon\App\Models\AuctionLot;
-use StarsNet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
-use StarsNet\Project\Paraqon\App\Models\Deposit;
+// Enums
+use App\Enums\CheckoutApprovalStatus;
+use App\Enums\CheckoutType;
+use App\Enums\ReplyStatus;
+use App\Enums\ShipmentDeliveryStatus;
+use App\Enums\Status;
+use App\Models\Checkout;
+use App\Models\Customer;
+use App\Models\Order;
+
+// Models
+use App\Models\Product;
+use App\Models\Store;
+use Illuminate\Support\Facades\Log;
+use Starsnet\Project\Paraqon\App\Models\AuctionLot;
+use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
+use Starsnet\Project\Paraqon\App\Models\Deposit;
 
 class ServiceController extends Controller
 {
-    use RoundingTrait;
-
-    public function paymentCallback(Request $request)
+    public function paymentCallback(Request $request): array
     {
-        // Extract attributes from $request
-        $eventType = $request->type;
-
-        // Validation
         $acceptableEventTypes = [
             'charge.succeeded',
             'charge.refunded',
             'charge.captured',
             'charge.expired',
-            'setup_intent.succeeded', // Bind card
+            'setup_intent.succeeded',
             'payment_method.attached'
         ];
 
-        if (!in_array($eventType, $acceptableEventTypes)) {
-            return response()->json(
-                [
-                    'message' => 'Callback success, but event type does not belong to any of the acceptable values',
-                    'acceptable_values' => $acceptableEventTypes
-                ],
-                200
-            );
+        if (!in_array($request->type, $acceptableEventTypes)) {
+            return [
+                'message' => 'Callback success, but event type does not belong to any of the acceptable values',
+                'acceptable_values' => $acceptableEventTypes
+            ];
         }
 
         // Extract metadata from $request
@@ -64,25 +53,21 @@ class ServiceController extends Controller
         // ===============
         // Handle Events
         // ===============
-        switch ($eventType) {
+        switch ($request->type) {
             case 'setup_intent.succeeded': {
                     // ---------------------
                     // If bind card success
                     // ---------------------
                     if ($model == 'customer') {
-                        // Validate Customer
+                        /** @var ?Customer $customer */
                         $customer = Customer::find($modelID);
-                        if (is_null($customer)) {
-                            return response()->json(['message' => 'Customer not found'], 200);
-                        }
+                        if (is_null($customer)) abort(404, 'Customer not found');
 
-                        // Update Customer
-                        $paymentMethodID = $request->data['object']['payment_method'] ?? null;
-                        $customer->update(['stripe_payment_method_id' => $paymentMethodID]);
+                        $customer->update(['stripe_payment_method_id' => $request->data['object']['payment_method']]);
 
                         return [
                             'message' => 'Customer updated',
-                            'customer_id' => $customer->_id,
+                            'customer_id' => $customer->id,
                         ];
                     }
                     break;
@@ -91,24 +76,16 @@ class ServiceController extends Controller
                     // ---------------------
                     // When Stripe DB created a new customer
                     // ---------------------
-                    $paymentMethodID = $request->data['object']['id'] ?? null;
-
-                    // Find Customer via stripe_payment_method_id
-                    $customer = Customer::where('stripe_payment_method_id', $paymentMethodID)
+                    /** @var ?Customer $customer */
+                    $customer = Customer::where('stripe_payment_method_id', $request->data['object']['id'])
                         ->latest()
                         ->first();
-                    if (is_null($customer)) {
-                        return response()->json(['message' => 'Customer not found'], 200);
-                    }
-
-                    // Update Customer
-                    $stripeCustomerID = $request->data['object']['customer'] ?? null;
-                    $cardData = $request->data['object']['card'];
+                    if (is_null($customer)) abort(404, 'Customer not found');
 
                     $customer->update([
-                        'stripe_customer_id' => $stripeCustomerID,
-                        'stripe_card_binded_at' => now()->toISOString(),
-                        'stripe_card_data' => $cardData
+                        'stripe_customer_id' => $request->data['object']['customer'],
+                        'stripe_card_binded_at' => now(),
+                        'stripe_card_data' => $request->data['object']['card']
                     ]);
 
                     return [
@@ -118,23 +95,23 @@ class ServiceController extends Controller
                 }
             case 'charge.succeeded': {
                     if ($model === 'deposit') {
-                        // Validate Deposit, then AuctionRegistrationRequest
+                        /** @var ?Deposit $deposit */
                         $deposit = Deposit::find($modelID);
-                        if (is_null($deposit)) {
-                            return response()->json(['message' => 'Deposit not found'], 404);
-                        }
+                        if (is_null($deposit)) abort(404, 'Deposit not found');
 
+                        /** @var ?AuctionRegistrationRequest $auctionRegistrationRequest */
                         $auctionRegistrationRequest = $deposit->auctionRegistrationRequest;
-                        if (is_null($auctionRegistrationRequest)) {
-                            return response()->json(['message' => 'AuctionRegistrationRequest not found'], 404);
-                        }
+                        if (is_null($auctionRegistrationRequest)) abort(404, 'AuctionRegistrationRequest not found');
 
                         // Update Deposit
                         $deposit->updateStatus('on-hold');
-                        $deposit->update(['reply_status' => ReplyStatus::APPROVED]);
-                        $deposit->updateOnlineResponse($request->all());
+                        Deposit::where('id', $deposit->id)
+                            ->update([
+                                'reply_status' => ReplyStatus::APPROVED->value,
+                                'online.api_response' => $request->all()
+                            ]);
 
-                        if ($auctionRegistrationRequest->reply_status === ReplyStatus::APPROVED) {
+                        if ($auctionRegistrationRequest->reply_status === ReplyStatus::APPROVED->value) {
                             return ['message' => 'Deposit approved'];
                         }
 
@@ -142,8 +119,7 @@ class ServiceController extends Controller
                         $assignedPaddleId = $auctionRegistrationRequest->paddle_id;
 
                         if (is_null($assignedPaddleId)) {
-                            $storeID = $auctionRegistrationRequest->store_id;
-                            $allPaddles = AuctionRegistrationRequest::where('store_id', $storeID)
+                            $allPaddles = AuctionRegistrationRequest::where('store_id', $auctionRegistrationRequest->store_id)
                                 ->pluck('paddle_id')
                                 ->filter(fn($id) => is_numeric($id))
                                 ->map(fn($id) => (int) $id)
@@ -158,8 +134,8 @@ class ServiceController extends Controller
 
                         $requestUpdateAttributes = [
                             'paddle_id' => $assignedPaddleId,
-                            'status' => Status::ACTIVE,
-                            'reply_status' => ReplyStatus::APPROVED
+                            'status' => Status::ACTIVE->value,
+                            'reply_status' => ReplyStatus::APPROVED->value
                         ];
                         $auctionRegistrationRequest->update($requestUpdateAttributes);
 
@@ -170,41 +146,43 @@ class ServiceController extends Controller
                     }
 
                     if ($model === 'checkout') {
-                        // Validate Checkout, then Order
+                        /** @var ?Checkout $checkout */
                         $checkout = Checkout::find($modelID);
-                        if (is_null($checkout)) {
-                            return response()->json(['message' => 'Checkout not found'], 404);
-                        }
+                        if (is_null($checkout)) abort(404, 'Checkout not found');
 
+                        /** @var ?Order $order */
                         $order = $checkout->order;
-                        if (is_null($order)) {
-                            return response()->json(['message' => 'Order not found'], 404);
-                        }
+                        if (is_null($order)) abort(404, 'Order not found');
 
                         // Update Checkout
-                        $checkout->updateOnlineResponse((object) $request->all());
-                        $checkout->createApproval(
-                            CheckoutApprovalStatus::APPROVED,
-                            'Payment verified by Stripe'
-                        );
+                        Checkout::where('id', $checkout->id)
+                            ->update([
+                                'online.api_response' => $request->all()
+                            ]);
+                        $checkout->createApproval(CheckoutApprovalStatus::APPROVED->value,  'Payment verified by Stripe');
 
                         // Update Order
-                        if ($order->current_status !== ShipmentDeliveryStatus::PROCESSING) {
-                            $order->updateStatus(ShipmentDeliveryStatus::PROCESSING);
+                        if ($order->current_status !== ShipmentDeliveryStatus::PROCESSING->value) {
+                            $order->updateStatus(ShipmentDeliveryStatus::PROCESSING->value);
                         }
 
-                        // Update Product and AuctionLot
-                        $storeID = $order->store_id;
-                        $store = Store::find($storeID);
+                        /** @var ?Store $store */
+                        $store = Store::find($order->store_id);
+                        if (is_null($store)) {
+                            return [
+                                'message' => 'Checkout approved, but cannot find Store',
+                                'order_id' => $order->id
+                            ];
+                        }
 
-                        if (!is_null($store) && in_array($store->auction_type, ['LIVE', 'ONLINE'])) {
+                        if (in_array($store->auction_type, ['LIVE', 'ONLINE'])) {
                             $productIDs = collect($order->cart_items)->pluck('product_id')->all();
 
-                            AuctionLot::where('store_id', $storeID)
+                            AuctionLot::where('store_id', $order->store_id)
                                 ->whereIn('product_id', $productIDs)
                                 ->update(['is_paid' => true]);
 
-                            Product::objectIDs($productIDs)->update([
+                            Product::whereIn('_id', $productIDs)->update([
                                 'owned_by_customer_id' => $order->customer_id,
                                 'status' => 'ACTIVE',
                                 'listing_status' => 'ALREADY_CHECKOUT'
@@ -213,17 +191,15 @@ class ServiceController extends Controller
 
                         return [
                             'message' => 'Checkout approved, and Order status updated',
-                            'order_id' => $order->_id
+                            'order_id' => $order->id
                         ];
                     }
                 }
             case 'charge.refunded': {
                     if ($model === 'deposit') {
-                        // Validate Deposit
+                        /** @var ?Deposit $deposit */
                         $deposit = Deposit::find($modelID);
-                        if (is_null($deposit)) {
-                            return response()->json(['message' => 'Deposit not found'], 404);
-                        }
+                        if (is_null($deposit)) abort(404, 'Deposit not found');
 
                         // Update Deposit
                         $amountCaptured = $request->data['object']['amount_captured'] ?? 0;
@@ -232,7 +208,6 @@ class ServiceController extends Controller
                             'amount_captured' => $amountCaptured / 100,
                             'amount_refunded' => $amountRefunded / 100,
                         ]);
-
                         $deposit->updateStatus('returned');
 
                         return [
@@ -243,11 +218,9 @@ class ServiceController extends Controller
                 }
             case 'charge.captured': {
                     if ($model === 'deposit') {
-                        // Validate Deposit
+                        /** @var ?Deposit $deposit */
                         $deposit = Deposit::find($modelID);
-                        if (is_null($deposit)) {
-                            return response()->json(['message' => 'Deposit not found'], 404);
-                        }
+                        if (is_null($deposit)) abort(404, 'Deposit not found');
 
                         // Update Deposit
                         $amountCaptured = $request->data['object']['amount_captured'] ?? 0;
@@ -267,11 +240,9 @@ class ServiceController extends Controller
                 }
             case 'charge.expired': {
                     if ($model === 'deposit') {
-                        // Validate Deposit
+                        /** @var ?Deposit $deposit */
                         $deposit = Deposit::find($modelID);
-                        if (is_null($deposit)) {
-                            return response()->json(['message' => 'Deposit not found'], 404);
-                        }
+                        if (is_null($deposit)) abort(404, 'Deposit not found');
 
                         // Update Deposit
                         $amountCaptured = $request->data['object']['amount_captured'] ?? 0;
@@ -290,68 +261,62 @@ class ServiceController extends Controller
                     }
                 }
             default: {
-                    return response()->json(
-                        [
-                            'message' => "Invalid eventType given: $eventType",
-                            'acceptable_event_types' => $acceptableEventTypes
-                        ],
-                        400
-                    );
+                    abort(400, "Invalid eventType given: $request->type");
+                    return [
+                        'message' => "Invalid eventType given: $request->type",
+                        'acceptable_event_types' => $acceptableEventTypes
+                    ];
                 }
         }
+
+        return [
+            'message' => 'An unknown error occuried',
+            'received_request_body' => $request->all()
+        ];
     }
 
     public function createAuctionOrder(Request $request)
     {
+        $now = now();
+
+        /** @var ?Order $originalOrder */
         $originalOrder = Order::find($request->order_id);
-        if (is_null($originalOrder)) {
-            return response()->json(['message' => 'Order not found'], 404);
-        }
+        if (is_null($originalOrder)) abort(404, 'Order not found');
 
+        /** @var ?Customer $customer */
         $customer = Customer::find($originalOrder->customer_id);
-        if (is_null($customer)) {
-            return response()->json(['message' => 'Customer not found'], 404);
-        }
+        if (is_null($customer)) abort(404, 'Customer not found');
 
+        /** @var ?Store $store */
         $store = Store::find($originalOrder->store_id);
-        if (is_null($store)) {
-            return response()->json(['message' => 'Store not found'], 404);
-        }
+        if (is_null($store)) abort(404, 'Store not found');
 
         // Validate Stripe payment info
-        $stripeCustomerID = $customer->stripe_customer_id;
-        $stripePaymentMethodID = $customer->stripe_payment_method_id;
-        $stripeCardData = $customer->stripe_card_data;
-
         if (
-            is_null($stripeCustomerID) ||
-            is_null($stripeCustomerID) ||
-            is_null($stripeCardData)
+            is_null($customer->stripe_customer_id) ||
+            is_null($customer->stripe_payment_method_id) ||
+            is_null($customer->stripe_card_data)
         ) {
-            return response()->json([
-                'message' => 'Customer stripe payment info not found'
-            ], 404);
+            abort(404, 'Customer stripe payment info not found');
         }
 
         // Validate card
-        $now = now();
         $currentYear = (int) $now->format('Y');
         $currentMonth = (int) $now->format('m');
-
-        $expYear = (int) $stripeCardData['exp_year'];
-        $expMonth = (int) $stripeCardData['exp_month'];
+        $expYear = (int) $customer->stripe_card_data['exp_year'];
+        $expMonth = (int) $customer->stripe_card_data['exp_month'];
 
         if (!($expYear > $currentYear ||
             ($expYear === $currentYear && $expMonth >= $currentMonth)
         )) {
-            return response()->json([
-                'message' => 'Customer stripe payment info expired'
-            ], 404);
+            abort(400, 'Customer stripe payment info expired');
         }
 
         // Create Order
         $newOrderAttributes = [
-            'payment_method' => CheckoutType::ONLINE,
+            'customer_id' => $originalOrder->customer_id,
+            'store_id' => $originalOrder->store_id,
+            'payment_method' => CheckoutType::ONLINE->value,
             'cart_items' => $originalOrder['cart_items']->toArray(),
             'gift_items' => $originalOrder['gift_items']->toArray(),
             'discounts' => $originalOrder['discounts'],
@@ -366,61 +331,52 @@ class ServiceController extends Controller
                 'conversion_rate' => 1
             ],
         ];
-        $newOrder = $customer->createOrder($newOrderAttributes, $store);
+        /** @var Order $newOrder */
+        $newOrder = Order::create($newOrderAttributes);
 
         // Update Order
-        $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED);
+        $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED->value);
         $newOrder->updateStatus($status);
 
         // Create Checkout
-        $attributes = [
-            'payment_method' => CheckoutType::ONLINE
-        ];
-        $checkout = $newOrder->checkout()->create($attributes);
+        /** @var Checkout $checkout */
+        $checkout = $newOrder->checkout()->create([
+            'payment_method' => CheckoutType::ONLINE->value
+        ]);
 
         // Validate charge
         $totalPrice = $originalOrder['calculations']['price']['total'];
         $stripeAmount = (int) $totalPrice * 100;
-
-        if ($stripeAmount < 400) {
-            return response()->json([
-                'message' => "Given stripe amount is $stripeAmount (\$$totalPrice), which is lower than the min of 400 ($4.00)"
-            ], 404);
-        }
+        if ($stripeAmount < 400) abort(400, "Given stripe amount is $stripeAmount (\$$totalPrice), which is lower than the min of 400 ($4.00)");
 
         // Create and force payment via Stripe
         try {
             $stripeData = [
                 "amount" => $stripeAmount,
                 "currency" => 'hkd',
-                "customer_id" => $stripeCustomerID,
-                "payment_method_id" => $stripePaymentMethodID,
+                "customer_id" => $customer->stripe_customer_id,
+                "payment_method_id" => $customer->stripe_payment_method_id,
                 "metadata" => [
                     "model_type" => 'checkout',
-                    "model_id" => $checkout->_id
+                    "model_id" => $checkout->id
                 ]
             ];
 
-            $url = env('TCG_BID_STRIPE_BASE_URL', 'http://192.168.0.83:8082') . '/bind-card/charge';
-            $response = Http::post(
-                $url,
-                $stripeData
-            );
-
+            $url = env('TCG_BID_STRIPE_BASE_URL', 'http://192.168.0.83:8083') . '/bind-card/charge';
+            $response = Http::post($url, $stripeData);
+            Log::error($response);
             if ($response->failed()) {
                 $error = $response->json()['error'] ?? 'Stripe API request failed';
                 throw new \Exception(json_encode($error));
             }
 
-            $paymentIntentID = $response['id'];
-            $clientSecret = $response['clientSecret'];
-
+            // Update Checkout
             $checkout->update([
                 'amount' => $totalPrice,
                 'currency' => 'hkd',
                 'online' => [
-                    'payment_intent_id' => $paymentIntentID,
-                    'client_secret' => $clientSecret,
+                    'payment_intent_id' => $response['id'],
+                    'client_secret' => $response['clientSecret'],
                     'api_response' => null
                 ],
             ]);
@@ -428,13 +384,14 @@ class ServiceController extends Controller
             return [
                 'message' => 'Submitted Order successfully',
                 'checkout' => $checkout,
-                'order_id' => $newOrder->_id
+                'order_id' => $newOrder->id
             ];
         } catch (\Exception $e) {
-            return response()->json([
+            abort(404, 'Payment processing failed');
+            return [
                 'message' => 'Payment processing failed',
                 'error' => json_decode($e->getMessage(), true) ?: $e->getMessage()
-            ], 400);
+            ];
         }
     }
 }

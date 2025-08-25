@@ -1,58 +1,60 @@
 <?php
 
-namespace StarsNet\Project\Auction\App\Http\Controllers\Customer;
+namespace Starsnet\Project\Auction\App\Http\Controllers\Customer;
 
-use App\Constants\Model\Status;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Store;
-use Illuminate\Http\Request;
-
-use App\Constants\Model\OrderPaymentMethod;
-use App\Constants\Model\ReplyStatus;
-
-use App\Traits\Utils\RoundingTrait;
 use Illuminate\Support\Facades\Http;
-use StarsNet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
-use StarsNet\Project\Paraqon\App\Models\Deposit;
+use Illuminate\Support\Facades\Log;
 
 class CreditCardController extends Controller
 {
-    public function bindCard(Request $request)
+    public function bindCard()
     {
-        $customer = $this->customer();
-        $account = $this->account();
+        try {
+            $url = env('TCG_BID_STRIPE_BASE_URL', 'http://192.168.0.83:8083') . '/setup-intents';
 
-        // Create payment-intent
-        $data = [
-            "metadata" => [
-                "model_type" => "customer",
-                "model_id" => $customer->_id
-            ]
-        ];
+            $data = [
+                "metadata" => [
+                    "model_type" => "customer",
+                    "model_id" => $this->customer()->id
+                ]
+            ];
 
-        // Create Stripe setup intent
-        $url = env('TCG_BID_STRIPE_BASE_URL', 'http://192.168.0.83:8082') . '/setup-intents';
-        $response = Http::post(
-            $url,
-            $data
-        );
-        $clientSecret = $response['client_secret'];
+            $response = Http::post($url, $data);
+            if ($response->failed()) {
+                throw new \Exception("Stripe API request failed with status: " . $response->status());
+            }
+            if (!isset($response['client_secret'])) {
+                throw new \Exception("Invalid response from Stripe API: missing client_secret");
+            }
 
-        // Return client secret to generate link
-        return response()->json([
-            'message' => 'Created Setup Intent on Stripe successfully',
-            'client_secret' => $clientSecret,
-            'account' => $account
-        ], 200);
+            return [
+                'message' => 'Created Setup Intent on Stripe successfully',
+                'client_secret' => $response['client_secret'],
+                'account' => $this->account()
+            ];
+        } catch (\Exception $e) {
+            // Log the full error for debugging (not exposed to user)
+            Log::error('Stripe setup intent failed: ' . $e->getMessage(), [
+                'exception' => $e,
+                'customer_id' => $this->customer()->id
+            ]);
+
+            // Return a generic error response to the frontend
+            return response()->json([
+                'message' => 'Unable to process payment method at this time',
+                'error' => 'payment_processing_error'
+            ], 500);
+        }
     }
 
-    public function validateCard(Request $request)
+    public function validateCard(): array
     {
-        $customer = $this->customer();
+        $now = now();
 
         // Get Card info
-        $stripeCardData = $customer->stripe_card_data;
-
+        $stripeCardData = $this->customer()->stripe_card_data;
         if (is_null($stripeCardData)) {
             return [
                 'message' => 'Customer stripe payment info not found',
@@ -62,10 +64,8 @@ class CreditCardController extends Controller
         }
 
         // Validate date
-        $now = now();
         $currentYear = (int) $now->format('Y');
         $currentMonth = (int) $now->format('m');
-
         $expYear = (int) $stripeCardData['exp_year'];
         $expMonth = (int) $stripeCardData['exp_month'];
 

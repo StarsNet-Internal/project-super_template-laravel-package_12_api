@@ -2,60 +2,45 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Product;
-use App\Models\Store;
-use App\Models\Customer;
-use App\Models\Configuration;
-use App\Models\ProductVariant;
-use App\Models\Order;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Carbon\Carbon;
 
-use App\Constants\Model\WarehouseInventoryHistoryType;
-use App\Constants\Model\CheckoutType;
-use App\Constants\Model\OrderDeliveryMethod;
-use App\Constants\Model\OrderPaymentMethod;
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\ShipmentDeliveryStatus;
+// Enums
+use App\Enums\Status;
+
+// Models
 use App\Models\Category;
-use App\Traits\Utils\RoundingTrait;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Str;
+use App\Models\Customer;
+use App\Models\Product;
+use App\Models\Store;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Bid;
-use Starsnet\Project\Paraqon\App\Models\ProductStorageRecord;
-use Starsnet\Project\Paraqon\App\Models\LiveBiddingEvent;
-
-// Validator
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Validation\Rule;
-use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\BidHistory;
+use Starsnet\Project\Paraqon\App\Models\LiveBiddingEvent;
 
 class AuctionLotController extends Controller
 {
-    use RoundingTrait;
-
-    public function createAuctionLot(Request $request)
+    public function createAuctionLot(Request $request): array
     {
-        // Extract attributes from $request
-        $productID = $request->product_id;
-        $customerID = $request->customer_id;
-
-        // Get Product
-        $product = Product::find($productID);
-
-        if (is_null($product)) {
-            return response()->json([
-                'message' => 'Product not found',
-            ], 404);
+        /** @var ?Customer $customer */
+        if (is_string($request->customer_id)) {
+            $customer = Customer::find($request->customer_id);
+            if (is_null($customer)) abort(404, 'Customer not found');
         }
 
-        $highestLotNumber =
-            AuctionLot::where('store_id', $request->store_id)
+        /** @var ?Product $product */
+        $product = Product::find($request->product_id);
+        if (is_null($product)) abort(404, 'Product not found');
+
+        // Get Store
+        /** @var ?Store $store */
+        $store = Store::find($request->store_id);
+        if (is_null($store)) abort(404, 'Store not found');
+
+        $highestLotNumber = AuctionLot::where('store_id', $request->store_id)
             ->get()
             ->max('lot_number')
             ?? 0;
@@ -70,7 +55,7 @@ class AuctionLotController extends Controller
             'product_id' => $request->product_id,
             'product_variant_id' => $request->product_variant_id,
             'store_id' => $request->store_id,
-            'owned_by_customer_id' => $customerID,
+            'owned_by_customer_id' => $request->customer_id,
 
             'starting_price' => $request->starting_price ?? 0,
             'current_bid' => $request->starting_price ?? 0,
@@ -95,63 +80,44 @@ class AuctionLotController extends Controller
 
             'commission_rate' => $request->commission_rate
         ];
-
         $auctionLot = AuctionLot::create($auctionLotAttributes);
 
         // Create BidHistory
-        $auctionLotID = $auctionLot->_id;
-
-        $bidHistoryAttributes = [
-            'auction_lot_id' => $auctionLotID,
+        BidHistory::create([
+            'auction_lot_id' => $auctionLot->id,
             'current_bid' => $auctionLot->starting_price,
             'histories' => []
-        ];
-        BidHistory::create($bidHistoryAttributes);
+        ]);
 
-        return response()->json([
+        return [
             'message' => 'Created AuctionLot successfully',
-            '_id' => $auctionLotID,
-        ], 200);
+            '_id' => $auctionLot->id,
+        ];
     }
 
-    public function updateAuctionLotDetails(Request $request)
+    public function updateAuctionLotDetails(Request $request): array
     {
-        // Extract attributes from $request
-        $auctionLotID = $request->route('id');
+        /** @var ?AuctionLot $auctionLot */
+        $auctionLot = AuctionLot::find($request->route('id'));
+        if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
 
-        // Get AuctionLot
-        $auctionLot = AuctionLot::find($auctionLotID);
-
-        // Update AuctionLot
         $auctionLot->update($request->all());
 
-        return response()->json([
-            'message' => 'Updated AuctionLot successfully',
-        ], 200);
+        return ['message' => 'Updated AuctionLot successfully'];
     }
 
-    public function deleteAuctionLots(Request $request)
+    public function deleteAuctionLots(Request $request): array
     {
-        // Extract attributes from $request
-        $auctionLotIDs = $request->input('ids', []);
+        $updatedCount = AuctionLot::whereIn('_id', (array) $request->input('ids'))
+            ->update([
+                'status' => Status::DELETED->value,
+                'deleted_at' => now()
+            ]);
 
-        // Get Courier(s)
-        /** @var Collection $lots */
-        $lots = AuctionLot::find($auctionLotIDs);
-
-        // Update Courier(s)
-        /** @var Courier $courier */
-        foreach ($lots as $lot) {
-            $lot->statusDeletes();
-        }
-
-        // Return success message
-        return response()->json([
-            'message' => 'Deleted ' . $lots->count() . ' Lot(s) successfully'
-        ], 200);
+        return ['message' => 'Deleted ' . $updatedCount . ' Lot(s) successfully'];
     }
 
-    public function getAllAuctionLots(Request $request)
+    public function getAllAuctionLots(Request $request): Collection
     {
         // Extract attributes from $request
         $categoryID = $request->category_id;
@@ -161,14 +127,16 @@ class AuctionLotController extends Controller
         $auctionLots = new Collection();
 
         if (!is_null($storeID)) {
+            /** @var Collection $auctionLots */
             $auctionLots = AuctionLot::with(['bids'])
                 ->where('store_id', $storeID)
-                ->where('status', '!=', Status::DELETED)
+                ->where('status', '!=', Status::DELETED->value)
                 ->whereNotNull('lot_number')
                 ->get();
         } else if (!is_null($categoryID)) {
             $storeID = Category::find($categoryID)->model_type_id;
 
+            /** @var Collection $auctionLots */
             $auctionLots = AuctionLot::with(['bids'])
                 ->whereHas('product', function ($query) use ($categoryID) {
                     $query->whereHas('categories', function ($query2) use ($categoryID) {
@@ -176,12 +144,13 @@ class AuctionLotController extends Controller
                     });
                 })
                 ->where('store_id', $storeID)
-                ->where('status', '!=', Status::DELETED)
+                ->where('status', '!=', Status::DELETED->value)
                 ->whereNotNull('lot_number')
                 ->get();
         } else {
+            /** @var Collection $auctionLots */
             $auctionLots = AuctionLot::with(['bids'])
-                ->where('status', '!=', Status::DELETED)
+                ->where('status', '!=', Status::DELETED->value)
                 ->whereNotNull('lot_number')
                 ->get();
         }
@@ -207,64 +176,33 @@ class AuctionLotController extends Controller
         return $auctionLots;
     }
 
-    public function getAuctionLotDetails(Request $request)
+    public function getAuctionLotDetails(Request $request): AuctionLot
     {
-        // Extract attributes from $request
-        $auctionLotID = $request->route('id');
-
-        // Get AuctionLot
-        $auctionLot = AuctionLot::find($auctionLotID);
-
-        if (is_null($auctionLot)) {
-            return response()->json([
-                'message' => 'Auction Lot not found',
-            ], 404);
-        }
-
-        if ($auctionLot->status === Status::DELETED) {
-            return response()->json([
-                'message' => 'Auction Lot not found',
-            ], 404);
-        }
+        /** @var ?AuctionLot $auctionLot */
+        $auctionLot = AuctionLot::find($request->route('id'));
+        if (!$auctionLot) abort(404, 'AuctionLot not found');
+        if ($auctionLot->status === Status::DELETED->value) abort(404, 'Auction Lot not found');
 
         return $auctionLot;
     }
 
-    public function getAllAuctionLotBids(Request $request)
+    public function getAllAuctionLotBids(Request $request): Collection
     {
-        // Extract attributes from $request
-        $auctionLotID = $request->route('id');
+        /** @var ?AuctionLot $auctionLot */
+        $auctionLot = AuctionLot::find($request->route('id'));
+        if (!$auctionLot) abort(404, 'AuctionLot not found');
+        if ($auctionLot->status === Status::DELETED->value) abort(404, 'AuctionLot not found');
 
-        // Get AuctionLot
-        $auctionLot = AuctionLot::find($auctionLotID);
-
-        if (is_null($auctionLot)) {
-            return response()->json([
-                'message' => 'Auction Lot not found',
-            ], 404);
-        }
-
-        if ($auctionLot->status === Status::DELETED) {
-            return response()->json([
-                'message' => 'Auction Lot not found',
-            ], 404);
-        }
-
-        // Get Bids
-        $bids = $auctionLot->bids()
-            ->with('customer')
-            ->get();
-
-        return $bids;
+        return $auctionLot->bids()->with('customer')->get();
     }
 
-    public function massUpdateAuctionLots(Request $request)
+    public function massUpdateAuctionLots(Request $request): array
     {
         $lotAttributes = $request->lots;
 
         foreach ($lotAttributes as $lot) {
-            $lotID = $lot['id'];
-            $auctionLot = AuctionLot::find($lotID);
+            /** @var ?AuctionLot $auctionLot */
+            $auctionLot = AuctionLot::find($lot['id']);
 
             // Check if the AuctionLot exists
             if (!is_null($auctionLot)) {
@@ -274,145 +212,42 @@ class AuctionLotController extends Controller
             }
         }
 
-        return response()->json([
-            'message' => 'Auction Lots updated successfully'
-        ], 200);
+        return ['message' => 'Auction Lots updated successfully'];
     }
 
     public function createLiveBid(Request $request)
     {
+        $now = now();
+
         // Extract attributes from $request
         $auctionLotId = $request->route('auction_lot_id');
         $requestedBid = $request->bid;
         $bidType = $request->input('type', 'MAX');
-        $customerID = $request->customer_id;
+        $customer = Customer::find($request->customer_id) ?? $this->customer();
 
         // Validation for the request body
-        if (!in_array($bidType, ['MAX', 'DIRECT', 'ADVANCED'])) {
-            return response()->json([
-                'message' => 'Invalid bid type'
-            ], 400);
-        }
+        if (!in_array($bidType, ['MAX', 'DIRECT', 'ADVANCED'])) abort(400, 'Invalid type');
 
-        // Check auction lot
-        /** @var AuctionLot $auctionLot */
+        // Check AuctionLot
+        /** @var ?AuctionLot $auctionLot */
         $auctionLot = AuctionLot::find($auctionLotId);
+        if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
+        if ($auctionLot->is_disabled == true) abort(404, 'AuctionLot not found');
+        if ($auctionLot->status == Status::DELETED->value) abort(404, 'AuctionLot not found');
+        if ($auctionLot->owned_by_customer_id == $customer->id) abort(404, 'You cannot place bid on your own auction lot');
 
-        if (is_null($auctionLot)) {
-            return response()->json([
-                'message' => 'Auction Lot not found'
-            ], 404);
-        }
-
-        if ($auctionLot->is_disabled == true) {
-            return response()->json([
-                'message' => 'Auction Lot not found'
-            ], 404);
-        }
-
-        if ($auctionLot->status == Status::DELETED) {
-            return response()->json([
-                'message' => 'Auction Lot not found'
-            ], 404);
-        }
-
-        if ($auctionLot->owned_by_customer_id == $this->customer()->_id) {
-            return response()->json([
-                'message' => 'You cannot place bid on your own auction lot'
-            ], 404);
-        }
-
-        // Check time
+        // Check Store/Auction
+        /** @var ?Store $store */
         $store = $auctionLot->store;
-
-        if ($store->status == Status::DELETED) {
-            return response()->json([
-                'message' => 'Auction not found'
-            ], 404);
-        }
+        if (is_null($store)) abort(404, 'Auction not found');
+        if ($store->status == Status::DELETED->value) abort(404, 'Auction not found');
 
         // Get current_bid place
-        $now = now();
-        $customer = Customer::find($customerID) ?? $this->customer();
         $currentBid = $auctionLot->getCurrentBidPrice();
-        $isBidPlaced = $auctionLot->is_bid_placed;
 
         if (in_array($bidType, ['MAX', 'DIRECT'])) {
-            if ($auctionLot->status == Status::ARCHIVED) {
-                return response()->json([
-                    'message' => 'Auction Lot has been archived'
-                ], 404);
-            }
-
-            if ($store->status == Status::ARCHIVED) {
-                return response()->json([
-                    'message' => 'Auction has been archived'
-                ], 404);
-            }
-
-            // // Check if this MAX or DIRECT bid place after start_datetime
-            // if ($now <= Carbon::parse($store->start_datetime)) {
-            //     return response()->json([
-            //         'message' => 'The auction id: ' . $store->_id . ' has not yet started.',
-            //         'error_status' => 2,
-            //         'system_time' => now(),
-            //         'auction_start_datetime' => Carbon::parse($store->start_datetime)
-            //     ], 400);
-            // }
-
-            // // Check if this MAX or DIRECT bid place before end_datetime
-            // if ($now > Carbon::parse($store->end_datetime)) {
-            //     return response()->json([
-            //         'message' => 'The auction id: ' . $store->_id . ' has already ended.',
-            //         'error_status' => 3,
-            //         'system_time' => now(),
-            //         'auction_end_datetime' => Carbon::parse($store->end_datetime)
-            //     ], 400);
-            // }
-
-            // // Get bidding increment, and valid minimum bid 
-            // $incrementRules = optional($auctionLot->bid_incremental_settings)['increments'];
-            // $biddingIncrementValue = 0;
-
-            // if ($isBidPlaced == true) {
-            //     foreach ($incrementRules as $interval) {
-            //         if ($currentBid >= $interval['from'] && $currentBid < $interval['to']) {
-            //             $biddingIncrementValue = $interval['increment'];
-            //             break;
-            //         }
-            //     }
-            // }
-
-            // $minimumBid = $currentBid + $biddingIncrementValue;
-
-            // if ($minimumBid > $request->bid) {
-            //     return response()->json([
-            //         'message' => 'Your bid is lower than current valid bid ' .  $minimumBid . '.',
-            //         'error_status' => 0,
-            //         'bid' => $minimumBid
-            //     ], 400);
-            // }
-
-            // // Get user's current largest bid
-            // $userExistingMaximumBid = Bid::where('auction_lot_id', $auctionLotId)
-            //     ->where('customer_id', $customer->_id)
-            //     ->where('is_hidden',  false)
-            //     ->where('type', $bidType)
-            //     ->orderBy('bid', 'desc')
-            //     ->first();
-
-            // // Determine minimum possible bid for input from Customer
-            // if (!is_null($userExistingMaximumBid)) {
-            //     $userMaximumBidValue = $userExistingMaximumBid->bid;
-
-            //     if ($request->bid <= $userMaximumBidValue) {
-            //         return response()->json([
-            //             'message' => 'Your bid cannot be lower than or equal to your maximum bid value of ' . $userMaximumBidValue . '.',
-            //             'error_status' => 1,
-            //             'bid' => $userMaximumBidValue
-            //         ], 400);
-            //     }
-            // }
+            if ($auctionLot->status == Status::ARCHIVED->value) abort(404, 'AuctionLot has been archived');
+            if ($store->status == Status::ARCHIVED->value) abort(404, 'Auction has been found');
 
             $highestAdvancedBid = $auctionLot->bids()
                 ->where('is_hidden', false)
@@ -438,18 +273,7 @@ class AuctionLotController extends Controller
 
         // Hide previous placed ADVANCED bid, if there's any
         if ($bidType == 'ADVANCED') {
-            if ($auctionLot->status == Status::ACTIVE) {
-                return response()->json([
-                    'message' => 'Auction Lot is now active, no longer accept any ADVANCED bids'
-                ], 404);
-            }
-
-            // // Check if this MAX or DIRECT bid place after start_datetime
-            // if ($now >= Carbon::parse($store->start_datetime)) {
-            //     return response()->json([
-            //         'message' => 'Auction has started, no longer accept any ADVANCED bids'
-            //     ], 404);
-            // }
+            if ($auctionLot->status == Status::ACTIVE->value) abort(400, 'Auction Lot is now active, no longer accept any ADVANCED bids');
 
             Bid::where('auction_lot_id', $auctionLotId)
                 ->where('customer_id', $customer->_id)
@@ -506,7 +330,7 @@ class AuctionLotController extends Controller
             // Update current_bid
             // Find winningCustomerID
             $auctionLotMaximumBid = Bid::where('auction_lot_id', $auctionLotId)
-                ->where('is_hidden',  false)
+                ->where('is_hidden', false)
                 ->orderBy('bid', 'desc')
                 ->first();
 
@@ -547,7 +371,6 @@ class AuctionLotController extends Controller
             ];
             $bidHistory->histories()->create($bidHistoryItemAttributes);
             $bidHistory->update(['current_bid' => $newCurrentBid]);
-            // }
 
             // Extend Store endDateTime
             $currentStoreEndDateTime = Carbon::parse($store->end_datetime);
@@ -608,23 +431,25 @@ class AuctionLotController extends Controller
             ]);
         }
 
-        // Return Auction Store
-        return response()->json([
+        return [
             'message' => 'Created New maximum Bid successfully',
-            '_id' => $bid->_id
-        ], 200);
+            '_id' => $bid->id
+        ];
     }
 
-    public function resetAuctionLot(Request $request)
+    public function resetAuctionLot(Request $request): array
     {
-        $auctionLotId = $request->route('auction_lot_id');
+        /** @var AuctionLot $auctionLot */
+        $auctionLot = AuctionLot::find($request->route('auction_lot_id'));
+        if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
 
-        $auctionLot = AuctionLot::find($auctionLotId);
-        $bidHistory = BidHistory::firstWhere('auction_lot_id', $auctionLotId);
+        /** @var BidHistory $bidHistory */
+        $bidHistory = BidHistory::firstWhere('auction_lot_id', $request->route('auction_lot_id'));
+        if (is_null($bidHistory)) abort(404, 'BidHistory not found');
 
         // Reset events
         LiveBiddingEvent::where('store_id', $auctionLot->store_id)
-            ->where('value_1', $auctionLotId)
+            ->where('value_1', $request->route('auction_lot_id'))
             ->update(['is_hidden' => true]);
 
         // Hide previous DIRECT bids
@@ -634,9 +459,7 @@ class AuctionLotController extends Controller
             ->update(['is_hidden' => true]);
 
         // Reset history
-        $bidHistory->update([
-            'current_bid' => $auctionLot->starting_price
-        ]);
+        $bidHistory->update(['current_bid' => $auctionLot->starting_price]);
         foreach ($bidHistory['histories'] as $history) {
             $history->update(['is_hidden' => true]);
         }
@@ -663,11 +486,10 @@ class AuctionLotController extends Controller
             }
 
             // Update BidHistory
-            $bidHistoryItemAttributes = [
+            $bidHistory->histories()->create([
                 'winning_bid_customer_id' => $winningCustomerID,
                 'current_bid' => $newCurrentBid
-            ];
-            $bidHistory->histories()->create($bidHistoryItemAttributes);
+            ]);
             $bidHistory->update(['current_bid' => $newCurrentBid]);
 
             // Update Auction Lot
@@ -685,57 +507,28 @@ class AuctionLotController extends Controller
                 'winning_bid_customer_id' => null,
             ]);
         }
-        // Copy from Customer BidController cancelBid END
 
-        return response()->json([
-            'message' => 'Lot reset successfully'
-        ], 200);
+        return ['message' => 'Lot reset successfully'];
     }
 
-    public function updateBidHistoryLastItem(Request $request)
+    public function updateBidHistoryLastItem(Request $request): array
     {
-        // Extract attributes from request
-        $auctionLotID = $request->route('auction_lot_id');
-        $winningBidCustomerID = $request->winning_bid_customer_id;
+        /** @var AuctionLot $auctionLot */
+        $auctionLot = AuctionLot::find($request->route('auction_lot_id'));
+        if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
 
-        // Find AuctionLot
-        $lot = AuctionLot::find($auctionLotID);
-
-        if (is_null($lot)) {
-            return response()->json([
-                'message' => 'Auction Lot not found'
-            ], 404);
-        }
-
-        // Find Customer
-        $customer = Customer::find($winningBidCustomerID);
-
-        if (is_null($customer)) {
-            return response()->json([
-                'message' => 'Customer not found'
-            ], 404);
-        }
+        /** @var Customer $customer */
+        $customer = Customer::find($request->winning_bid_customer_id);
+        if (is_null($customer)) abort(404, 'Customer not found');
 
         // Update BidHistory
-        $bidHistory = $lot->bidHistory()->first();
-
-        if (is_null($bidHistory)) {
-            return response()->json([
-                'message' => 'BidHistory not found'
-            ], 404);
-        }
-
-        if ($bidHistory->histories()->count() == 0) {
-            return response()->json([
-                'message' => 'BidHistory histories is empty'
-            ], 404);
-        }
+        $bidHistory = $auctionLot->bidHistory()->first();
+        if (is_null($bidHistory)) abort(404, 'BidHistory not found');
+        if ($bidHistory->histories()->count() == 0) abort(404, 'BidHistory histories is empty');
 
         $lastItem = $bidHistory->histories()->last();
-        $lastItem->update(['winning_bid_customer_id' => $winningBidCustomerID]);
+        $lastItem->update(['winning_bid_customer_id' => $request->winning_bid_customer_id]);
 
-        return response()->json([
-            'message' => 'Updated BidHistory winning_bid_customer_id for the last item'
-        ], 200);
+        return ['message' => 'Updated BidHistory winning_bid_customer_id for the last item'];
     }
 }

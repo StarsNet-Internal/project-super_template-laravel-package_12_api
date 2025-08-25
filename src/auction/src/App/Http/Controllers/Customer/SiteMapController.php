@@ -1,41 +1,37 @@
 <?php
 
-namespace StarsNet\Project\Auction\App\Http\Controllers\Customer;
+namespace Starsnet\Project\Auction\App\Http\Controllers\Customer;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Auth;
+
+// Enums
+use App\Enums\Status;
+use App\Enums\StoreType;
+use App\Enums\ProductVariantDiscountType;
+
+// Models
 use App\Models\Alias;
 use App\Models\Store;
 use App\Models\Category;
 use App\Models\Product;
-use StarsNet\Project\Paraqon\App\Models\AuctionLot;
-
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
-use App\Constants\Model\ProductVariantDiscountType;
-
-use App\Traits\Controller\Sortable;
-use App\Traits\StarsNet\TypeSenseSearchEngine;
-
-use Illuminate\Http\Request;
-use Illuminate\Database\Eloquent\Collection;
-
-use Illuminate\Support\Facades\Auth;
+use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 
 class SiteMapController extends Controller
 {
-    use Sortable;
-
-    public function getAllAuctions(Request $request)
+    public function getAllAuctions(Request $request): Collection
     {
         // Extract attributes from $request
         $statuses = (array) $request->input('status', [
-            // Status::DRAFT,
-            Status::ACTIVE,
-            Status::ARCHIVED
+            Status::ACTIVE->value,
+            Status::ARCHIVED->value
         ]);
 
         // Get Auction Store(s)
-        $auctions = Store::whereType(StoreType::OFFLINE)
+        $auctions = Store::whereType(StoreType::OFFLINE->value)
             ->statuses($statuses)
             ->get();
 
@@ -52,35 +48,12 @@ class SiteMapController extends Controller
     public function filterAuctionProductsByCategories(Request $request)
     {
         // Get Store via id
-        $storeID = $request->route('store_id');
-        $store = Store::find($storeID);
-        if (is_null($store)) {
-            $storeID = Alias::getValue($storeID);
-            $store = Store::find($storeID);
-        }
+        $store = Store::find($request->route('store_id'))
+            ?? Store::find(Alias::getValue($request->route('store_id')));
         if (is_null($store)) return [];
 
         // Extract attributes from $request
-        $categoryIDs = $request->input('category_ids', []);
-        $categoryIDs = array_unique($categoryIDs);
-        $keyword = $request->input('keyword');
-        if ($keyword === "") $keyword = null;
-        $slug = $request->input('slug', 'by-keyword-relevance');
-
-        // Get sorting attributes via slugs
-        if (!is_null($slug)) {
-            $sortingValue = $this->getProductSortingAttributesBySlug('product-sorting', $slug);
-            switch ($sortingValue['type']) {
-                case 'KEY':
-                    $request['sort_by'] = $sortingValue['key'];
-                    $request['sort_order'] = $sortingValue['ordering'];
-                    break;
-                case 'KEYWORD':
-                    break;
-                default:
-                    break;
-            }
-        }
+        $categoryIDs = array_unique((array) $request->input('category_ids'));
 
         // Get all ProductCategory(s)
         if (count($categoryIDs) === 0) {
@@ -88,48 +61,33 @@ class SiteMapController extends Controller
                 ->productCategories()
                 ->statusActive()
                 ->get()
-                ->pluck('_id')
+                ->pluck('id')
                 ->all();
         }
 
         // Get Product(s) from selected ProductCategory(s)
         $productIDs = AuctionLot::where('store_id', $store->id)
-            ->statuses([Status::ACTIVE, Status::ARCHIVED])
+            ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
             ->get()
             ->pluck('product_id')
             ->all();
 
         if (count($categoryIDs) > 0) {
-            $allProductCategoryIDs = Category::slug('all-products')->pluck('_id')->all();
+            $allProductCategoryIDs = Category::where('slug', 'all-products')->pluck('id')->all();
             if (!array_intersect($categoryIDs, $allProductCategoryIDs)) {
                 $productIDs = Product::objectIDs($productIDs)
                     ->whereHas('categories', function ($query) use ($categoryIDs) {
                         $query->whereIn('_id', $categoryIDs);
                     })
-                    ->statuses([Status::ACTIVE, Status::ARCHIVED])
-                    ->when(!$keyword, function ($query) {
-                        $query->limit(250);
-                    })
+                    ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
                     ->get()
-                    ->pluck('_id')
+                    ->pluck('id')
                     ->all();
             }
         }
 
-        // Get matching keywords from Typesense
-        if (!is_null($keyword)) {
-            $typesense = new TypeSenseSearchEngine('products');
-            $productIDsByKeyword = $typesense->getIDsFromSearch(
-                $keyword,
-                'title.en,title.zh,title.cn'
-            );
-            if (count($productIDsByKeyword) === 0) return new Collection();
-            $productIDs = array_intersect($productIDs, $productIDsByKeyword);
-        }
-        if (count($productIDs) === 0) return new Collection();
-
         // Filter Product(s)
-        $products = $this->getProductsInfoByAggregation($productIDs, $store->_id);
+        $products = $this->getProductsInfoByAggregation($productIDs, $store->id);
         $products = $products->filter(function ($item) {
             return $item->auction_lot_id != '0';
         })->values();
@@ -168,47 +126,33 @@ class SiteMapController extends Controller
             );
         }
 
-        // Return data
         return $products;
     }
 
-    public function getAuctionLotDetails(Request $request)
+    public function getAuctionLotDetails(Request $request): AuctionLot
     {
-        // Extract attributes from $request
-        $auctionLotId = $request->route('auction_lot_id');
-
+        /** @var ?AuctionLot $auctionLot */
         $auctionLot = AuctionLot::with([
             'product',
             'productVariant',
             'store',
             'bids'
-        ])->find($auctionLotId);
-
-        if (!in_array(
-            $auctionLot->status,
-            [Status::ACTIVE, Status::ARCHIVED]
-        )) {
-            return response()->json([
-                'message' => 'Auction is not available for public'
-            ], 404);
+        ])->find($request->route('auction_lot_id'));
+        if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
+        if (!in_array($auctionLot->status, [Status::ACTIVE->value, Status::ARCHIVED->value])) {
+            abort(404, 'Auction is not available for public');
         }
 
-        // Get isLiked 
+        // Append keys
         $auctionLot->is_liked = false;
-
-        // Get current_bid
         $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
-
-        // Check is_reserve_met
         $auctionLot->is_reserve_price_met = $auctionLot->current_bid >= $auctionLot->reserve_price;
-        // $auctionLot->setHidden(['reserve_price']);
         $auctionLot->is_watching = false;
 
-        // Return Auction Store
         return $auctionLot;
     }
 
-    private function getProductsInfoByAggregation(array $productIDs, ?string $storeID = null)
+    private function getProductsInfoByAggregation(array $productIDs, ?string $storeID = null): Collection
     {
         $productIDs = array_values($productIDs);
 

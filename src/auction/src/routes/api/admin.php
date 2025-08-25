@@ -3,8 +3,9 @@
 // Default Imports
 use Illuminate\Support\Facades\Route;
 
-use StarsNet\Project\Auction\App\Http\Controllers\Admin\TestingController;
-use StarsNet\Project\Auction\App\Http\Controllers\Admin\ServiceController;
+use Starsnet\Project\Auction\App\Http\Controllers\Admin\TestingController;
+use Starsnet\Project\Auction\App\Http\Controllers\Admin\ServiceController;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\ProductController;
 
 /*
 |--------------------------------------------------------------------------
@@ -26,18 +27,21 @@ use StarsNet\Project\Auction\App\Http\Controllers\Admin\ServiceController;
 Route::group(
     ['prefix' => 'tests'],
     function () {
-        $defaultController = TestingController::class;
+        Route::get('/health-check', [TestingController::class, 'healthCheck']);
+    }
+);
 
-        Route::get('/health-check', [$defaultController, 'healthCheck']);
+Route::group(
+    ['prefix' => 'products'],
+    function () {
+        Route::put('/mass-update', [ProductController::class, 'massUpdateProducts']);
     }
 );
 
 Route::group(
     ['prefix' => 'services'],
     function () {
-        $defaultController = ServiceController::class;
-
-        Route::post('/payment/callback', [$defaultController, 'paymentCallback']);
-        Route::post('/auction-orders/create', [$defaultController, 'createAuctionOrder']);
+        Route::post('/payment/callback', [ServiceController::class, 'paymentCallback']);
+        Route::post('/auction-orders/create', [ServiceController::class, 'createAuctionOrder']);
     }
 );

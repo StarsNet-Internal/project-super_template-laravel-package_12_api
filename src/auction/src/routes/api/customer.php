@@ -3,11 +3,11 @@
 // Default Imports
 use Illuminate\Support\Facades\Route;
 
-use StarsNet\Project\Auction\App\Http\Controllers\Customer\TestingController;
-use StarsNet\Project\Auction\App\Http\Controllers\Customer\ConsignmentRequestController;
-use StarsNet\Project\Auction\App\Http\Controllers\Customer\CreditCardController;
-use StarsNet\Project\Auction\App\Http\Controllers\Customer\AuctionRegistrationRequestController;
-use StarsNet\Project\Auction\App\Http\Controllers\Customer\SiteMapController;
+use Starsnet\Project\Auction\App\Http\Controllers\Customer\TestingController;
+use Starsnet\Project\Auction\App\Http\Controllers\Customer\ConsignmentRequestController;
+use Starsnet\Project\Auction\App\Http\Controllers\Customer\CreditCardController;
+use Starsnet\Project\Auction\App\Http\Controllers\Customer\AuctionRegistrationRequestController;
+use Starsnet\Project\Auction\App\Http\Controllers\Customer\SiteMapController;
 
 
 /*

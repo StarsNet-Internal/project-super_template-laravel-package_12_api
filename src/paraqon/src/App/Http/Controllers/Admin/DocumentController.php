@@ -2,72 +2,59 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
-use App\Constants\Model\Status;
+// Laravel built-in
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Arr;
+
+// Enums
+use App\Enums\Status;
+
+// Models
 use Starsnet\Project\Paraqon\App\Models\Document;
 
 class DocumentController extends Controller
 {
-    public function createDocument(Request $request)
+    public function createDocument(Request $request): array
     {
-        $attributes = $request->all();
-        $document = Document::create($attributes);
+        /** @var Document $document */
+        $document = Document::create($request->all());
 
-        return response()->json([
+        return [
             'message' => 'Created new Document successfully',
             '_id' => $document->id
-        ]);
+        ];
     }
 
-    public function getAllDocuments(Request $request)
+    public function getAllDocuments(Request $request): Collection
     {
-        $queryParams = $request->query();
+        // Exclude pagination/sorting params before filtering
+        $filterParams = Arr::except($request->query(), ['per_page', 'page', 'sort_by', 'sort_order']);
 
-        $documentQuery = Document::where('status', '!=', Status::DELETED);
+        // Exclude all deleted documents first
+        $query = Document::where('status', '!=', Status::DELETED->value);
 
-        foreach ($queryParams as $key => $value) {
-            if (in_array($key, ['per_page', 'page', 'sort_by', 'sort_order'])) {
-                continue;
-            }
-
-            $documentQuery->where($key, $value);
+        foreach ($filterParams as $key => $value) {
+            $query->where($key, $value);
         }
-        $documents = $documentQuery->latest()->get();
 
-        return $documents;
+        return $query->get();
     }
 
-    public function getDocumentDetails(Request $request)
+    public function getDocumentDetails(Request $request): ?Document
     {
-        $documentID = $request->route('id');
-        $document = Document::find($documentID);
-
-        if (is_null($document)) {
-            return response()->json([
-                'message' => 'Document not found',
-            ], 404);
-        }
-
-        return $document;
+        return Document::find($request->route('id'));
     }
 
-    public function updateDocumentDetails(Request $request)
+    public function updateDocumentDetails(Request $request): array
     {
-        $documentID = $request->route('id');
-        $document = Document::find($documentID);
+        /** @var ?Document $document */
+        $document = Document::find($request->route('id'));
+        if (is_null($document)) abort(404, 'Document not found');
 
-        if (is_null($document)) {
-            return response()->json([
-                'message' => 'Document not found',
-            ], 404);
-        }
+        $document->update($request->all());
 
-        $attributes = $request->all();
-        $document->update($attributes);
-
-        return response()->json([
-            'message' => 'Updated Document successfully',
-        ]);
+        return ['message' => 'Updated Document successfully'];
     }
 }

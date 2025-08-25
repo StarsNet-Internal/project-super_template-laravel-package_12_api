@@ -2,11 +2,11 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
-use App\Constants\Model\ShipmentDeliveryStatus;
+use App\Enums\ShipmentDeliveryStatus;
 use App\Http\Controllers\Controller;
 
 use Carbon\Carbon;
-use App\Models\Store;
+use App\Models\Account;
 use App\Models\Configuration;
 use App\Models\Order;
 use App\Models\ShoppingCartItem;
@@ -14,18 +14,29 @@ use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
 use Starsnet\Project\Paraqon\App\Models\ProductStorageRecord;
 
-use function PHPSTORM_META\map;
-
 class TestingController extends Controller
 {
     public function healthCheck()
     {
-        $deposit = Deposit::find('670dee20cabe9346e20b9291');
-        return $deposit->online['payment_intent_id'];
+        // Get current date instance
+        $now = now(); // or Carbon::now()
+        $code = $now->format('ym');
+        $existingAccounts = Account::where('client_no', 'regex', '/CT' . $code . '/i')
+            ->orderBy('client_no', 'desc')
+            ->pluck('client_no')
+            ->all();
 
-        return response()->json([
-            'message' => 'OK from package/paraqon'
-        ], 200);
+        $nextSequence = empty($existingAccounts)
+            ? 1
+            : ((int) substr($existingAccounts[0], -4)) + 1;
+        $nextClientCode = 'CT' . $code . str_pad($nextSequence, 4, '0', STR_PAD_LEFT);
+
+        return [
+            'code' => $code,
+            'startOfMonth' => $now->copy()->startOfMonth(),
+            'endOfMonth' => $now->copy()->endOfDay(),
+            'nextClientCode' => $nextClientCode
+        ];
     }
 
     public function createOrder()

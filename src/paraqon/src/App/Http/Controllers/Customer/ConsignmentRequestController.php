@@ -2,26 +2,29 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+
+// Enums
+use App\Enums\Status;
+
+// Models
 use Starsnet\Project\Paraqon\App\Models\ConsignmentRequest;
 
 class ConsignmentRequestController extends Controller
 {
-    public function getAllConsignmentRequests(Request $request)
+    public function getAllConsignmentRequests(): Collection
     {
-        $customer = $this->customer();
-
-        $forms = ConsignmentRequest::where('requested_by_customer_id', $customer->_id)
+        return ConsignmentRequest::where('requested_by_customer_id', $this->customer()->id)
             ->with(['items'])
             ->get();
-
-        return $forms;
     }
 
-    public function createConsignmentRequest(Request $request)
+    public function createConsignmentRequest(Request $request): array
     {
-        // Create ConsignmentRequest
+        /** @var ConsignmentRequest $form */
         $form = ConsignmentRequest::create($request->except('items'));
 
         // Create ConsignmentRequestItem(s)
@@ -31,38 +34,26 @@ class ConsignmentRequestController extends Controller
             $requestItemsCount++;
         }
         $form->update([
-            'requested_by_customer_id' => $this->customer()->_id,
+            'requested_by_customer_id' => $this->customer()->id,
             'requested_items_qty' => $requestItemsCount
         ]);
 
-        return response()->json([
+        return [
             'message' => 'Created New ConsignmentRequest successfully',
-            '_id' => $form->_id
-        ], 200);
+            '_id' => $form->id
+        ];
     }
 
-    public function getConsignmentRequestDetails(Request $request)
+    public function getConsignmentRequestDetails(Request $request): ConsignmentRequest
     {
-        $consignmentRequestId = $request->route('consignment_request_id');
-
-        $form = ConsignmentRequest::find($consignmentRequestId);
-
-        if (is_null($form)) {
-            return response()->json([
-                'message' => 'Consignment Request not found'
-            ], 404);
-        }
+        $form = ConsignmentRequest::find($request->route('consignment_request_id'));
+        if (is_null($form)) abort(404, 'ConsignmentRequest not found');
+        if ($form->status === Status::DELETED->value) abort(404, 'ConsignmentRequest not found');
 
         $customer = $this->customer();
-
-        if ($form->requested_by_customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'Access denied'
-            ], 404);
-        }
+        if ($form->requested_by_customer_id != $customer->_id) abort(404, 'Access denied');
 
         $form->items = $form->items()->get();
-
         return $form;
     }
 }

@@ -2,15 +2,28 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
-use App\Constants\Model\CheckoutType;
-use App\Constants\Model\OrderDeliveryMethod;
-use App\Constants\Model\ShipmentDeliveryStatus;
-use App\Constants\Model\WarehouseInventoryHistoryType;
-use App\Constants\Model\DiscountTemplateDiscountType;
-use App\Constants\Model\DiscountTemplateType;
-use App\Constants\Model\Status;
-use App\Events\Common\Checkout\OfflineCheckoutImageUploaded;
+// Laravel built-in
 use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Collection;
+
+// Traits
+use App\Http\Controllers\Traits\DistributePointTrait;
+
+// Services
+use App\Http\Starsnet\PinkiePay;
+
+// Enums
+use App\Enums\CheckoutType;
+use App\Enums\OrderDeliveryMethod;
+use App\Enums\ShipmentDeliveryStatus;
+use App\Enums\WarehouseInventoryHistoryType;
+use App\Enums\DiscountTemplateDiscountType;
+use App\Enums\DiscountTemplateType;
+
+// Models
 use App\Models\Alias;
 use App\Models\Checkout;
 use App\Models\Courier;
@@ -21,62 +34,62 @@ use App\Models\DiscountCode;
 use App\Models\DiscountTemplate;
 use App\Models\ProductVariant;
 use App\Models\ShoppingCartItem;
-use App\Traits\Utils\RoundingTrait;
 use App\Models\Store;
-use App\Models\User;
 use App\Models\Warehouse;
-use App\Traits\Starsnet\PinkiePay;
-use Illuminate\Http\Request;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
-use Illuminate\Support\Str;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Collection;
-
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Validation\Rule;
-
-use App\Constants\Model\OrderPaymentMethod;
-use App\Events\Common\Order\OrderPaid;
 
 class ShoppingCartController extends Controller
 {
-    use RoundingTrait;
+    use DistributePointTrait;
 
     private function getStore(string $storeID): ?Store
     {
-        // Get Store via id
-        $store = Store::find($storeID);
-        if (!is_null($store)) return $store;
-
-        // Get Store via alias
-        $storeID = Alias::getValue($storeID);
-        $store = Store::find($storeID);
-        return $store;
+        return Store::find($storeID) ?? Store::find(Alias::getValue($storeID));
     }
 
-    public function getAllAuctionCartItems(Request $request)
+    public function getAllAuctionCartItems(Request $request): array
     {
         // Extract attributes from $request
-        $storeID = $request->route('store_id');
-        $store = self::getStore($storeID);
+        $store = self::getStore($request->route('store_id'));
         $checkoutVariantIDs = $request->checkout_product_variant_ids;
 
         // Get authenticated User information
         $customer = $this->customer();
 
         // Get ShoppingCartItem(s)
-        $cartItems = $customer->getAllCartItemsByStore($store);
+        $cartItems = ShoppingCartItem::where('customer_id', $customer->id)
+            ->where('store_id', $store->id)
+            ->get()
+            ->append([
+                // Product information related
+                'product_title',
+                'product_variant_title',
+                'image',
+                // Calculation-related
+                'local_discount_type',
+                'original_price_per_unit',
+                'discounted_price_per_unit',
+                'original_subtotal_price',
+                'subtotal_price',
+                'original_point_per_unit',
+                'discounted_point_per_unit',
+                'original_subtotal_point',
+                'subtotal_point',
+            ])
+            ->each(function ($item) use ($checkoutVariantIDs) {
+                $item->is_checkout = in_array($item->product_variant_id, $checkoutVariantIDs);
+                $item->is_refundable = false;
+                $item->global_discount = null;
+            });
 
         // Extract attributes from $request
         $currency = $request->input('currency', 'HKD');
         $deliveryInfo = $request->delivery_info;
 
-        $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY ?
+        $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY->value ?
             $deliveryInfo['courier_id'] :
             null;
-
-        $countryCode = $deliveryInfo['country_code'] ?? 'HK';
-        $countryCode = strtoupper($countryCode);
+        $countryCode = strtoupper($deliveryInfo['country_code'] ?? 'HK');
 
         // getShoppingCartDetails calculations
         // get subtotal Price
@@ -87,16 +100,8 @@ class ShoppingCartController extends Controller
         $totalServiceCharge = 0;
 
         foreach ($cartItems as $item) {
-            // Add keys
-            $item->is_checkout = in_array(
-                $item->product_variant_id,
-                $checkoutVariantIDs
-            );
-            $item->is_refundable = false;
-            $item->global_discount = null;
-
             // Find AuctionLot
-            $lot = AuctionLot::where('store_id', $storeID)
+            $lot = AuctionLot::where('store_id', $store->id)
                 ->where('product_id', $item->product_id)
                 ->first();
 
@@ -120,8 +125,7 @@ class ShoppingCartController extends Controller
             // Shipping Fee
             $item->shipping_fee = 0;
             $shippingCosts = $lot->shipping_costs;
-            $matchingShippingCostElement = collect($shippingCosts)
-                ->firstWhere('area', $countryCode);
+            $matchingShippingCostElement = collect($shippingCosts)->firstWhere('area', $countryCode);
 
             if (!is_null($matchingShippingCostElement)) {
                 $item->shipping_fee =
@@ -137,14 +141,13 @@ class ShoppingCartController extends Controller
 
         // get shippingFee
         $courier = Courier::find($courierID);
-        $shippingFee +=
-            !is_null($courier) ?
-            $courier->getShippingFeeByTotalFee($totalPrice) :
-            0;
+        $shippingFee += !is_null($courier)
+            ? $courier->getShippingFeeByTotalFee($totalPrice)
+            : 0;
         $totalPrice += $shippingFee;
 
         // Find system order
-        $systemOrder = Order::where('store_id', $storeID)
+        $systemOrder = Order::where('store_id', $store->id)
             ->where('customer_id', $customer->_id)
             ->where('is_system', true)
             ->first();
@@ -165,59 +168,68 @@ class ShoppingCartController extends Controller
         $rawCalculation = [
             'currency' => $currency,
             'price' => [
-                'subtotal' => $subtotalPrice,
-                'total' => $totalPrice, // Deduct price_discount.local and .global
+                'subtotal' => number_format($subtotalPrice, 2, '.', ''),
+                'total' => number_format(ceil($totalPrice), 2, '.', ''), // Deduct price_discount.local and .global
             ],
             'price_discount' => [
-                'local' => 0,
-                'global' => 0,
+                'local' => '0.00',
+                'global' => '0.00',
             ],
             'point' => [
-                'subtotal' => 0,
-                'total' => 0,
+                'subtotal' => '0.00',
+                'total' => '0.00',
             ],
-            'service_charge' => $totalServiceCharge,
-            'credit_card_charge_fee' => $creditCardChargeFee,
-            'deposit' => $systemOrderDeposit,
-            'storage_fee' => 0,
-            'shipping_fee' => $shippingFee
+            'service_charge' => number_format($totalServiceCharge, 2, '.', ''),
+            'credit_card_charge_fee' => number_format($creditCardChargeFee, 2, '.', ''),
+            'deposit' => number_format($systemOrderDeposit, 2, '.', ''),
+            'storage_fee' => '0.00',
+            'shipping_fee' => number_format($shippingFee, 2, '.', '')
         ];
 
-        $roundedCalculation = $this->roundingNestedArray($rawCalculation, 2); // Round off values
-
-        // Round down calculations.price.total only
-        $roundedCalculation['price']['total'] = ceil($roundedCalculation['price']['total']) . '.00';
-
-        // Return data
-        $data = [
+        return [
             'cart_items' => $cartItems,
             'gift_items' => [],
             'discounts' => [],
-            'calculations' => $roundedCalculation,
+            'calculations' => $rawCalculation,
             'is_voucher_applied' => false,
             'is_enough_membership_points' => true
         ];
-
-        return $data;
     }
 
-    public function getAllMainStoreCartItems(Request $request)
+    public function getAllMainStoreCartItems(Request $request): array
     {
         $storeID = $request->route('store_id');
         $store = self::getStore($storeID);
 
         // Extract attributes from $request
         $checkoutVariantIDs = $request->checkout_product_variant_ids;
-        $voucherCode = $request->voucher_code;
         $deliveryInfo = $request->delivery_info;
 
         // Get authenticated User information
         $customer = $this->customer();
 
         // Winning auction lots by Customer
-        $selectedItems = ShoppingCartItem::where('store_id', $store->_id)->get();
+        $selectedItems = ShoppingCartItem::where('customer_id', $customer->id)
+            ->where('store_id', $store->id)
+            ->get()
+            ->append([
+                // Product information related
+                'product_title',
+                'product_variant_title',
+                'image',
+                // Calculation-related
+                'local_discount_type',
+                'original_price_per_unit',
+                'discounted_price_per_unit',
+                'original_subtotal_price',
+                'subtotal_price',
+                'original_point_per_unit',
+                'discounted_point_per_unit',
+                'original_subtotal_point',
+                'subtotal_point',
+            ]);
 
-        foreach ($selectedItems as $key => $item) {
+        foreach ($selectedItems as $item) {
             $item->update([
                 'winning_bid' => 0,
                 'storage_fee' => 0
@@ -225,12 +237,35 @@ class ShoppingCartController extends Controller
         }
 
         // Get ShoppingCartItem(s)
-        $cartItems = $customer->getAllCartItemsByStore($store);
+        $cartItems = ShoppingCartItem::where('customer_id', $customer->id)
+            ->where('store_id', $store->id)
+            ->get()
+            ->append([
+                // Product information related
+                'product_title',
+                'product_variant_title',
+                'image',
+                // Calculation-related
+                'local_discount_type',
+                'original_price_per_unit',
+                'discounted_price_per_unit',
+                'original_subtotal_price',
+                'subtotal_price',
+                'original_point_per_unit',
+                'discounted_point_per_unit',
+                'original_subtotal_point',
+                'subtotal_point',
+            ])
+            ->each(function ($item) use ($checkoutVariantIDs) {
+                $item->is_checkout = in_array($item->product_variant_id, $checkoutVariantIDs);
+                $item->is_refundable = false;
+                $item->global_discount = null;
+            });
 
         // Extract attributes from $request
         $deliveryInfo = $request->delivery_info;
 
-        $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY ?
+        $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY->value ?
             $deliveryInfo['courier_id'] :
             null;
 
@@ -240,11 +275,6 @@ class ShoppingCartController extends Controller
         $storageFee = 0;
 
         foreach ($cartItems as $item) {
-            // Add keys
-            $item->is_checkout = true;
-            $item->is_refundable = false;
-            $item->global_discount = null;
-
             // Calculations
             $winningBid = $item->winning_bid ?? 0;
             $subtotalPrice += $winningBid;
@@ -255,8 +285,7 @@ class ShoppingCartController extends Controller
 
         // get shippingFee
         $courier = Courier::find($courierID);
-        $shippingFee =
-            !is_null($courier) ?
+        $shippingFee = !is_null($courier) ?
             $courier->getShippingFeeByTotalFee($totalPrice) :
             0;
         $totalPrice += $shippingFee;
@@ -265,73 +294,81 @@ class ShoppingCartController extends Controller
         $rawCalculation = [
             'currency' => 'HKD',
             'price' => [
-                'subtotal' => $subtotalPrice,
-                'total' => $totalPrice, // Deduct price_discount.local and .global
+                'subtotal' => number_format($subtotalPrice, 2, '.', ''),
+                'total' => number_format(floor($totalPrice), 2, '.', ''), // Deduct price_discount.local and .global
             ],
             'price_discount' => [
-                'local' => 0,
-                'global' => 0,
+                'local' => '0.00',
+                'global' => '0.00',
             ],
             'point' => [
-                'subtotal' => 0,
-                'total' => 0,
+                'subtotal' => '0.00',
+                'total' => '0.00',
             ],
-            'service_charge' => 0,
-            'storage_fee' => $storageFee,
-            'shipping_fee' => $shippingFee
+            'service_charge' => '0.00',
+            'storage_fee' => number_format($storageFee, 2, '.', ''),
+            'shipping_fee' => number_format($shippingFee, 2, '.', '')
         ];
 
-        $rationalizedCalculation = $this->rationalizeRawCalculation($rawCalculation);
-        $roundedCalculation = $this->roundingNestedArray($rationalizedCalculation, 2); // Round off values
-
-        // Round down calculations.price.total only
-        $roundedCalculation['price']['total'] = floor($roundedCalculation['price']['total']);
-        $roundedCalculation['price']['total'] .= '.00';
-
-        // Return data
-        $data = [
+        return [
             'cart_items' => $cartItems,
             'gift_items' => [],
             'discounts' => [],
-            'calculations' => $roundedCalculation,
+            'calculations' => $rawCalculation,
             'is_voucher_applied' => false,
             'is_enough_membership_points' => true
         ];
-
-        return $data;
     }
 
     public function checkOutAuctionStore(Request $request)
     {
+        $now = now();
+
         // Extract attributes from $request
-        $storeID = $request->route('store_id');
-        $store = self::getStore($storeID);
-        $isPaid = $request->input('is_paid', false);
+        $store = self::getStore($request->route('store_id'));
+        $isPaid = $request->boolean('is_paid', false);
 
         // Get authenticated User information
         $customer = $this->customer();
+        $checkoutVariantIDs = $request->checkout_product_variant_ids;
 
         // Get ShoppingCartItem(s)
-        $cartItems = $customer->getAllCartItemsByStore($store);
+        $cartItems = ShoppingCartItem::where('customer_id', $customer->id)
+            ->where('store_id', $store->id)
+            ->get()
+            ->append([
+                // Product information related
+                'product_title',
+                'product_variant_title',
+                'image',
+                // Calculation-related
+                'local_discount_type',
+                'original_price_per_unit',
+                'discounted_price_per_unit',
+                'original_subtotal_price',
+                'subtotal_price',
+                'original_point_per_unit',
+                'discounted_point_per_unit',
+                'original_subtotal_point',
+                'subtotal_point',
+            ])
+            ->each(function ($item) use ($checkoutVariantIDs) {
+                $item->is_checkout = in_array($item->product_variant_id, $checkoutVariantIDs);
+                $item->is_refundable = false;
+                $item->global_discount = null;
+            });
 
         // Extract attributes from $request
         $currency = $request->input('currency', 'HKD');
         $conversionRate = $request->input('conversion_rate', '1.00');
 
-        $checkoutVariantIDs = $request->checkout_product_variant_ids;
-        $voucherCode = $request->voucher_code;
         $deliveryInfo = $request->delivery_info;
         $deliveryDetails = $request->delivery_details;
         $paymentMethod = $request->payment_method;
-        $successUrl = $request->success_url;
-        $cancelUrl = $request->cancel_url;
 
         $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY ?
             $deliveryInfo['courier_id'] :
             null;
-        // $warehouseID = $deliveryInfo['method'] === OrderDeliveryMethod::SELF_PICKUP ?
-        //     $deliveryInfo['warehouse_id'] :
-        //     null;
 
         $countryCode = $deliveryInfo['country_code'] ?? 'HK';
         $countryCode = strtoupper($countryCode);
@@ -345,16 +382,8 @@ class ShoppingCartController extends Controller
         $totalServiceCharge = 0;
 
         foreach ($cartItems as $item) {
-            // Add keys
-            $item->is_checkout = in_array(
-                $item->product_variant_id,
-                $checkoutVariantIDs
-            );
-            $item->is_refundable = false;
-            $item->global_discount = null;
-
             // Find AuctionLot
-            $lot = AuctionLot::where('store_id', $storeID)
+            $lot = AuctionLot::where('store_id', $store->id)
                 ->where('product_id', $item->product_id)
                 ->first();
 
@@ -373,10 +402,6 @@ class ShoppingCartController extends Controller
             if ($item->is_checkout) {
                 $subtotalPrice += $item->sold_price;
             }
-
-            // Service Charge
-            // $totalServiceCharge += $winningBid *
-            //     $SERVICE_CHARGE_MULTIPLIER;
 
             // Shipping Fee
             $item->shipping_fee = 0;
@@ -408,7 +433,7 @@ class ShoppingCartController extends Controller
         $totalPrice += $shippingFee;
 
         // Find system order
-        $systemOrder = Order::where('store_id', $storeID)
+        $systemOrder = Order::where('store_id', $store->id)
             ->where('customer_id', $customer->_id)
             ->where('is_system', true)
             ->first();
@@ -426,35 +451,30 @@ class ShoppingCartController extends Controller
         $rawCalculation = [
             'currency' => 'HKD',
             'price' => [
-                'subtotal' => $subtotalPrice,
-                'total' => $totalPrice, // Deduct price_discount.local and .global
+                'subtotal' => number_format($subtotalPrice, 2, '.', ''),
+                'total' => number_format(ceil($totalPrice), 2, '.', ''), // Deduct price_discount.local and .global
             ],
             'price_discount' => [
-                'local' => 0,
-                'global' => 0,
+                'local' => '0.00',
+                'global' => '0.00',
             ],
             'point' => [
-                'subtotal' => 0,
-                'total' => 0,
+                'subtotal' => '0.00',
+                'total' => '0.00',
             ],
-            'service_charge' => $totalServiceCharge,
-            'credit_card_charge_fee' => $creditCardChargeFee,
-            'deposit' => $systemOrderDeposit,
-            'storage_fee' => 0,
-            'shipping_fee' => $shippingFee
+            'service_charge' => number_format($totalServiceCharge, 2, '.', ''),
+            'credit_card_charge_fee' => number_format($creditCardChargeFee, 2, '.', ''),
+            'deposit' => number_format($systemOrderDeposit, 2, '.', ''),
+            'storage_fee' => '0.00',
+            'shipping_fee' => number_format($shippingFee, 2, '.', '')
         ];
-
-        $roundedCalculation = $this->roundingNestedArray($rawCalculation, 2); // Round off values
-
-        // Round down calculations.price.total only
-        $roundedCalculation['price']['total'] = ceil($roundedCalculation['price']['total']) . '.00';
 
         // Return data
         $checkoutDetails = [
             'cart_items' => $cartItems,
             'gift_items' => [],
             'discounts' => [],
-            'calculations' => $roundedCalculation,
+            'calculations' => $rawCalculation,
             'is_voucher_applied' => false,
             'is_enough_membership_points' => true
         ];
@@ -462,7 +482,7 @@ class ShoppingCartController extends Controller
         // Validate, and update attributes
         $totalPrice = $checkoutDetails['calculations']['price']['total'];
         if ($totalPrice <= 0) {
-            $paymentMethod = CheckoutType::OFFLINE;
+            $paymentMethod = CheckoutType::OFFLINE->value;
             $isPaid = true;
         }
 
@@ -505,7 +525,7 @@ class ShoppingCartController extends Controller
                 $store,
                 $variant,
                 $qty,
-                WarehouseInventoryHistoryType::SALES,
+                WarehouseInventoryHistoryType::SALES->value,
                 $customer->getUser()
             );
 
@@ -513,7 +533,7 @@ class ShoppingCartController extends Controller
         }
 
         // Update Order
-        $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED);
+        $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED->value);
         $order->updateStatus($status);
 
         // Create Checkout
@@ -521,7 +541,7 @@ class ShoppingCartController extends Controller
 
         if ($order->getTotalPrice() > 0) {
             switch ($paymentMethod) {
-                case CheckoutType::ONLINE:
+                case CheckoutType::ONLINE->value:
                     $stripeAmount = (int) $totalPrice * 100;
 
                     $data = [
@@ -534,151 +554,125 @@ class ShoppingCartController extends Controller
                         ]
                     ];
 
-                    $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.Starsnet.hk') . '/payment-intents';
-                    $res = Http::post(
-                        $url,
-                        $data
-                    );
-
-                    $paymentIntentID = $res['id'];
-                    $clientSecret = $res['clientSecret'];
-
+                    $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents';
+                    $res = Http::post($url, $data);
                     $checkout->update([
                         'amount' => $totalPrice,
                         'currency' => $currency,
                         'online' => [
-                            'payment_intent_id' => $paymentIntentID,
-                            'client_secret' => $clientSecret,
+                            'payment_intent_id' => $res['id'],
+                            'client_secret' => $res['clientSecret'],
                             'api_response' => null
                         ],
                     ]);
-                    // Return data
-                    $data = [
+                    return [
                         'message' => 'Submitted Order successfully',
                         'checkout' => $checkout,
                         'order_id' => $order->_id
                     ];
-                    return response()->json($data);
-                case CheckoutType::OFFLINE:
-                    $imageUrl = $request->input('image');
-                    $this->updateAsOfflineCheckout($checkout, $imageUrl);
-                    // Return data
-                    $data = [
+                case CheckoutType::OFFLINE->value:
+                    $checkout->update([
+                        'offline' => [
+                            'image' => $request->image,
+                            'uploaded_at' => $now,
+                            'api_response' => null
+                        ]
+                    ]);
+                    return [
                         'message' => 'Submitted Order successfully',
                         'checkout' => $checkout,
                         'order_id' => $order->_id
                     ];
-                    return response()->json($data);
                 default:
-                    return response()->json([
-                        'message' => 'Invalid payment_method'
-                    ], 404);
+                    return ['message' => 'Invalid payment_method'];
             }
         }
 
-        $data = [
+        return [
             'message' => 'Submitted Order successfully',
             'checkout' => $checkout,
             'order_id' => $order->_id
         ];
-        return response()->json($data);
     }
 
     public function checkOutMainStore(Request $request)
     {
-        $storeID = $request->route('store_id');
-        $store = self::getStore($storeID);
+        $now = now();
+
+        $store = self::getStore($request->route('store_id'));
 
         // Get authenticated User information
         $customer = $this->customer();
+        $checkoutVariantIDs = $request->checkout_product_variant_ids;
 
         // Get ShoppingCartItem(s)
-        $cartItems = $customer->getAllCartItemsByStore($store);
+        $cartItems = ShoppingCartItem::where('customer_id', $customer->id)
+            ->where('store_id', $store->id)
+            ->get()
+            ->append([
+                // Product information related
+                'product_title',
+                'product_variant_title',
+                'image',
+                // Calculation-related
+                'local_discount_type',
+                'original_price_per_unit',
+                'discounted_price_per_unit',
+                'original_subtotal_price',
+                'subtotal_price',
+                'original_point_per_unit',
+                'discounted_point_per_unit',
+                'original_subtotal_point',
+                'subtotal_point',
+            ])
+            ->each(function ($item) use ($checkoutVariantIDs) {
+                $item->is_checkout = in_array($item->product_variant_id, $checkoutVariantIDs);
+                $item->is_refundable = false;
+                $item->global_discount = null;
+            });
 
         // Extract attributes from $request
-        $checkoutVariantIDs = $request->checkout_product_variant_ids;
-        $voucherCode = $request->voucher_code;
         $deliveryInfo = $request->delivery_info;
         $deliveryDetails = $request->delivery_details;
         $paymentMethod = $request->payment_method;
         $successUrl = $request->success_url;
         $cancelUrl = $request->cancel_url;
 
-        $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY ?
-            $deliveryInfo['courier_id'] :
-            null;
-        $warehouseID = $deliveryInfo['method'] === OrderDeliveryMethod::SELF_PICKUP ?
-            $deliveryInfo['warehouse_id'] :
-            null;
-
         // getShoppingCartDetails calculations
-        // get subtotal Price
-        $subtotalPrice = 0;
-        $totalPrice = 0;
-        $storageFee = 0;
-        $shippingFee = 0;
-
-        foreach ($cartItems as $item) {
-            // Add keys
-            $item->is_checkout = true;
-            $item->is_refundable = false;
-            $item->global_discount = null;
-
-            // Calculations
-            // $winningBid = $item->winning_bid ?? 0;
-            // $subtotalPrice += $winningBid;
-
-            // $storageFee += $item->storage_fee ?? 0;
-        }
-        // $totalPrice = $subtotalPrice + $storageFee;
-
-        // get shippingFee
-        // $courier = Courier::find($courierID);
-        // $shippingFee =
-        //     !is_null($courier) ?
-        //     $courier->getShippingFeeByTotalFee($totalPrice) :
-        //     0;
-        // $totalPrice += $shippingFee;
-
-        // form calculation data object
         $rawCalculation = [
             'currency' => 'HKD',
             'price' => [
-                'subtotal' => $subtotalPrice,
-                'total' => $totalPrice, // Deduct price_discount.local and .global
+                'subtotal' => '0.00',
+                'total' => '0.00', // Deduct price_discount.local and .global
             ],
             'price_discount' => [
-                'local' => 0,
-                'global' => 0,
+                'local' => '0.00',
+                'global' => '0.00',
             ],
             'point' => [
-                'subtotal' => 0,
-                'total' => 0,
+                'subtotal' => '0.00',
+                'total' => '0.00',
             ],
-            'service_charge' => 0,
-            'storage_fee' => $storageFee,
-            'shipping_fee' => $shippingFee
+            'service_charge' => '0.00',
+            'storage_fee' => '0.00',
+            'shipping_fee' => '0.00'
         ];
-
-        $rationalizedCalculation = $this->rationalizeRawCalculation($rawCalculation);
-        $roundedCalculation = $this->roundingNestedArray($rationalizedCalculation); // Round off values
 
         // Return data
         $checkoutDetails = [
             'cart_items' => $cartItems,
             'gift_items' => [],
             'discounts' => [],
-            'calculations' => $roundedCalculation,
+            'calculations' => $rawCalculation,
             'is_voucher_applied' => false,
             'is_enough_membership_points' => true,
-
             'paid_order_id' => null,
             'is_storage' => false
         ];
 
         // Validate, and update attributes
         $totalPrice = $checkoutDetails['calculations']['price']['total'];
-        if ($totalPrice <= 0) $paymentMethod = CheckoutType::OFFLINE;
+        if ($totalPrice <= 0) $paymentMethod = CheckoutType::OFFLINE->value;
 
         // Create Order
         $orderAttributes = [
@@ -694,9 +688,8 @@ class ShoppingCartController extends Controller
 
         // Create OrderCartItem(s)
         $checkoutItems = collect($checkoutDetails['cart_items'])
-            ->filter(function ($item) {
-                return $item->is_checkout;
-            })->values();
+            ->filter(fn($item) => $item->is_checkout)
+            ->values();
 
         foreach ($checkoutItems as $item) {
             $attributes = $item->toArray();
@@ -714,7 +707,7 @@ class ShoppingCartController extends Controller
                 $store,
                 $variant,
                 $qty,
-                WarehouseInventoryHistoryType::SALES,
+                WarehouseInventoryHistoryType::SALES->value,
                 $customer->getUser()
             );
 
@@ -722,55 +715,52 @@ class ShoppingCartController extends Controller
         }
 
         // Update Order
-        $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED);
+        $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED->value);
         $order->updateStatus($status);
 
         // Create Checkout
         $checkout = $this->createBasicCheckout($order, $paymentMethod);
 
+        $returnUrl = null;
         if ($order->getTotalPrice() > 0) {
             switch ($paymentMethod) {
-                case CheckoutType::ONLINE:
-                    $returnUrl = $this->updateAsOnlineCheckout(
-                        $checkout,
-                        $successUrl,
-                        $cancelUrl
-                    );
+                case CheckoutType::ONLINE->value:
+                    $pinkiePay = new PinkiePay($order, $successUrl, $cancelUrl);
+                    $data = $pinkiePay->createPaymentToken();
+                    $returnUrl = $data['shortened_url'];
                     break;
-                case CheckoutType::OFFLINE:
-                    $imageUrl = $request->input('image');
-                    $this->updateAsOfflineCheckout($checkout, $imageUrl);
+                case CheckoutType::OFFLINE->value:
+                    $checkout->update([
+                        'offline' => [
+                            'image' => $request->image,
+                            'uploaded_at' => $now,
+                            'api_response' => null
+                        ]
+                    ]);
                     break;
                 default:
-                    return response()->json([
-                        'message' => 'Invalid payment_method'
-                    ], 404);
+                    abort(404, 'Invalid payment_method');
+                    break;
             }
         }
 
-        if ($paymentMethod === CheckoutType::OFFLINE) {
+        if ($paymentMethod === CheckoutType::OFFLINE->value) {
             // Delete ShoppingCartItem(s)
-            $variants = ProductVariant::objectIDs($request->checkout_product_variant_ids)->get();
+            $variants = ProductVariant::whereIn('_id', $request->checkout_product_variant_ids)->get();
             $customer->clearCartByStore($store, $variants);
 
             // Update product
             foreach ($variants as $variant) {
                 $product = $variant->product;
-                $product->update([
-                    // 'status' => Status::ACTIVE,
-                    'listing_status' => 'ALREADY_CHECKOUT'
-                ]);
+                $product->update(['listing_status' => 'ALREADY_CHECKOUT']);
             }
         }
 
-        // Return data
-        $data = [
+        return [
             'message' => 'Submitted Order successfully',
             'return_url' => $returnUrl ?? null,
             'order_id' => $order->_id
         ];
-
-        return response()->json($data);
     }
 
     public function checkOut(Request $request)
@@ -782,114 +772,49 @@ class ShoppingCartController extends Controller
 
         // Get authenticated User information
         $customer = $this->customer();
+        $checkoutVariantIDs = $request->checkout_product_variant_ids;
 
         // Get ShoppingCartItem(s)
-        $cartItems = $customer->getAllCartItemsByStore($store);
-        $addedProductVariantIDs = $cartItems->pluck('product_variant_id')->all();
-
-        // Validate Request
-        $validator = Validator::make($request->all(), [
-            'checkout_product_variant_ids' => [
-                'array',
-            ],
-            'checkout_product_variant_ids.*' => [
-                Rule::in($addedProductVariantIDs)
-            ],
-            'voucher_code' => [
-                'nullable'
-            ],
-            'delivery_info.country_code' => [
-                'nullable'
-            ],
-            'delivery_info.method' => [
-                'nullable',
-                Rule::in(OrderDeliveryMethod::$defaultTypes)
-            ],
-            // 'delivery_info.warehouse_id' => [
-            //     Rule::requiredIf(fn () => $request->delivery_info['method'] === OrderDeliveryMethod::SELF_PICKUP),
-            //     'exclude_if:delivery_info.method,' . OrderDeliveryMethod::DELIVERY,
-            //     'exists:App\Models\Warehouse,_id'
-            // ],
-            // 'delivery_info.courier_id' => [
-            //     Rule::requiredIf(fn () => $request->delivery_info['method'] === OrderDeliveryMethod::DELIVERY),
-            //     'exclude_if:delivery_info.method,' . OrderDeliveryMethod::SELF_PICKUP,
-            //     'exists:App\Models\Courier,_id'
-            // ],
-            'delivery_details.recipient_name' => [
-                'nullable'
-            ],
-            'delivery_details.email' => [
-                'nullable',
-                'email'
-            ],
-            'delivery_details.area_code' => [
-                'nullable',
-                'numeric'
-            ],
-            'delivery_details.phone' => [
-                'nullable',
-                'numeric'
-            ],
-            'delivery_details.address' => [
-                'nullable',
-            ],
-            'payment_method' => [
-                'required',
-                Rule::in(OrderPaymentMethod::$defaultTypes)
-            ],
-            'success_url' => [
-                Rule::requiredIf(fn() => $request->payment_method === OrderPaymentMethod::ONLINE),
-            ],
-            'cancel_url' => [
-                Rule::requiredIf(fn() => $request->payment_method === OrderPaymentMethod::ONLINE),
-            ]
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json($validator->errors(), 400);
-        }
+        $cartItems = ShoppingCartItem::where('customer_id', $customer->id)
+            ->where('store_id', $store->id)
+            ->get()
+            ->append([
+                // Product information related
+                'product_title',
+                'product_variant_title',
+                'image',
+                // Calculation-related
+                'local_discount_type',
+                'original_price_per_unit',
+                'discounted_price_per_unit',
+                'original_subtotal_price',
+                'subtotal_price',
+                'original_point_per_unit',
+                'discounted_point_per_unit',
+                'original_subtotal_point',
+                'subtotal_point',
+            ])
+            ->each(function ($item) use ($checkoutVariantIDs) {
+                $item->is_checkout = in_array($item->product_variant_id, $checkoutVariantIDs);
+                $item->is_refundable = false;
+                $item->global_discount = null;
+            });
 
         // Extract attributes from $request
         $currency = $request->input('currency', 'HKD');
         $conversionRate = $request->input('conversion_rate', '1.00');
 
-        $checkoutVariantIDs = $request->checkout_product_variant_ids;
         $voucherCode = $request->voucher_code;
         $deliveryInfo = $request->delivery_info;
         $deliveryDetails = $request->delivery_details;
         $paymentMethod = $request->payment_method;
-        $successUrl = $request->success_url;
-        $cancelUrl = $request->cancel_url;
 
-        $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY ?
+        $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY->value ?
             $deliveryInfo['courier_id'] :
             null;
-        $warehouseID = $deliveryInfo['method'] === OrderDeliveryMethod::SELF_PICKUP ?
+        $warehouseID = $deliveryInfo['method'] === OrderDeliveryMethod::SELF_PICKUP->value ?
             $deliveryInfo['warehouse_id'] :
             null;
-
-        // Get ShoppingCartItem(s), and extract checkout-required ShoppingCartItem(s)
-        $cartItems = $customer->getAllCartItemsByStore($store);
-        foreach ($cartItems as $item) {
-            $variantID = $item->product_variant_id;
-            /** @var ProductVariant $variant */
-            $variant = ProductVariant::find($variantID);
-
-            if (is_null($variant)) continue;
-            if ($variant->status !== Status::ACTIVE) {
-                $item->delete();
-            }
-        }
-
-        // Get ShoppingCartItem(s), and extract checkout-required ShoppingCartItem(s)
-        $cartItems = $customer->getAllCartItemsByStore($store);
-        // Append default key per $item
-        /** @var ShoppingCartItem $item */
-        foreach ($cartItems as $item) {
-            $item->is_checkout = false;
-            $item->is_refundable = false;
-            $item->global_discount = null;
-        }
 
         // Filter checkoutItems
         foreach ($cartItems as $item) {
@@ -954,51 +879,41 @@ class ShoppingCartController extends Controller
         $subtotalPoints = $cartItems->sum('original_subtotal_point');
         $totalPoints = $cartItems->sum('subtotal_point');
 
-        $rawCalculation =
-            [
-                'currency' => 'HKD',
-                'price' => [
-                    'subtotal' => max(0, $subtotalPrice),
-                    'total' => max(0, $totalPrice)
-                ],
-                'price_discount' => [
-                    'local' => $localPriceDiscount,
-                    'global' => $globalPriceDiscount,
-                ],
-                'point' => [
-                    'subtotal' => $subtotalPoints,
-                    'total' => $totalPoints,
-                ],
-                'shipping_fee' => max(0, $shippingFee)
-            ];
-        $roundedCalculation = $this->roundingNestedArray($rawCalculation, 2); // Round off values
+        $rawCalculation = [
+            'currency' => 'HKD',
+            'price' => [
+                'subtotal' => number_format(max(0, $subtotalPrice), 2, '.', ''),
+                'total' => number_format(max(0, $totalPrice), 2, '.', '')
+            ],
+            'price_discount' => [
+                'local' => number_format($localPriceDiscount, 2, '.', ''),
+                'global' => number_format($globalPriceDiscount, 2, '.', ''),
+            ],
+            'point' => [
+                'subtotal' => number_format($subtotalPoints, 2, '.', ''),
+                'total' => number_format($totalPoints, 2, '.', ''),
+            ],
+            'shipping_fee' => number_format(max(0, $shippingFee), 2, '.', '')
+        ];
 
         // Return data
         $checkoutDetails = [
             'cart_items' => $cartItems,
             'gift_items' => $giftItems,
             'discounts' => $mappedDiscounts,
-            'calculations' => $roundedCalculation,
+            'calculations' => $rawCalculation,
             'is_voucher_applied' => !is_null($voucherDiscount),
             'is_enough_membership_points' => $customer->isEnoughMembershipPoints($rawCalculation['point']['total'])
         ];
 
-        //
-        //
-        //
-
         // Validate Customer membership points
         $requiredPoints = $checkoutDetails['calculations']['point']['total'];
-        if (!$customer->isEnoughMembershipPoints($requiredPoints)) {
-            return response()->json([
-                'message' => 'Customer does not have enough membership points for this transaction',
-            ], 403);
-        }
+        if (!$customer->isEnoughMembershipPoints($requiredPoints)) abort(403, 'Customer does not have enough membership points for this transaction');
 
         // Validate, and update attributes
         $totalPrice = $checkoutDetails['calculations']['price']['total'];
         if ($totalPrice <= 0) {
-            $paymentMethod = CheckoutType::OFFLINE;
+            $paymentMethod = CheckoutType::OFFLINE->value;
             $isPaid = true;
         }
 
@@ -1023,7 +938,7 @@ class ShoppingCartController extends Controller
         // Create OrderCartItem(s)
         $checkoutItems = collect($checkoutDetails['cart_items'])
             ->filter(function ($item) {
-                return $item->is_checkout;
+                return $item['is_checkout'];
             })->values();
 
         foreach ($checkoutItems as $item) {
@@ -1039,7 +954,7 @@ class ShoppingCartController extends Controller
                 $store,
                 $variant,
                 $qty,
-                WarehouseInventoryHistoryType::SALES,
+                WarehouseInventoryHistoryType::SALES->value,
                 $customer->getUser()
             );
 
@@ -1077,7 +992,7 @@ class ShoppingCartController extends Controller
 
         if ($order->getTotalPrice() > 0) {
             switch ($paymentMethod) {
-                case CheckoutType::ONLINE:
+                case CheckoutType::ONLINE->value:
                     $stripeAmount = (int) $totalPrice * 100;
                     $data = [
                         "amount" => $stripeAmount,
@@ -1089,7 +1004,7 @@ class ShoppingCartController extends Controller
                         ]
                     ];
 
-                    $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.Starsnet.hk') . '/payment-intents';
+                    $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents';
                     $res = Http::post(
                         $url,
                         $data
@@ -1114,23 +1029,27 @@ class ShoppingCartController extends Controller
                         'order_id' => $order->_id
                     ];
                     return response()->json($data);
-                case CheckoutType::OFFLINE:
-                    $imageUrl = $request->input('image');
-                    $this->updateAsOfflineCheckout($checkout, $imageUrl);
-                    // Return data
-                    $data = [
+                case CheckoutType::OFFLINE->value:
+                    $checkout->update([
+                        'offline' => [
+                            'image' => $request->image,
+                            'uploaded_at' => now(),
+                            'api_response' => null
+                        ]
+                    ]);
+                    return [
                         'message' => 'Submitted Order successfully',
                         'checkout' => $checkout,
                         'order_id' => $order->_id
                     ];
-                    return response()->json($data);
                 default:
                     return response()->json([
                         'message' => 'Invalid payment_method'
                     ], 404);
             }
         } else {
-            event(new OrderPaid($order, $customer));
+            // Distribute MembershipPoint
+            $this->processMembershipPoints($customer, $order);
         }
 
         // Update MembershipPoint, for Offline Payment via MINI Store
@@ -1150,7 +1069,7 @@ class ShoppingCartController extends Controller
         }
 
         // Delete ShoppingCartItem(s)
-        if ($paymentMethod === CheckoutType::OFFLINE) {
+        if ($paymentMethod === CheckoutType::OFFLINE->value) {
             $variants = ProductVariant::objectIDs($request->checkout_product_variant_ids)->get();
             $customer->clearCartByStore($store, $variants);
         }
@@ -1158,9 +1077,9 @@ class ShoppingCartController extends Controller
         // Use voucherCode
         if (!is_null($voucherCode)) {
             /** @var DiscountCode $voucher */
-            $voucher = DiscountCode::whereFullCode($voucherCode)
-                ->whereIsUsed(false)
-                ->whereIsDisabled(false)
+            $voucher = DiscountCode::where('full_code', $voucherCode)
+                ->where('is_used', false)
+                ->where('is_disabled', false)
                 ->first();
 
             if (!is_null($voucher)) {
@@ -1174,28 +1093,7 @@ class ShoppingCartController extends Controller
             'checkout' => $checkout,
             'order_id' => $order->_id
         ];
-        return response()->json($data);
-    }
-
-    private function rationalizeRawCalculation(array $rawCalculation)
-    {
-        return [
-            'currency' => $rawCalculation['currency'],
-            'price' => [
-                'subtotal' => max(0, $rawCalculation['price']['subtotal']),
-                'total' => max(0, $rawCalculation['price']['total']),
-            ],
-            'price_discount' => [
-                'local' => $rawCalculation['price_discount']['local'],
-                'global' => $rawCalculation['price_discount']['global'],
-            ],
-            'point' => [
-                'subtotal' => max(0, $rawCalculation['point']['subtotal']),
-                'total' => max(0, $rawCalculation['point']['total']),
-            ],
-            'service_charge' => max(0, $rawCalculation['service_charge']),
-            'shipping_fee' => max(0, $rawCalculation['shipping_fee']),
-        ];
+        return $data;
     }
 
     /*
@@ -1241,9 +1139,7 @@ class ShoppingCartController extends Controller
     private function deductWarehouseInventoriesByStore(
         Store $store,
         ProductVariant $variant,
-        int $qtyChange,
-        string $changeType = WarehouseInventoryHistoryType::OTHERS,
-        User $user
+        int $qtyChange
     ) {
         if ($qtyChange === 0) return false;
 
@@ -1278,17 +1174,15 @@ class ShoppingCartController extends Controller
 
     private function getActiveWarehouseInventoriesByStore(Store $store, ProductVariant $variant)
     {
-        $warehouses = $this->getActiveWarehousesByStore($store);
+        $warehouseIDs = $store->warehouses()
+            ->statusActive()
+            ->pluck('id')
+            ->all();
 
         return $variant->warehouseInventories()
-            ->byWarehouses($warehouses)
+            ->whereIn('warehouse_id', $warehouseIDs)
             ->orderByDesc('qty')
             ->get();
-    }
-
-    private function getActiveWarehousesByStore(Store $store)
-    {
-        return $store->warehouses()->statusActive()->get();
     }
 
     /*
@@ -1297,13 +1191,10 @@ class ShoppingCartController extends Controller
     * ===================
     */
 
-    private function createBasicCheckout(Order $order, string $paymentMethod = CheckoutType::ONLINE)
+    private function createBasicCheckout(Order $order, string $paymentMethod = CheckoutType::ONLINE->value)
     {
-        $attributes = [
-            'payment_method' => $paymentMethod
-        ];
         /** @var Checkout $checkout */
-        $checkout = $order->checkout()->create($attributes);
+        $checkout = $order->checkout()->create(['payment_method' => $paymentMethod]);
         return $checkout;
     }
 
@@ -1315,23 +1206,15 @@ class ShoppingCartController extends Controller
         // Instantiate PinkiePay
         $pinkiePay = new PinkiePay($order, $successUrl, $cancelUrl);
 
-        $isServiceRunning = $pinkiePay->healthCheck();
-        if (!$isServiceRunning) {
-            abort(
-                response()->json(
-                    ['message' => 'Payment Gateway is down, unable to create payment token'],
-                    404
-                )
-            );
-        }
-
         // Create Payment token
         $amount = $order->getTotalPrice();
         $data = $pinkiePay->createPaymentToken($amount);
 
         // Update Checkout
         $transactionID = $data['transaction_id'];
-        $checkout->updateOnlineTransactionID($transactionID);
+        Checkout::where('id', $checkout->id)->update([
+            'online.transaction_id' => $transactionID
+        ]);
 
         return $data['shortened_url'];
     }
@@ -1339,17 +1222,9 @@ class ShoppingCartController extends Controller
     private function updateAsOfflineCheckout(Checkout $checkout, ?string $imageUrl): void
     {
         if (is_null($imageUrl)) return;
-
-        /** @var Order $order */
-        $order = $checkout->order;
         $checkout->updateOfflineImage($imageUrl);
-
-        // Fire event
-        event(new OfflineCheckoutImageUploaded($order));
         return;
     }
-
-    // 
 
     private function getValidPriceOrPercentageDiscount(
         Store $store,
@@ -1369,8 +1244,8 @@ class ShoppingCartController extends Controller
             ->whereFulfilledMinRequirementSpending($price)
             ->whereFulfilledMinRequirementProductQty($productQty)
             ->whereDiscountTypes([
-                DiscountTemplateDiscountType::PERCENTAGE,
-                DiscountTemplateDiscountType::PRICE
+                DiscountTemplateDiscountType::PERCENTAGE->value,
+                DiscountTemplateDiscountType::PRICE->value
             ])
             ->get();
 
@@ -1412,7 +1287,7 @@ class ShoppingCartController extends Controller
             ->byCustomerGroups($customerGroups)
             ->whereFulfilledMinRequirementSpending($price)
             ->whereFulfilledMinRequirementProductQty($productQty)
-            ->whereDiscountType(DiscountTemplateDiscountType::BUY_X_GET_Y_FREE)
+            ->whereDiscountType(DiscountTemplateDiscountType::BUY_X_GET_Y_FREE->value)
             ->whereProductVariantXIDs($checkoutProductVariantIDs)
             ->get();
 
@@ -1477,9 +1352,9 @@ class ShoppingCartController extends Controller
 
         // Get DiscountCode (voucher), then validate
         /** @var DiscountCode $voucher */
-        $voucher = DiscountCode::whereFullCode($voucherCode)
-            ->whereIsUsed(false)
-            ->whereIsDisabled(false)
+        $voucher = DiscountCode::where('full_code', $voucherCode)
+            ->where('is_used', false)
+            ->where('is_disabled', false)
             ->first();
 
         /** @var DiscountTemplate $voucher */
@@ -1526,20 +1401,6 @@ class ShoppingCartController extends Controller
         return $filteredDiscounts;
     }
 
-    private function mapDiscountFormat(Collection $discounts): Collection
-    {
-        // Extract required keys per discount
-        $mappedDiscounts = $discounts->map(function ($item) {
-            return [
-                'code' => $item['prefix'],
-                'title' => $item['title'],
-                'description' => $item['description'],
-            ];
-        });
-
-        return $mappedDiscounts;
-    }
-
     private function getGiftItems(Collection $cartItems, Collection $discounts): array
     {
         // Validate parameters
@@ -1548,7 +1409,7 @@ class ShoppingCartController extends Controller
 
         // Filter discounts with matching discount_type of BUY_X_GET_Y_FREE
         $discounts = $discounts->filter(function ($item) {
-            return $item->discount_type === DiscountTemplateDiscountType::BUY_X_GET_Y_FREE;
+            return $item->discount_type === DiscountTemplateDiscountType::BUY_X_GET_Y_FREE->value;
         });
 
         $giftItems = [];
@@ -1636,8 +1497,8 @@ class ShoppingCartController extends Controller
         // Filter discounts with PRICE and PERCENTAGE discount_type only
         $discounts = $discounts->filter(function ($item) {
             return in_array($item->discount_type, [
-                DiscountTemplateDiscountType::PRICE,
-                DiscountTemplateDiscountType::PERCENTAGE
+                DiscountTemplateDiscountType::PRICE->value,
+                DiscountTemplateDiscountType::PERCENTAGE->value
             ]);
         })
             ->sortByDesc('discount_value');
@@ -1648,10 +1509,10 @@ class ShoppingCartController extends Controller
         foreach ($discounts as $discount) {
             $deductedPrice = 0;
             switch ($discount->discount_type) {
-                case DiscountTemplateDiscountType::PRICE:
+                case DiscountTemplateDiscountType::PRICE->value:
                     $deductedPrice = $discount->discount_value;
                     break;
-                case DiscountTemplateDiscountType::PERCENTAGE:
+                case DiscountTemplateDiscountType::PERCENTAGE->value:
                     $deductedPrice = $price * (($discount->discount_value) / 100);
                     break;
                 default:
@@ -1666,16 +1527,15 @@ class ShoppingCartController extends Controller
 
     private function getShippingFee($price, Collection $applicableDiscounts, ?string $courierID = null)
     {
-        // Filter if FREE_SHIPPING discount has already been applied
+        if (is_null($courierID)) return 0;
+
         $discount = $applicableDiscounts->first(function ($item) {
-            return $item->template_type === DiscountTemplateType::FREE_SHIPPING;
+            return $item->template_type === DiscountTemplateType::FREE_SHIPPING->value;
         });
         if (!is_null($discount)) return 0;
 
-        if (is_null($courierID)) return 0;
         /** @var Courier $courier */
         $courier = Courier::find($courierID);
-
         return !is_null($courier) ?
             $courier->getShippingFeeByTotalFee($price) :
             0;

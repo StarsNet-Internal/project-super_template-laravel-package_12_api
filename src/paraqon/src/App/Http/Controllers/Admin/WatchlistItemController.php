@@ -2,36 +2,28 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
-use App\Constants\Model\LoginType;
-use App\Constants\Model\ShipmentDeliveryStatus;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-
-use Carbon\Carbon;
-use App\Models\Store;
-use App\Models\Configuration;
-use App\Models\Order;
-use App\Models\ShoppingCartItem;
-use Starsnet\Project\Paraqon\App\Models\AuctionLot;
-use Starsnet\Project\Paraqon\App\Models\Deposit;
-use Starsnet\Project\Paraqon\App\Models\ProductStorageRecord;
-use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
-use App\Models\Customer;
-
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Arr;
+
+// Enums
+use App\Enums\LoginType;
+
+// Models
+use App\Models\Customer;
+use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
 class WatchlistItemController extends Controller
 {
-    public function getAllWatchlistedCustomers(Request $request)
+    public function getAllWatchlistedCustomers(Request $request): Collection
     {
-        $queryParams = $request->query();
+        // Exclude pagination/sorting params before filtering
+        $filterParams = Arr::except($request->query(), ['per_page', 'page', 'sort_by', 'sort_order']);
 
         $watchlistItemQuery = WatchlistItem::query();
-
-        foreach ($queryParams as $key => $value) {
-            if (in_array($key, ['per_page', 'page', 'sort_by', 'sort_order'])) {
-                continue;
-            }
-
+        foreach ($filterParams as $key => $value) {
             $watchlistItemQuery->where($key, $value);
         }
 
@@ -42,20 +34,13 @@ class WatchlistItemController extends Controller
             ->all();
 
         // Get Customer(s)
-        /** @var Collection $customers */
-        $customers = Customer::objectIDs($customerIDs)
+        return Customer::whereIn('_id', $customerIDs)
             ->whereHas('account', function ($query) {
                 $query->whereHas('user', function ($query2) {
-                    $query2->where('type', '!=', LoginType::TEMP);
+                    $query2->where('type', '!=', LoginType::TEMP->value);
                 });
             })
-            ->with([
-                'account',
-                'account.user'
-            ])
+            ->with(['account', 'account.user'])
             ->get();
-
-        // Return Customer(s)
-        return $customers;
     }
 }

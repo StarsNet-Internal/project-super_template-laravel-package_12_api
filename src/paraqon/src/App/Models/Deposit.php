@@ -2,55 +2,35 @@
 
 namespace Starsnet\Project\Paraqon\App\Models;
 
-// Constants
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\Status;
+// Default
+use Illuminate\Support\Str;
+use MongoDB\Laravel\Eloquent\Model;
+use MongoDB\Laravel\Relations\BelongsTo;
+use MongoDB\Laravel\Relations\EmbedsMany;
 
 // Traits
-use App\Traits\Model\ObjectIDTrait;
-use App\Traits\Model\StatusFieldTrait;
+use App\Models\Traits\ObjectIDTrait;
+use App\Models\Traits\StatusFieldTrait;
 
-// Laravel classes and MongoDB relationships, default import
-use Illuminate\Support\Collection;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
-use Jenssegers\Mongodb\Eloquent\Model as Eloquent;
-use Jenssegers\Mongodb\Relations\EmbedsMany;
-use Jenssegers\Mongodb\Relations\EmbedsOne;
+// Enums
+use App\Enums\CollectionName;
+use App\Enums\ReplyStatus;
+use App\Enums\Status;
 
+// Models
 use App\Models\Account;
-use App\Models\Configuration;
 use App\Models\Customer;
-use App\Models\Product;
-use App\Models\ProductVariant;
-use App\Models\Store;
-use App\Traits\Model\NestedAttributeTrait;
-use Starsnet\Project\Paraqon\App\Models\Bid;
-use Illuminate\Support\Str;
 
-class Deposit extends Eloquent
+class Deposit extends Model
 {
     use ObjectIDTrait,
-        StatusFieldTrait,
-        NestedAttributeTrait;
+        StatusFieldTrait;
 
-    /**
-     * Define database connection.
-     *
-     * @var string
-     */
+    // Connection
     protected $connection = 'mongodb';
+    protected $collection = CollectionName::DEPOSIT->value;
 
-    /**
-     * The database collection used by the model.
-     *
-     * @var string
-     */
-    protected $collection = 'deposits';
-
+    // Attributes
     protected $attributes = [
         // Relationships
         'requested_by_customer_id' => null,
@@ -79,31 +59,17 @@ class Deposit extends Eloquent
         ],
         'current_deposit_status' => null,
         'deposit_statuses' => [],
-        'status' => Status::ACTIVE,
-        'reply_status' => ReplyStatus::PENDING,
+        'status' => Status::ACTIVE->value,
+        'reply_status' => ReplyStatus::PENDING->value,
         'permission_type' => null,
         'remarks' => null,
 
         // Timestamps
     ];
 
-    protected $dates = [
-        'deleted_at'
-    ];
-
-    protected $casts = [];
-
-    protected $appends = [];
-
-    /**
-     * Blacklisted model properties from doing mass assignment.
-     * None are blacklisted by default for flexibility.
-     * 
-     * @var array
-     */
     protected $guarded = [];
-
-    protected $hidden = [];
+    protected $appends = ['_id'];
+    protected $hidden = ['id'];
 
     // -----------------------------
     // Relationship Begins
@@ -192,6 +158,7 @@ class Deposit extends Eloquent
             'slug' => $slug,
             'remarks' => $remarks
         ];
+        /** @var DepositStatus $status */
         $status = $this->depositStatuses()->create($attributes);
 
         // Update current_status
@@ -205,14 +172,6 @@ class Deposit extends Eloquent
         $slug = Str::slug($slug);
         $this->current_deposit_status = $slug;
         return $this->save();
-    }
-
-    public function updateOnlineResponse($response): bool
-    {
-        $attributes = [
-            'online.api_response' => $response
-        ];
-        return $this->updateNestedAttributes($attributes);
     }
 
     // -----------------------------

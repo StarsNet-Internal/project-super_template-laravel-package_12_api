@@ -2,17 +2,23 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
-use App\Constants\Model\Status;
+// Laravel built-in
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
+
+// Enums
+use App\Enums\Status;
+
+// Models
 use Starsnet\Project\Paraqon\App\Models\ConsignmentRequest;
 
 class ConsignmentRequestController extends Controller
 {
-    public function createConsignmentRequest(Request $request)
+    public function createConsignmentRequest(Request $request): array
     {
-        // Create ConsignmentRequest
+        /** @var ConsignmentRequest $form */
         $form = ConsignmentRequest::create($request->except('items'));
 
         // Create ConsignmentRequestItem(s)
@@ -25,81 +31,59 @@ class ConsignmentRequestController extends Controller
             'requested_items_qty' => $requestItemsCount
         ]);
 
-        return response()->json([
+        return [
             'message' => 'Created New ConsignmentRequest successfully',
-            '_id' => $form->_id
-        ], 200);
+            'id' => $form->id
+        ];
     }
 
-    private function filterConsignmentRequests(array $queryParams = []): Collection
+    public function getAllConsignmentRequests(Request $request): Collection
     {
+        // Exclude pagination/sorting params before filtering
+        $filterParams = Arr::except($request->query(), ['per_page', 'page', 'sort_by', 'sort_order']);
+
         // Exclude all deleted documents first
-        $query = ConsignmentRequest::where('status', '!=', Status::DELETED);
+        $query = ConsignmentRequest::with(['requestedCustomer', 'approvedAccount', 'items'])
+            ->where('status', '!=', Status::DELETED->value);
 
-        // Chain all string matching query
-        foreach ($queryParams as $key => $value) {
-            if (in_array($key, ['per_page', 'page', 'sort_by', 'sort_order'])) {
-                continue;
-            }
-
+        foreach ($filterParams as $key => $value) {
             $query = $query->where($key, $value);
         }
 
-        return $query->with([
+        return $query->get();
+    }
+
+    public function getConsignmentRequestDetails(Request $request): ?ConsignmentRequest
+    {
+        return ConsignmentRequest::with([
             'requestedCustomer',
             'approvedAccount',
             'items'
-        ])->get();
+        ])
+            ->find($request->route('id'));
     }
 
-    public function getAllConsignmentRequests(Request $request)
+    public function updateConsignmentRequestDetails(Request $request): array
     {
-        $forms = $this->filterConsignmentRequests($request->all());
-        return $forms;
+        /** @var ConsignmentRequest $consignmentRequest*/
+        $consignmentRequest = ConsignmentRequest::find($request->route('id'));
+        if (is_null($consignmentRequest)) abort(404, 'ConsignmentRequest not found');
+
+        $consignmentRequest->update($request->all());
+
+        return ['message' => 'ConsignmentRequest updated successfully'];
     }
 
-    public function getConsignmentRequestDetails(Request $request)
+    public function approveConsignmentRequest(Request $request): array
     {
-        $consignment = ConsignmentRequest::with([
-            'requestedCustomer',
-            'approvedAccount',
-            'items'
-        ])->find($request->route('id'));
-
-        return $consignment;
-    }
-
-    public function updateConsignmentRequestDetails(Request $request)
-    {
-        $consignmentID = $request->route('id');
-
-        $consignment = ConsignmentRequest::find($consignmentID);
-
-        if (is_null($consignment)) {
-            return response()->json([
-                'message' => 'ConsignmentRequest not found'
-            ], 404);
-        }
-
-        $attributes = $request->all();
-        $consignment->update($attributes);
-
-        return response()->json([
-            'message' => 'ConsignmentRequest updated successfully'
-        ]);
-    }
-
-    public function approveConsignmentRequest(Request $request)
-    {
-        $form = ConsignmentRequest::find($request->route('id'));
-
-        // Associate relationships
-        $form->associateApprovedAccount($this->account());
+        /** @var ConsignmentRequest $consignmentRequest*/
+        $consignmentRequest = ConsignmentRequest::find($request->route('id'));
+        if (is_null($consignmentRequest)) abort(404, 'ConsignmentRequest not found');
 
         // Update ConsignmentRequestItem(s)
         $approvedItemCount = 0;
         foreach ($request->items as $item) {
-            $formItem = $form->items()->where('_id', $item['_id'])->first();
+            $formItem = $consignmentRequest->items()->where('_id', $item['_id'])->first();
             if (is_null($formItem)) continue;
             unset($item['_id']);
             $formItem->update($item);
@@ -108,20 +92,21 @@ class ConsignmentRequestController extends Controller
 
         // Update ConsignmentRequest
         $formAttributes = [
-            "requested_by_account_id" => $request->requested_by_account_id,
-            "approved_items_qty" => $approvedItemCount,
-            "reply_status" => $request->reply_status,
+            'approved_by_account_id' => $this->account()->id,
+            'requested_by_account_id' => $request->requested_by_account_id,
+            'approved_items_qty' => $approvedItemCount,
+            'reply_status' => $request->reply_status,
         ];
         $formAttributes = array_filter($formAttributes, function ($value) {
             return !is_null($value) && $value != "";
         });
-        $form->update($formAttributes);
+        $consignmentRequest->update($formAttributes);
 
-        return response()->json([
+        return [
             'message' => 'Approved ConsignmentRequest successfully',
-            '_id' => $form->_id,
-            'requested_items_qty' => $form->requested_items_qty,
+            '_id' => $consignmentRequest->id,
+            'requested_items_qty' => $consignmentRequest->requested_items_qty,
             'approved_items_qty' => $approvedItemCount
-        ], 200);
+        ];
     }
 }

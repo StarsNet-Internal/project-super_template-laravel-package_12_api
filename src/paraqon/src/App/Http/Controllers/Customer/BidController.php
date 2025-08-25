@@ -2,86 +2,47 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Configuration;
-use App\Models\Product;
-use App\Models\Store;
-use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Carbon\Carbon;
+
+// Enums
+use App\Enums\Status;
+
+// Models
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Bid;
 use Starsnet\Project\Paraqon\App\Models\BidHistory;
-use Starsnet\Project\Paraqon\App\Models\ConsignmentRequest;
 
 class BidController extends Controller
 {
-    public function getAllBids(Request $request)
+    public function getAllBids(): Collection
     {
-        $customer = $this->customer();
-
-        $bids = Bid::where('customer_id', $customer->id)
+        return Bid::where('customer_id', $this->customer()->id)
             ->where('is_hidden', false)
-            ->with([
-                'store',
-                'product',
-                'auctionLot'
-            ])
+            ->with(['store', 'product', 'auctionLot'])
             ->get();
-
-        return $bids;
     }
 
-    public function cancelBid(Request $request)
+    public function cancelBid(Request $request): array
     {
-        // Extract attributes from request
-        $bidID = $request->route('id');
-        $bid = Bid::find($bidID);
-
-        // Validate Bid
-        if (is_null($bid)) {
-            return response()->json([
-                'message' => 'Bid not found'
-            ], 404);
-        }
-
-        $customer = $this->customer();
-
-        if ($bid->customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'You cannot cancel bids that are not placed by your account'
-            ], 404);
-        }
-
-        // Validate AuctionLot
-        $auctionLot = $bid->auctionLot;
-
-        if (is_null($auctionLot)) {
-            return response()->json([
-                'message' => 'Auction Lot not found'
-            ], 404);
-        }
-
-        if ($auctionLot->status == Status::DELETED) {
-            return response()->json([
-                'message' => 'Auction Lot not found'
-            ], 404);
-        }
-
-        if ($auctionLot->status == Status::ACTIVE) {
-            return response()->json([
-                'message' => 'You cannot cancel ADVANCED bid when the auction lot is already ACTIVE'
-            ], 404);
-        }
-
         $now = now();
-        if ($now >= Carbon::parse($auctionLot->start_datetime)) {
-            return response()->json([
-                'message' => 'You cannot cancel ADVANCED bid when the auction lot has already started'
-            ], 404);
-        }
+
+        /** @var ?Bid $bid */
+        $bid = Bid::find($request->route('id'));
+        if (is_null($bid)) abort(404, 'Bid not found');
+
+        $customer = $this->customer();
+        if ($bid->customer_id != $customer->_id) abort(400, 'You cannot cancel bids that are not placed by your account');
+
+        /** @var ?AuctionLot $auctionLot */
+        $auctionLot = $bid->auctionLot;
+        if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
+        if ($auctionLot->status == Status::DELETED->value) abort(404, 'AuctionLot not found');
+        if ($auctionLot->status == Status::ACTIVE->value) abort(404, 'You cannot cancel ADVANCED bid when the auction lot is already ACTIVE');
+        if ($now >= Carbon::parse($auctionLot->start_datetime)) abort(404, 'You cannot cancel ADVANCED bid when the auction lot is already ACTIVE');
 
         // Update Bid
         $bid->update(['is_hidden' => true]);
@@ -89,7 +50,6 @@ class BidController extends Controller
         // Update BidHistory and AuctionLot
         if ($bid->type == 'ADVANCED') {
             $auctionLotID = $auctionLot->_id;
-
             $bidHistory = BidHistory::where('auction_lot_id', $auctionLotID)->first();
             if ($bidHistory == null) {
                 $bidHistory = BidHistory::create([
@@ -107,7 +67,7 @@ class BidController extends Controller
 
             // Find winningCustomerID
             $auctionLotMaximumBid = Bid::where('auction_lot_id', $auctionLotID)
-                ->where('is_hidden',  false)
+                ->where('is_hidden', false)
                 ->orderBy('bid', 'desc')
                 ->first();
 
@@ -150,59 +110,23 @@ class BidController extends Controller
             }
         }
 
-        return response()->json([
-            'message' => 'Bid cancelled successfully'
-        ], 200);
+        return ['message' => 'Bid cancelled successfully'];
     }
 
-    public function cancelLiveBid(Request $request)
+    public function cancelLiveBid(Request $request): array
     {
-        // Extract attributes from request
-        $bidID = $request->route('id');
-        $bid = Bid::find($bidID);
-
-        // Validate Bid
-        if (is_null($bid)) {
-            return response()->json([
-                'message' => 'Bid not found'
-            ], 404);
-        }
+        /** @var ?Bid $bid */
+        $bid = Bid::find($request->route('id'));
+        if (is_null($bid)) abort(404, 'Bid not found');
 
         $customer = $this->customer();
-
-        if ($bid->customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'You cannot cancel bids that are not placed by your account'
-            ], 404);
-        }
+        if ($bid->customer_id != $customer->id) abort(404, 'You cannot cancel bids that are not placed by your account');
 
         // Validate AuctionLot
         $auctionLot = $bid->auctionLot;
-
-        if (is_null($auctionLot)) {
-            return response()->json([
-                'message' => 'Auction Lot not found'
-            ], 404);
-        }
-
-        if ($auctionLot->status == Status::DELETED) {
-            return response()->json([
-                'message' => 'Auction Lot not found'
-            ], 404);
-        }
-
-        if ($auctionLot->status == Status::ACTIVE) {
-            return response()->json([
-                'message' => 'You cannot cancel ADVANCED bid when the auction lot is already ACTIVE'
-            ], 404);
-        }
-
-        // $now = now();
-        // if ($now >= Carbon::parse($auctionLot->start_datetime)) {
-        //     return response()->json([
-        //         'message' => 'You cannot cancel ADVANCED bid when the auction lot has already started'
-        //     ], 404);
-        // }
+        if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
+        if ($auctionLot->status == Status::DELETED->value) abort(404, 'AuctionLot not found');
+        if ($auctionLot->status == Status::ACTIVE->value) abort(404, 'You cannot cancel ADVANCED bid when the auction lot is already ACTIVE');
 
         // Update Bid
         $bid->update(['is_hidden' => true]);
@@ -228,7 +152,7 @@ class BidController extends Controller
 
             // Find winningCustomerID
             $auctionLotMaximumBid = Bid::where('auction_lot_id', $auctionLotID)
-                ->where('is_hidden',  false)
+                ->where('is_hidden', false)
                 ->orderBy('bid', 'desc')
                 ->first();
 
@@ -271,8 +195,6 @@ class BidController extends Controller
             }
         }
 
-        return response()->json([
-            'message' => 'Bid cancelled successfully'
-        ], 200);
+        return ['message' => 'Bid cancelled successfully'];
     }
 }

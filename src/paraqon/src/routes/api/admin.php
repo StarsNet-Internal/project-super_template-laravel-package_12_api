@@ -6,7 +6,6 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\AccountController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\AuctionController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\AuctionLotController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\AuctionRegistrationRequestController;
-use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\TestingController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\ConsignmentRequestController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\CustomerController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\CustomerGroupController;
@@ -15,13 +14,14 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\DocumentController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\ProductController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\BidController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\OrderController;
-use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\SeederController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\ServiceController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\ShoppingCartController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\LiveBiddingEventController;
+use StarsNet\Project\Paraqon\App\Http\Controllers\Admin\LocationHistoryController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\NotificationController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\WatchlistItemController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\VerificationCodeController;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\TestingController;
 
 /*
 |--------------------------------------------------------------------------
@@ -37,42 +37,19 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\VerificationCodeControll
 Route::group(
     ['prefix' => 'tests'],
     function () {
-        $defaultController = TestingController::class;
-
-        Route::get('/health-check', [$defaultController, 'healthCheck']);
-        Route::get('/order', [$defaultController, 'createOrder']);
+        Route::get('/health-check', [TestingController::class, 'healthCheck']);
+        Route::get('/order', [TestingController::class, 'createOrder']);
     }
 );
-
-Route::group(
-    ['prefix' => 'seeder'],
-    function () {
-        $defaultController = SeederController::class;
-
-        Route::get('/health-check', [$defaultController, 'healthCheck']);
-        Route::get('/from-store-to-orders', [$defaultController, 'fromStoreToOrders']);
-        Route::get('/stores/{store_id}/generate-orders', [$defaultController, 'generateAuctionOrders']);
-    }
-);
-
-// Route::group(
-//     ['prefix' => 'stores'],
-//     function () {
-//         $defaultController = AuctionController::class;
-//         Route::post('/', [$defaultController, 'createAuctionStore']);
-//     }
-// );
 
 Route::group(
     ['prefix' => 'accounts'],
     function () {
-        $defaultController = AccountController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::put('/{id}/verification', [$defaultController, 'updateAccountVerification']);
-                Route::put('/{id}/details', [$defaultController, 'updateAccountDetails']);
+            function () {
+                Route::put('/{id}/verification', [AccountController::class, 'updateAccountVerification']);
+                Route::put('/{id}/details', [AccountController::class, 'updateAccountDetails']);
             }
         );
     }
@@ -82,12 +59,10 @@ Route::group(
 Route::group(
     ['prefix' => 'verification-codes'],
     function () {
-        $defaultController = VerificationCodeController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getAllVerificationCodes'])->middleware(['pagination']);
+            function () {
+                Route::get('/all', [VerificationCodeController::class, 'getAllVerificationCodes'])->middleware(['pagination']);
             }
         );
     }
@@ -96,30 +71,28 @@ Route::group(
 Route::group(
     ['prefix' => 'auctions'],
     function () {
-        $defaultController = AuctionController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::put('/statuses', [$defaultController, 'updateAuctionStatuses']);
-                Route::get('/{store_id}/archive', [$defaultController, 'archiveAllAuctionLots']);
-                Route::get('/{store_id}/orders/create', [$defaultController, 'generateAuctionOrders']);
+            function () {
+                Route::put('/statuses', [AuctionController::class, 'updateAuctionStatuses']);
+                Route::get('/{store_id}/archive', [AuctionController::class, 'archiveAllAuctionLots']);
+                Route::get('/{store_id}/orders/create', [AuctionController::class, 'generateAuctionOrders']);
 
-                Route::get('/{store_id}/auction-registration-requests/all', [$defaultController, 'getAllAuctionRegistrationRequests'])->middleware(['pagination']);
+                Route::get('/{store_id}/auction-registration-requests/all', [AuctionController::class, 'getAllAuctionRegistrationRequests'])->middleware(['pagination']);
 
-                Route::get('/{store_id}/registered-users', [$defaultController, 'getAllRegisteredUsers'])->middleware(['pagination']);
-                Route::put('/{store_id}/registered-users/{customer_id}/remove', [$defaultController, 'removeRegisteredUser']);
-                Route::put('/{store_id}/registered-users/{customer_id}/add', [$defaultController, 'addRegisteredUser']);
+                Route::get('/{store_id}/registered-users', [AuctionController::class, 'getAllRegisteredUsers'])->middleware(['pagination']);
+                Route::put('/{store_id}/registered-users/{customer_id}/remove', [AuctionController::class, 'removeRegisteredUser']);
+                Route::put('/{store_id}/registered-users/{customer_id}/add', [AuctionController::class, 'addRegisteredUser']);
 
-                Route::get('/{store_id}/categories/all', [$defaultController, 'getAllCategories'])->middleware(['pagination']);
-                Route::get('/{store_id}/registration-records', [$defaultController, 'getAllAuctionRegistrationRecords'])->middleware(['pagination']);
-                Route::put('/products/{product_id}/categories/assign', [$defaultController, 'syncCategoriesToProduct']);
-                Route::get('/all', [$defaultController, 'getAllAuctions'])->middleware(['pagination']);
+                Route::get('/{store_id}/categories/all', [AuctionController::class, 'getAllCategories'])->middleware(['pagination']);
+                Route::get('/{store_id}/registration-records', [AuctionController::class, 'getAllAuctionRegistrationRecords'])->middleware(['pagination']);
+                Route::put('/products/{product_id}/categories/assign', [AuctionController::class, 'syncCategoriesToProduct']);
+                Route::get('/all', [AuctionController::class, 'getAllAuctions'])->middleware(['pagination']);
 
-                Route::get('/{store_id}/auction-lots/unpaid', [$defaultController, 'getAllUnpaidAuctionLots'])->middleware(['pagination']);
-                Route::put('/{store_id}/auction-lots/return', [$defaultController, 'returnAuctionLotToOriginalCustomer']);
+                Route::get('/{store_id}/auction-lots/unpaid', [AuctionController::class, 'getAllUnpaidAuctionLots'])->middleware(['pagination']);
+                Route::put('/{store_id}/auction-lots/return', [AuctionController::class, 'returnAuctionLotToOriginalCustomer']);
 
-                Route::get('/{store_id}/close', [$defaultController, 'closeAllNonDisabledLots']);
+                Route::get('/{store_id}/close', [AuctionController::class, 'closeAllNonDisabledLots']);
             }
         );
     }
@@ -128,23 +101,21 @@ Route::group(
 Route::group(
     ['prefix' => 'auction-lots'],
     function () {
-        $defaultController = AuctionLotController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/', [$defaultController, 'createAuctionLot']);
-                Route::get('/all', [$defaultController, 'getAllAuctionLots'])->middleware(['pagination']);
-                Route::get('/{id}/details', [$defaultController, 'getAuctionLotDetails']);
-                Route::get('/{id}/bids/all', [$defaultController, 'getAllAuctionLotBids'])->middleware(['pagination']);
-                Route::put('/mass-update', [$defaultController, 'massUpdateAuctionLots']);
-                Route::put('/{id}/details', [$defaultController, 'updateAuctionLotDetails']);
-                Route::put('/delete', [$defaultController, 'deleteAuctionLots']);
+            function () {
+                Route::post('/', [AuctionLotController::class, 'createAuctionLot']);
+                Route::get('/all', [AuctionLotController::class, 'getAllAuctionLots'])->middleware(['pagination']);
+                Route::get('/{id}/details', [AuctionLotController::class, 'getAuctionLotDetails']);
+                Route::get('/{id}/bids/all', [AuctionLotController::class, 'getAllAuctionLotBids'])->middleware(['pagination']);
+                Route::put('/mass-update', [AuctionLotController::class, 'massUpdateAuctionLots']);
+                Route::put('/{id}/details', [AuctionLotController::class, 'updateAuctionLotDetails']);
+                Route::put('/delete', [AuctionLotController::class, 'deleteAuctionLots']);
 
                 // Live Auction
-                Route::post('/{auction_lot_id}/live-bids', [$defaultController, 'createLiveBid']);
-                Route::get('/{auction_lot_id}/reset', [$defaultController, 'resetAuctionLot']);
-                Route::put('/{auction_lot_id}/bid-histories/last', [$defaultController, 'updateBidHistoryLastItem']);
+                Route::post('/{auction_lot_id}/live-bids', [AuctionLotController::class, 'createLiveBid']);
+                Route::get('/{auction_lot_id}/reset', [AuctionLotController::class, 'resetAuctionLot']);
+                Route::put('/{auction_lot_id}/bid-histories/last', [AuctionLotController::class, 'updateBidHistoryLastItem']);
             }
         );
     }
@@ -153,16 +124,14 @@ Route::group(
 Route::group(
     ['prefix' => 'auction-registrations'],
     function () {
-        $defaultController = AuctionRegistrationRequestController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/register', [$defaultController, 'registerAuction']);
-                Route::get('/all', [$defaultController, 'getAllRegisteredAuctions'])->middleware(['pagination']);
-                // Route::post('/{id}/deposit', [$defaultController, 'createDeposit']);
-                Route::put('/{id}/archive', [$defaultController, 'archiveAuctionRegistrationRequest']);
-                Route::put('/{id}/details', [$defaultController, 'updateAuctionRegistrationRequest']);
+            function () {
+                Route::post('/register', [AuctionRegistrationRequestController::class, 'registerAuction']);
+                Route::get('/all', [AuctionRegistrationRequestController::class, 'getAllRegisteredAuctions'])->middleware(['pagination']);
+                // Route::post('/{id}/deposit', [AuctionRegistrationRequestController::class, 'createDeposit']);
+                Route::put('/{id}/archive', [AuctionRegistrationRequestController::class, 'archiveAuctionRegistrationRequest']);
+                Route::put('/{id}/details', [AuctionRegistrationRequestController::class, 'updateAuctionRegistrationRequest']);
             }
         );
     }
@@ -171,16 +140,14 @@ Route::group(
 Route::group(
     ['prefix' => 'consignments'],
     function () {
-        $defaultController = ConsignmentRequestController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getAllConsignmentRequests'])->middleware(['pagination']);
-                Route::post('/', [$defaultController, 'createConsignmentRequest']);
-                Route::get('/{id}/details', [$defaultController, 'getConsignmentRequestDetails']);
-                Route::put('/{id}/details', [$defaultController, 'updateConsignmentRequestDetails']);
-                Route::put('/{id}/approve', [$defaultController, 'approveConsignmentRequest']);
+            function () {
+                Route::get('/all', [ConsignmentRequestController::class, 'getAllConsignmentRequests'])->middleware(['pagination']);
+                Route::post('/', [ConsignmentRequestController::class, 'createConsignmentRequest']);
+                Route::get('/{id}/details', [ConsignmentRequestController::class, 'getConsignmentRequestDetails']);
+                Route::put('/{id}/details', [ConsignmentRequestController::class, 'updateConsignmentRequestDetails']);
+                Route::put('/{id}/approve', [ConsignmentRequestController::class, 'approveConsignmentRequest']);
             }
         );
     }
@@ -189,18 +156,16 @@ Route::group(
 Route::group(
     ['prefix' => 'customers'],
     function () {
-        $defaultController = CustomerController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/login', [$defaultController, 'loginAsCustomer']);
-                Route::get('/all', [$defaultController, 'getAllCustomers'])->middleware(['pagination']);
-                Route::get('/{id}/details', [$defaultController, 'getCustomerDetails']);
-                Route::get('/{customer_id}/products/all', [$defaultController, 'getAllOwnedProducts'])->middleware(['pagination']);
-                Route::get('/{customer_id}/auction-lots/all', [$defaultController, 'getAllOwnedAuctionLots'])->middleware(['pagination']);
-                Route::get('/{customer_id}/bids/all', [$defaultController, 'getAllBids'])->middleware(['pagination']);
-                Route::put('/{customer_id}/bids/{bid_id}/hide', [$defaultController, 'hideBid']);
+            function () {
+                Route::post('/login', [CustomerController::class, 'loginAsCustomer']);
+                Route::get('/all', [CustomerController::class, 'getAllCustomers'])->middleware(['pagination']);
+                Route::get('/{id}/details', [CustomerController::class, 'getCustomerDetails']);
+                Route::get('/{customer_id}/products/all', [CustomerController::class, 'getAllOwnedProducts'])->middleware(['pagination']);
+                Route::get('/{customer_id}/auction-lots/all', [CustomerController::class, 'getAllOwnedAuctionLots'])->middleware(['pagination']);
+                Route::get('/{customer_id}/bids/all', [CustomerController::class, 'getAllBids'])->middleware(['pagination']);
+                Route::put('/{customer_id}/bids/{bid_id}/hide', [CustomerController::class, 'hideBid']);
             }
         );
     }
@@ -210,13 +175,11 @@ Route::group(
 Route::group(
     ['prefix' => 'customer-groups'],
     function () {
-        $defaultController = CustomerGroupController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/{id}/customers/assign', [$defaultController, 'getCustomerGroupAssignedCustomers'])->middleware(['pagination']);
-                Route::get('/{id}/customers/unassign', [$defaultController, 'getCustomerGroupUnassignedCustomers'])->middleware(['pagination']);
+            function () {
+                Route::get('/{id}/customers/assign', [CustomerGroupController::class, 'getCustomerGroupAssignedCustomers'])->middleware(['pagination']);
+                Route::get('/{id}/customers/unassign', [CustomerGroupController::class, 'getCustomerGroupUnassignedCustomers'])->middleware(['pagination']);
             }
         );
     }
@@ -225,15 +188,13 @@ Route::group(
 Route::group(
     ['prefix' => 'documents'],
     function () {
-        $defaultController = DocumentController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/', [$defaultController, 'createDocument']);
-                Route::get('/all', [$defaultController, 'getAllDocuments'])->middleware(['pagination']);
-                Route::get('/{id}/details', [$defaultController, 'getDocumentDetails']);
-                Route::put('/{id}/details', [$defaultController, 'updateDocumentDetails']);
+            function () {
+                Route::post('/', [DocumentController::class, 'createDocument']);
+                Route::get('/all', [DocumentController::class, 'getAllDocuments'])->middleware(['pagination']);
+                Route::get('/{id}/details', [DocumentController::class, 'getDocumentDetails']);
+                Route::put('/{id}/details', [DocumentController::class, 'updateDocumentDetails']);
             }
         );
     }
@@ -242,41 +203,33 @@ Route::group(
 Route::group(
     ['prefix' => 'services'],
     function () {
-        $defaultController = ServiceController::class;
+        Route::put('/auctions/statuses', [ServiceController::class, 'updateAuctionStatuses']);
+        Route::put('/auction-lots/statuses', [ServiceController::class, 'updateAuctionLotStatuses']);
+        Route::put('/auction-lots/{auction_lot_id}/extend', [ServiceController::class, 'extendAuctionLotEndDateTime']);
 
-        Route::put('/auctions/statuses', [$defaultController, 'updateAuctionStatuses']);
-        Route::put('/auction-lots/statuses', [$defaultController, 'updateAuctionLotStatuses']);
-        Route::put('/auction-lots/{auction_lot_id}/extend', [$defaultController, 'extendAuctionLotEndDateTime']);
+        Route::post('/payment/callback', [ServiceController::class, 'paymentCallback']);
+        Route::post('/auctions/{store_id}/orders/create', [ServiceController::class, 'generateAuctionOrdersAndRefundDeposits']);
+        Route::post('/auctions/{store_id}/orders/create-live', [ServiceController::class, 'generateLiveAuctionOrdersAndRefundDeposits']);
 
-        Route::post('/payment/callback', [$defaultController, 'paymentCallback']);
-        Route::post('/auctions/{store_id}/orders/create', [$defaultController, 'generateAuctionOrdersAndRefundDeposits']);
-        Route::post('/auctions/{store_id}/orders/create-live', [$defaultController, 'generateLiveAuctionOrdersAndRefundDeposits']);
+        Route::post('/deposits/return', [ServiceController::class, 'returnDeposit']);
+        Route::post('/orders/paid', [ServiceController::class, 'confirmOrderPaid']);
 
-        Route::post('/deposits/return', [$defaultController, 'returnDeposit']);
-        Route::post('/orders/paid', [$defaultController, 'confirmOrderPaid']);
-
-        Route::get('/auctions/{store_id}/state', [$defaultController, 'getAuctionCurrentState']);
-
-        // Route::group(
-        //     ['middleware' => 'auth:api'],
-        //     function () use ($defaultController) {}
-        // );
+        Route::get('/auctions/{store_id}/state', [ServiceController::class, 'getAuctionCurrentState']);
     }
 );
 
 Route::group(
     ['prefix' => 'deposits'],
     function () {
-        $defaultController = DepositController::class;
 
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getAllDeposits'])->middleware(['pagination']);
-                Route::get('/{id}/details', [$defaultController, 'getDepositDetails']);
-                Route::put('/{id}/details', [$defaultController, 'updateDepositDetails']);
-                Route::put('/{id}/approve', [$defaultController, 'approveDeposit']);
-                Route::put('/{id}/cancel', [$defaultController, 'cancelDeposit']);
+            function () {
+                Route::get('/all', [DepositController::class, 'getAllDeposits'])->middleware(['pagination']);
+                Route::get('/{id}/details', [DepositController::class, 'getDepositDetails']);
+                Route::put('/{id}/details', [DepositController::class, 'updateDepositDetails']);
+                Route::put('/{id}/approve', [DepositController::class, 'approveDeposit']);
+                Route::put('/{id}/cancel', [DepositController::class, 'cancelDeposit']);
             }
         );
     }
@@ -285,16 +238,14 @@ Route::group(
 Route::group(
     ['prefix' => 'orders'],
     function () {
-        $defaultController = OrderController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getAllAuctionOrders'])->middleware(['pagination']);
-                Route::put('/{order_id}/upload', [$defaultController, 'uploadPaymentProofAsCustomer']);
-                Route::put('/{order_id}/details', [$defaultController, 'updateOrderDetails']);
-                Route::get('/{id}/invoice/{language}', [$defaultController, 'getInvoiceData']);
-                Route::put('/{id}/offline-payment', [$defaultController, 'approveOrderOfflinePayment']);
+            function () {
+                Route::get('/all', [OrderController::class, 'getAllAuctionOrders'])->middleware(['pagination']);
+                Route::put('/{order_id}/upload', [OrderController::class, 'uploadPaymentProofAsCustomer']);
+                Route::put('/{order_id}/details', [OrderController::class, 'updateOrderDetails']);
+                Route::get('/{id}/invoice/{language}', [OrderController::class, 'getInvoiceData']);
+                Route::put('/{id}/offline-payment', [OrderController::class, 'approveOrderOfflinePayment']);
             }
         );
     }
@@ -303,12 +254,10 @@ Route::group(
 Route::group(
     ['prefix' => 'shopping-cart'],
     function () {
-        $defaultController = ShoppingCartController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getShoppingCartItems'])->middleware(['pagination']);
+            function () {
+                Route::get('/all', [ShoppingCartController::class, 'getShoppingCartItems'])->middleware(['pagination']);
             }
         );
     }
@@ -317,12 +266,10 @@ Route::group(
 Route::group(
     ['prefix' => 'live-bidding'],
     function () {
-        $defaultController = LiveBiddingEventController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/{store_id}/events', [$defaultController, 'createEvent']);
+            function () {
+                Route::post('/{store_id}/events', [LiveBiddingEventController::class, 'createEvent']);
             }
         );
     }
@@ -332,9 +279,8 @@ Route::group(
 Route::group(
     ['prefix' => 'products'],
     function () {
-        $defaultController = ProductController::class;
-
-        Route::get('/all', [$defaultController, 'getAllProducts'])->middleware(['pagination']);
+        Route::get('/all', [ProductController::class, 'getAllProducts'])->middleware(['pagination']);
+        Route::post('/', [ProductController::class, 'createProduct']);
     }
 );
 
@@ -342,14 +288,12 @@ Route::group(
 Route::group(
     ['prefix' => 'notifications'],
     function () {
-        $defaultController = NotificationController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getAllNotifications'])->middleware(['pagination']);
-                Route::put('/read', [$defaultController, 'markNotificationsAsRead']);
-                Route::put('/{id}/delete', [$defaultController, 'deleteNotification']);
+            function () {
+                Route::get('/all', [NotificationController::class, 'getAllNotifications'])->middleware(['pagination']);
+                Route::put('/read', [NotificationController::class, 'markNotificationsAsRead']);
+                Route::put('/{id}/delete', [NotificationController::class, 'deleteNotification']);
             }
         );
     }
@@ -358,12 +302,10 @@ Route::group(
 Route::group(
     ['prefix' => 'watchlist'],
     function () {
-        $defaultController = WatchlistItemController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/customers/all', [$defaultController, 'getAllWatchlistedCustomers'])->middleware(['pagination']);
+            function () {
+                Route::get('/customers/all', [WatchlistItemController::class, 'getAllWatchlistedCustomers'])->middleware(['pagination']);
             }
         );
     }
@@ -372,14 +314,27 @@ Route::group(
 Route::group(
     ['prefix' => 'bids'],
     function () {
-        $defaultController = BidController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/auction-lots/{auction_lot_id}/max', [$defaultController, 'createOnlineBidByCustomer']);
-                Route::get('/customers/{customer_id}/all', [$defaultController, 'getCustomerAllBids'])->middleware(['pagination']);
-                Route::put('/{bid_id}/cancel', [$defaultController, 'cancelBidByCustomer']);
+            function () {
+                Route::post('/auction-lots/{auction_lot_id}/max', [BidController::class, 'createOnlineBidByCustomer']);
+                Route::get('/customers/{customer_id}/all', [BidController::class, 'getCustomerAllBids'])->middleware(['pagination']);
+                Route::put('/{bid_id}/cancel', [BidController::class, 'cancelBidByCustomer']);
+            }
+        );
+    }
+);
+
+
+Route::group(
+    ['prefix' => 'locations-histories'],
+    function () {
+        Route::group(
+            ['middleware' => 'auth:api'],
+            function () {
+                Route::get('/all', [LocationHistoryController::class, 'getAllLocationHistories'])->middleware(['pagination']);
+                Route::post('/products/{product_id}', [LocationHistoryController::class, 'createHistory']);
+                Route::put('/mass-update', [LocationHistoryController::class, 'massUpdateLocationHistories']);
             }
         );
     }

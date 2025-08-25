@@ -2,77 +2,52 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Product;
 use Illuminate\Http\Request;
-use Starsnet\Project\Paraqon\App\Models\PassedAuctionRecord;
+use Illuminate\Support\Collection;
+
+// Enums
+use App\Enums\Status;
+
+// Models
+use App\Models\Product;
 
 class ProductController extends Controller
 {
-    public function getAllOwnedProducts(Request $request)
+    public function getAllOwnedProducts(): Collection
     {
-        $customer = $this->customer();
-
         $products = Product::statusActive()
-            ->where('owned_by_customer_id', $customer->_id)
+            ->where('owned_by_customer_id', $this->customer()->id)
             ->whereIn('listing_status', ["AVAILABLE", "PENDING_FOR_AUCTION"])
             ->get();
 
         foreach ($products as $product) {
             $product->product_variant_id = optional($product->variants()->latest()->first())->_id;
-            // $passedAuctionCount = PassedAuctionRecord::where(
-            //     'customer_id',
-            //     $customer->_id
-            // )->where(
-            //     'product_id',
-            //     $product->_id
-            // )->count();
             $product->passed_auction_count = 0;
         }
 
         return $products;
     }
 
-    public function updateListingStatuses(Request $request)
+    public function updateListingStatuses(Request $request): array
     {
-        $items = $request->items;
-
-        foreach ($items as $item) {
-            $productID = $item['product_id'];
-            $listingStatus = $item['listing_status'];
-
-            $product = Product::find($productID);
-
+        foreach ($request->items as $item) {
+            $product = Product::find($item['product_id']);
             if (is_null($product)) continue;
-            $attributes = ['listing_status' => $listingStatus];
+
+            $attributes = ['listing_status' => $item['listing_status']];
             $product->update($attributes);
         }
 
-        return response()->json([
-            'message' => 'Updated ' . count($items) . ' Product(s) listing_status successfully.'
-        ]);
+        return ['message' => 'Updated ' . count($request->items) . ' Product(s) listing_status successfully.'];
     }
 
-    public function getProductDetails(Request $request)
+    public function getProductDetails(Request $request): Product
     {
-        // Extract attributes from $request
-        $productId = $request->route('product_id');
-
-        // get Product
-        $product = Product::find($productId);
-
-        if (is_null($product)) {
-            return response()->json([
-                'message' => 'Product not found'
-            ], 404);
-        }
-
-        if (!$product->isStatusActive()) {
-            return response()->json([
-                'message' => 'Product is not available for public'
-            ], 404);
-        }
-
-        return response()->json($product, 200);
+        $product = Product::find($request->route('product_id'));
+        if (is_null($product)) abort(404, 'Product not found');
+        if ($product->status !== Status::ACTIVE->value) abort(404, 'Product is not available for public');
+        return $product;
     }
 }

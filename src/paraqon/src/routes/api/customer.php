@@ -1,8 +1,6 @@
 <?php
 
 // Default Imports
-
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AccountController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionController;
@@ -39,23 +37,19 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\NotificationControlle
 Route::group(
     ['prefix' => 'tests'],
     function () {
-        $defaultController = TestingController::class;
-
-        Route::post('/cart', [$defaultController, 'cart']);
-        Route::get('/health-check', [$defaultController, 'healthCheck']);
-        Route::get('/callback', [$defaultController, 'callbackTest']);
+        Route::post('/cart', [TestingController::class, 'cart']);
+        Route::get('/health-check', [TestingController::class, 'healthCheck']);
+        Route::get('/callback', [TestingController::class, 'callbackTest']);
     }
 );
 
 Route::group(
     ['prefix' => 'auth'],
     function () {
-        $defaultController = AuthController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/customer', [$defaultController, 'getCustomerInfo']);
+            function () {
+                Route::get('/customer', [AuthController::class, 'getCustomerInfo']);
             }
         );
     }
@@ -64,14 +58,12 @@ Route::group(
 Route::group(
     ['prefix' => 'auctions'],
     function () {
-        $defaultController = AuctionController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getAllAuctions'])->middleware(['pagination']);
-                Route::get('/{auction_id}/paddles/all', [$defaultController, 'getAllPaddles'])->middleware(['pagination']);
-                Route::get('/{auction_id}/details', [$defaultController, 'getAuctionDetails']);
+            function () {
+                Route::get('/all', [AuctionController::class, 'getAllAuctions'])->middleware(['pagination']);
+                Route::get('/{auction_id}/paddles/all', [AuctionController::class, 'getAllPaddles'])->middleware(['pagination']);
+                Route::get('/{auction_id}/details', [AuctionController::class, 'getAuctionDetails']);
             }
         );
     }
@@ -80,13 +72,11 @@ Route::group(
 Route::group(
     ['prefix' => 'auction-requests'],
     function () {
-        $defaultController = AuctionRequestController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/', [$defaultController, 'createAuctionRequest']);
-                Route::get('/all', [$defaultController, 'getAllAuctionRequests'])->middleware(['pagination']);
+            function () {
+                Route::post('/', [AuctionRequestController::class, 'createAuctionRequest']);
+                Route::get('/all', [AuctionRequestController::class, 'getAllAuctionRequests'])->middleware(['pagination']);
             }
         );
     }
@@ -95,22 +85,20 @@ Route::group(
 Route::group(
     ['prefix' => 'auction-lots'],
     function () {
-        $defaultController = AuctionLotController::class;
-
-        Route::get('/{auction_lot_id}/bids', [$defaultController, 'getBiddingHistory'])->middleware(['pagination']);
-        Route::get('/{auction_lot_id}/bids/all', [$defaultController, 'getAllAuctionLotBids'])->middleware(['pagination']);
+        Route::get('/{auction_lot_id}/bids', [AuctionLotController::class, 'getBiddingHistory'])->middleware(['pagination']);
+        Route::get('/{auction_lot_id}/bids/all', [AuctionLotController::class, 'getAllAuctionLotBids'])->middleware(['pagination']);
 
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/{auction_lot_id}/details', [$defaultController, 'getAuctionLotDetails']);
+            function () {
+                Route::get('/{auction_lot_id}/details', [AuctionLotController::class, 'getAuctionLotDetails']);
 
-                Route::get('/owned/all', [$defaultController, 'getAllOwnedAuctionLots'])->middleware(['pagination']);
-                Route::get('/participated/all', [$defaultController, 'getAllParticipatedAuctionLots'])->middleware(['pagination']);
-                Route::post('/{auction_lot_id}/bids', [$defaultController, 'createMaximumBid']);
-                Route::put('/{auction_lot_id}/bid-requests', [$defaultController, 'requestForBidPermissions']);
+                Route::get('/owned/all', [AuctionLotController::class, 'getAllOwnedAuctionLots'])->middleware(['pagination']);
+                Route::get('/participated/all', [AuctionLotController::class, 'getAllParticipatedAuctionLots'])->middleware(['pagination']);
+                Route::post('/{auction_lot_id}/bids', [AuctionLotController::class, 'createMaximumBid']);
+                Route::put('/{auction_lot_id}/bid-requests', [AuctionLotController::class, 'requestForBidPermissions']);
 
-                Route::post('/{auction_lot_id}/live-bids', [$defaultController, 'createLiveBid']);
+                Route::post('/{auction_lot_id}/live-bids', [AuctionLotController::class, 'createLiveBid']);
             }
         );
     }
@@ -120,26 +108,24 @@ Route::group(
 Route::group(
     ['prefix' => 'auth'],
     function () {
-        $defaultController = AuthenticationController::class;
+        Route::post('/login', [AuthenticationController::class, 'login']);
+        Route::post('/2fa-login', [AuthenticationController::class, 'twoFactorAuthenticationlogin']);
 
-        Route::post('/login', [$defaultController, 'login']);
-        Route::post('/2fa-login', [$defaultController, 'twoFactorAuthenticationlogin']);
+        Route::post('/change-phone', [AuthenticationController::class, 'changePhone']);
 
-        Route::post('/change-phone', [$defaultController, 'changePhone']);
-
-        Route::post('/forget-password', [$defaultController, 'forgetPassword']);
-        Route::post('/reset-password', [$defaultController, 'resetPassword']);
+        Route::post('/forget-password', [AuthenticationController::class, 'forgetPassword']);
+        Route::post('/reset-password', [AuthenticationController::class, 'resetPassword']);
 
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/update-password', [$defaultController, 'updatePassword']);
-                Route::post('/migrate', [$defaultController, 'migrateToRegistered']);
+            function () {
+                Route::post('/update-password', [AuthenticationController::class, 'updatePassword']);
+                Route::post('/migrate', [AuthenticationController::class, 'migrateToRegistered']);
 
-                Route::get('/change-email-request', [$defaultController, 'changeEmailRequest']);
-                Route::get('/change-phone-request', [$defaultController, 'changePhoneRequest']);
+                Route::get('/change-email-request', [AuthenticationController::class, 'changeEmailRequest']);
+                Route::get('/change-phone-request', [AuthenticationController::class, 'changePhoneRequest']);
 
-                Route::get('/user', [$defaultController, 'getAuthUserInfo']);
+                Route::get('/user', [AuthenticationController::class, 'getAuthUserInfo']);
             }
         );
     }
@@ -148,13 +134,11 @@ Route::group(
 Route::group(
     ['prefix' => 'accounts'],
     function () {
-        $defaultController = AccountController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::put('/verification', [$defaultController, 'updateAccountVerification']);
-                Route::get('/customer-groups', [$defaultController, 'getAllCustomerGroups'])->middleware(['pagination']);
+            function () {
+                Route::put('/verification', [AccountController::class, 'updateAccountVerification']);
+                Route::get('/customer-groups', [AccountController::class, 'getAllCustomerGroups'])->middleware(['pagination']);
             }
         );
     }
@@ -164,14 +148,12 @@ Route::group(
 Route::group(
     ['prefix' => 'bids'],
     function () {
-        $defaultController = BidController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getAllBids']);
-                Route::put('/{id}/cancel', [$defaultController, 'cancelBid']);
-                Route::put('/{id}/cancel-live', [$defaultController, 'cancelLiveBid']);
+            function () {
+                Route::get('/all', [BidController::class, 'getAllBids']);
+                Route::put('/{id}/cancel', [BidController::class, 'cancelBid']);
+                Route::put('/{id}/cancel-live', [BidController::class, 'cancelLiveBid']);
             }
         );
     }
@@ -180,14 +162,12 @@ Route::group(
 Route::group(
     ['prefix' => 'consignments'],
     function () {
-        $defaultController = ConsignmentRequestController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/', [$defaultController, 'createConsignmentRequest']);
-                Route::get('/all', [$defaultController, 'getAllConsignmentRequests'])->middleware(['pagination']);
-                Route::get('/{consignment_request_id}/details', [$defaultController, 'getConsignmentRequestDetails']);
+            function () {
+                Route::post('/', [ConsignmentRequestController::class, 'createConsignmentRequest']);
+                Route::get('/all', [ConsignmentRequestController::class, 'getAllConsignmentRequests'])->middleware(['pagination']);
+                Route::get('/{consignment_request_id}/details', [ConsignmentRequestController::class, 'getConsignmentRequestDetails']);
             }
         );
     }
@@ -196,16 +176,14 @@ Route::group(
 Route::group(
     ['prefix' => 'orders'],
     function () {
-        $defaultController = OrderController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/stores/{store_id}/all', [$defaultController, 'getOrdersByStoreID'])->middleware(['pagination']);
-                Route::get('/all/offline', [$defaultController, 'getAllOfflineOrders'])->middleware(['pagination']);
-                Route::put('/{order_id}/upload', [$defaultController, 'uploadPaymentProofAsCustomer']);
-                Route::post('/{order_id}/payment', [$defaultController, 'payPendingOrderByOnlineMethod']);
-                Route::put('/{order_id}/details', [$defaultController, 'updateOrderDetails']);
+            function () {
+                Route::get('/stores/{store_id}/all', [OrderController::class, 'getOrdersByStoreID'])->middleware(['pagination']);
+                Route::get('/all/offline', [OrderController::class, 'getAllOfflineOrders'])->middleware(['pagination']);
+                Route::put('/{order_id}/upload', [OrderController::class, 'uploadPaymentProofAsCustomer']);
+                Route::post('/{order_id}/payment', [OrderController::class, 'payPendingOrderByOnlineMethod']);
+                Route::put('/{order_id}/details', [OrderController::class, 'updateOrderDetails']);
             }
         );
     }
@@ -214,14 +192,12 @@ Route::group(
 Route::group(
     ['prefix' => 'products'],
     function () {
-        $defaultController = ProductController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getAllOwnedProducts'])->middleware(['pagination']);
-                Route::get('/{product_id}/details', [$defaultController, 'getProductDetails']);
-                Route::put('/listing-status', [$defaultController, 'updateListingStatuses']);
+            function () {
+                Route::get('/all', [ProductController::class, 'getAllOwnedProducts'])->middleware(['pagination']);
+                Route::get('/{product_id}/details', [ProductController::class, 'getProductDetails']);
+                Route::put('/listing-status', [ProductController::class, 'updateListingStatuses']);
             }
         );
     }
@@ -236,13 +212,11 @@ Route::group(
         Route::group(
             ['prefix' => 'product-management'],
             function () {
-                $defaultController = ProductManagementController::class;
-
-                Route::group(['middleware' => 'auth:api'], function () use ($defaultController) {
-                    Route::get('/products/filter', [$defaultController, 'filterAuctionProductsByCategories'])->middleware(['pagination']);
-                    Route::get('/products/filter/v2', [$defaultController, 'filterAuctionProductsByCategoriesV2'])->middleware(['pagination']);
-                    Route::get('/related-products-urls', [$defaultController, 'getRelatedAuctionProductsUrls'])->middleware(['pagination']);
-                    Route::get('/products/ids', [$defaultController, 'getAuctionProductsByIDs'])->name('paraqon.products.ids')->middleware(['pagination']);
+                Route::group(['middleware' => 'auth:api'], function () {
+                    Route::get('/products/filter', [ProductManagementController::class, 'filterAuctionProductsByCategories'])->middleware(['pagination']);
+                    Route::get('/products/filter/v2', [ProductManagementController::class, 'filterAuctionProductsByCategoriesV2'])->middleware(['pagination']);
+                    Route::get('/related-products-urls', [ProductManagementController::class, 'getRelatedAuctionProductsUrls'])->middleware(['pagination']);
+                    Route::get('/products/ids', [ProductManagementController::class, 'getAuctionProductsByIDs'])->name('paraqon.products.ids')->middleware(['pagination']);
                 });
             }
         );
@@ -251,10 +225,8 @@ Route::group(
         Route::group(
             ['prefix' => 'wishlist'],
             function () {
-                $defaultController = ProductManagementController::class;
-
-                Route::group(['middleware' => 'auth:api'], function () use ($defaultController) {
-                    Route::get('/all', [$defaultController, 'getAllWishlistAuctionLots'])->middleware(['pagination']);
+                Route::group(['middleware' => 'auth:api'], function () {
+                    Route::get('/all', [ProductManagementController::class, 'getAllWishlistAuctionLots'])->middleware(['pagination']);
                 });
             }
         );
@@ -263,40 +235,34 @@ Route::group(
         Route::group(
             ['prefix' => 'shopping-cart'],
             function () {
-                $defaultController = ShoppingCartController::class;
-
-                Route::group(['middleware' => 'auth:api'], function () use ($defaultController) {
-                    Route::post('/auction/all', [$defaultController, 'getAllAuctionCartItems']);
-                    Route::post('/auction/checkout', [$defaultController, 'checkoutAuctionStore']);
-                    Route::post('/main-store/all', [$defaultController, 'getAllMainStoreCartItems']);
-                    Route::post('/main-store/checkout', [$defaultController, 'checkOutMainStore']);
-                    Route::post('/checkout', [$defaultController, 'checkOut']);
+                Route::group(['middleware' => 'auth:api'], function () {
+                    Route::post('/auction/all', [ShoppingCartController::class, 'getAllAuctionCartItems']);
+                    Route::post('/auction/checkout', [ShoppingCartController::class, 'checkoutAuctionStore']);
+                    Route::post('/main-store/all', [ShoppingCartController::class, 'getAllMainStoreCartItems']);
+                    Route::post('/main-store/checkout', [ShoppingCartController::class, 'checkOutMainStore']);
+                    Route::post('/checkout', [ShoppingCartController::class, 'checkOut']);
                 });
             }
         );
     }
 );
 
-Route::group(
-    ['prefix' => 'payments'],
-    function () {
-        $defaultController = PaymentController::class;
-
-        Route::post('/callback', [$defaultController, 'onlinePaymentCallback']);
-    }
-);
+// Route::group(
+//     ['prefix' => 'payments'],
+//     function () {
+//         Route::post('/callback', [PaymentController::class, 'onlinePaymentCallback']);
+//     }
+// );
 
 Route::group(
     ['prefix' => 'watchlist'],
     function () {
-        $defaultController = WatchlistItemController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/add-to-watchlist', [$defaultController, 'addAndRemoveItem']);
-                Route::get('/stores', [$defaultController, 'getWatchedStores'])->middleware(['pagination']);
-                Route::get('/auction-lots', [$defaultController, 'getWatchedAuctionLots'])->middleware(['pagination']);
+            function () {
+                Route::post('/add-to-watchlist', [WatchlistItemController::class, 'addAndRemoveItem']);
+                Route::get('/stores', [WatchlistItemController::class, 'getWatchedStores'])->middleware(['pagination']);
+                Route::get('/auction-lots', [WatchlistItemController::class, 'getWatchedAuctionLots'])->middleware(['pagination']);
             }
         );
     }
@@ -305,17 +271,15 @@ Route::group(
 Route::group(
     ['prefix' => 'auction-registrations'],
     function () {
-        $defaultController = AuctionRegistrationRequestController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/register', [$defaultController, 'registerAuction']);
-                Route::get('/all', [$defaultController, 'getAllRegisteredAuctions'])->middleware(['pagination']);
-                Route::post('/{auction_registration_request_id}/register', [$defaultController, 'registerAuctionAgain']);
-                Route::post('/{id}/deposit', [$defaultController, 'createDeposit']);
-                Route::put('/{auction_registration_request_id}/archive', [$defaultController, 'archiveAuctionRegistrationRequest']);
-                Route::get('/details', [$defaultController, 'getRegisteredAuctionDetails']);
+            function () {
+                Route::post('/register', [AuctionRegistrationRequestController::class, 'registerAuction']);
+                Route::get('/all', [AuctionRegistrationRequestController::class, 'getAllRegisteredAuctions'])->middleware(['pagination']);
+                Route::post('/{auction_registration_request_id}/register', [AuctionRegistrationRequestController::class, 'registerAuctionAgain']);
+                Route::post('/{id}/deposit', [AuctionRegistrationRequestController::class, 'createDeposit']);
+                Route::put('/{auction_registration_request_id}/archive', [AuctionRegistrationRequestController::class, 'archiveAuctionRegistrationRequest']);
+                Route::get('/details', [AuctionRegistrationRequestController::class, 'getRegisteredAuctionDetails']);
             }
         );
     }
@@ -324,15 +288,13 @@ Route::group(
 Route::group(
     ['prefix' => 'deposits'],
     function () {
-        $defaultController = DepositController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getAllDeposits'])->middleware(['pagination']);
-                Route::get('/{id}/details', [$defaultController, 'getDepositDetails']);
-                Route::put('/{id}/details', [$defaultController, 'updateDepositDetails']);
-                Route::put('/{id}/cancel', [$defaultController, 'cancelDeposit']);
+            function () {
+                Route::get('/all', [DepositController::class, 'getAllDeposits'])->middleware(['pagination']);
+                Route::get('/{id}/details', [DepositController::class, 'getDepositDetails']);
+                Route::put('/{id}/details', [DepositController::class, 'updateDepositDetails']);
+                Route::put('/{id}/cancel', [DepositController::class, 'cancelDeposit']);
             }
         );
     }
@@ -341,15 +303,13 @@ Route::group(
 Route::group(
     ['prefix' => 'documents'],
     function () {
-        $defaultController = DocumentController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/', [$defaultController, 'createDocument']);
-                Route::get('/all', [$defaultController, 'getAllDocuments'])->middleware(['pagination']);
-                Route::get('/{id}/details', [$defaultController, 'getDocumentDetails']);
-                Route::put('/{id}/details', [$defaultController, 'updateDocumentDetails']);
+            function () {
+                Route::post('/', [DocumentController::class, 'createDocument']);
+                Route::get('/all', [DocumentController::class, 'getAllDocuments'])->middleware(['pagination']);
+                Route::get('/{id}/details', [DocumentController::class, 'getDocumentDetails']);
+                Route::put('/{id}/details', [DocumentController::class, 'updateDocumentDetails']);
             }
         );
     }
@@ -358,14 +318,12 @@ Route::group(
 Route::group(
     ['prefix' => 'notifications'],
     function () {
-        $defaultController = NotificationController::class;
-
         Route::group(
             ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::get('/all', [$defaultController, 'getAllNotifications'])->middleware(['pagination']);
-                Route::put('/read', [$defaultController, 'markNotificationsAsRead']);
-                Route::put('/{id}/delete', [$defaultController, 'deleteNotification']);
+            function () {
+                Route::get('/all', [NotificationController::class, 'getAllNotifications'])->middleware(['pagination']);
+                Route::put('/read', [NotificationController::class, 'markNotificationsAsRead']);
+                Route::put('/{id}/delete', [NotificationController::class, 'deleteNotification']);
             }
         );
     }
@@ -375,9 +333,7 @@ Route::group(
 Route::group(
     ['prefix' => 'services'],
     function () {
-        $defaultController = ServiceController::class;
-
-        Route::get('/time/now', [$defaultController, 'checkCurrentTime']);
-        Route::get('/timezone/now', [$defaultController, 'checkOtherTimeZone']);
+        Route::get('/time/now', [ServiceController::class, 'checkCurrentTime']);
+        Route::get('/timezone/now', [ServiceController::class, 'checkOtherTimeZone']);
     }
 );

@@ -2,47 +2,45 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
-use App\Constants\Model\CheckoutApprovalStatus;
-use App\Constants\Model\CheckoutType;
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\ShipmentDeliveryStatus;
-use App\Constants\Model\Status;
+// Laravel built-in
 use App\Http\Controllers\Controller;
-use App\Models\Checkout;
-use App\Models\Customer;
-use App\Models\Order;
-
-use App\Models\Product;
-use App\Models\ProductVariant;
-use App\Models\Store;
-use App\Traits\Utils\RoundingTrait;
-use Carbon\Carbon;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Carbon\Carbon;
 
+// Enums
+use App\Enums\CheckoutApprovalStatus;
+use App\Enums\CheckoutType;
+use App\Enums\OrderPaymentMethod;
+use App\Enums\ReplyStatus;
+use App\Enums\ShipmentDeliveryStatus;
+use App\Enums\Status;
+
+// Models
+use App\Models\Checkout;
+use App\Models\Customer;
+use App\Models\Order;
+use App\Models\Product;
+use App\Models\ProductVariant;
+use App\Models\ShoppingCartItem;
+use App\Models\Store;
+use Illuminate\Http\Client\Response;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
-use Starsnet\Project\Paraqon\App\Models\AuctionRequest;
-use Starsnet\Project\Paraqon\App\Models\Bid;
-use Starsnet\Project\Paraqon\App\Models\ConsignmentRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
-use Starsnet\Project\Paraqon\App\Models\PassedAuctionRecord;
 use Starsnet\Project\Paraqon\App\Models\LiveBiddingEvent;
-
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\AuctionLotController as AdminAuctionLotController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionLotController as CustomerAuctionLotController;
 
 class ServiceController extends Controller
 {
-    use RoundingTrait;
-
-    public function paymentCallback(Request $request)
+    public function paymentCallback(Request $request): array
     {
         // Extract attributes from $request
-        $eventType = $request->type;
+        $eventType = (string) $request->type;
 
         // Validation
         $acceptableEventTypes = [
@@ -52,66 +50,47 @@ class ServiceController extends Controller
             'charge.expired',
             'charge.failed'
         ];
-
         if (!in_array($eventType, $acceptableEventTypes)) {
-            return response()->json(
-                [
-                    'message' => 'Callback success, but event type does not belong to any of the acceptable values',
-                    'acceptable_values' => $acceptableEventTypes
-                ],
-                200
-            );
+            return [
+                'message' => 'Callback success, but event type does not belong to any of the acceptable values',
+                'acceptable_values' => $acceptableEventTypes
+            ];
         }
 
         // Extract attributes from $request
         $model = $request->data['object']['metadata']['model_type'] ?? null;
         $modelID = $request->data['object']['metadata']['model_id'] ?? null;
-
-        if (is_null($model) || is_null($modelID)) {
-            return response()->json(
-                ['message' => 'Callback success, but metadata contains null value for either model_type or model_id.'],
-                400
-            );
-        }
+        if (is_null($model) || is_null($modelID)) abort(400, 'Callback success, but metadata contains null value for either model_type or model_id');
 
         // Find Model and Update
         switch ($model) {
             case 'deposit':
-                // Get Deposit
+                /** @var ?Deposit $deposit */
                 $deposit = Deposit::find($modelID);
+                if (is_null($deposit)) abort(404, 'Deposit not found');
 
-                if (is_null($deposit)) {
-                    return response()->json(
-                        ['message' => 'Deposit not found'],
-                        404
-                    );
-                }
-
-                // Update AuctionRegistrationRequest
+                /** @var ?AuctionRegistrationRequest $auctionRegistrationRequest */
                 $auctionRegistrationRequest = $deposit->auctionRegistrationRequest;
 
                 // Update Deposit
                 if ($eventType == 'charge.succeeded') {
                     $deposit->updateStatus('on-hold');
-                    $deposit->update([
-                        'reply_status' => ReplyStatus::APPROVED
+                    Deposit::where('id', $deposit->id)->update([
+                        'reply_status' => ReplyStatus::APPROVED->value,
+                        'online.api_response' => $request->all()
                     ]);
-                    $deposit->updateOnlineResponse($request->all());
 
                     // Automatically assign paddle_id if ONLINE auction
-                    if (
-                        in_array($auctionRegistrationRequest->reply_status, [
-                            ReplyStatus::PENDING,
-                            ReplyStatus::REJECTED
-                        ])
-                    ) {
+                    if (in_array($auctionRegistrationRequest->reply_status, [
+                        ReplyStatus::PENDING->value,
+                        ReplyStatus::REJECTED->value
+                    ])) {
                         // get Paddle ID
-                        $assignedPaddleId = $auctionRegistrationRequest->paddle_id;
+                        $assignedPaddleID = $auctionRegistrationRequest->paddle_id;
                         $storeID = $auctionRegistrationRequest->store_id;
 
-                        $newPaddleID = $assignedPaddleId;
-
-                        if (is_null($assignedPaddleId)) {
+                        $newPaddleID = $assignedPaddleID;
+                        if (is_null($newPaddleID)) {
                             $allPaddles = AuctionRegistrationRequest::where('store_id', $storeID)
                                 ->pluck('paddle_id')
                                 ->filter(fn($id) => is_numeric($id))
@@ -121,6 +100,7 @@ class ServiceController extends Controller
                             $latestPaddleId = $allPaddles->last();
 
                             if (is_null($latestPaddleId)) {
+                                $store = Store::find($storeID);
                                 $newPaddleID = $store->paddle_number_start_from ?? 1;
                             } else {
                                 $newPaddleID = $latestPaddleId + 1;
@@ -129,47 +109,16 @@ class ServiceController extends Controller
 
                         $requestUpdateAttributes = [
                             'paddle_id' => $newPaddleID,
-                            'status' => Status::ACTIVE,
-                            'reply_status' => ReplyStatus::APPROVED
+                            'status' => Status::ACTIVE->value,
+                            'reply_status' => ReplyStatus::APPROVED->value
                         ];
                         $auctionRegistrationRequest->update($requestUpdateAttributes);
                     }
 
-                    // For Auction Registration, immediately refund 
-                    // $paymentIntentID = $deposit->online['payment_intent_id'];
-                    // $depositPermissionType = $deposit->permission_type;
-
-                    // if (
-                    //     $deposit->payment_method == 'ONLINE' &&
-                    //     !is_null($paymentIntentID) &&
-                    //     $depositPermissionType == null
-                    // ) {
-                    //     $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.Starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
-
-                    //     try {
-                    //         $response = Http::post(
-                    //             $url
-                    //         );
-
-                    //         if ($response->status() === 200) {
-                    //             return true;
-                    //         } else {
-                    //             return false;
-                    //         }
-                    //     } catch (\Throwable $th) {
-                    //         Log::error('Failed to cancel deposit, deposit_id: ' . $deposit->_id);
-                    //         $deposit->updateStatus('return-failed');
-                    //         return false;
-                    //     }
-                    // }
-
-                    return response()->json(
-                        [
-                            'message' => 'Deposit status updated as on-hold',
-                            'deposit_id' => $deposit->_id
-                        ],
-                        200
-                    );
+                    return [
+                        'message' => 'Deposit status updated as on-hold',
+                        'deposit_id' => $deposit->_id
+                    ];
                 } else if ($eventType == 'charge.refunded') {
                     $deposit->updateStatus('returned');
 
@@ -181,13 +130,10 @@ class ServiceController extends Controller
                         'amount_refunded' => $amountRefunded / 100,
                     ]);
 
-                    return response()->json(
-                        [
-                            'message' => 'Deposit status updated as returned',
-                            'deposit_id' => $deposit->_id
-                        ],
-                        200
-                    );
+                    return [
+                        'message' => 'Deposit status updated as returned',
+                        'deposit_id' => $deposit->_id
+                    ];
                 } else if ($eventType == 'charge.captured') {
                     $deposit->updateStatus('returned');
 
@@ -199,13 +145,10 @@ class ServiceController extends Controller
                         'amount_refunded' => $amountRefunded / 100,
                     ]);
 
-                    return response()->json(
-                        [
-                            'message' => 'Deposit status updated as returned',
-                            'deposit_id' => $deposit->_id
-                        ],
-                        200
-                    );
+                    return [
+                        'message' => 'Deposit status updated as returned',
+                        'deposit_id' => $deposit->_id
+                    ];
                 } else if ($eventType == 'charge.expired') {
                     $deposit->updateStatus('returned');
 
@@ -217,121 +160,88 @@ class ServiceController extends Controller
                         'amount_refunded' => $amountRefunded / 100,
                     ]);
 
-                    return response()->json(
-                        [
-                            'message' => 'Deposit status updated as returned',
-                            'deposit_id' => $deposit->_id
-                        ],
-                        200
-                    );
+                    return [
+                        'message' => 'Deposit status updated as returned',
+                        'deposit_id' => $deposit->_id
+                    ];
                 } else if ($eventType == 'charge.failed') {
                     $deposit->updateStatus('cancelled');
 
                     $deposit->update([
-                        'reply_status' => ReplyStatus::REJECTED,
+                        'reply_status' => ReplyStatus::REJECTED->value,
                         'stripe_api_reponse' => $request->data['object']
                     ]);
 
-                    return response()->json(
-                        [
-                            'message' => 'Deposit status updated as cancelled',
-                            'deposit_id' => $deposit->_id
-                        ],
-                        200
-                    );
+                    return [
+                        'message' => 'Deposit status updated as cancelled',
+                        'deposit_id' => $deposit->_id
+                    ];
                 }
 
-                return response()->json(
-                    [
-                        'message' => 'Invalid Stripe event type',
-                        'deposit_id' => null
-                    ],
-                    400
-                );
+                return [
+                    'message' => 'Invalid Stripe event type',
+                    'deposit_id' => null
+                ];
             case 'checkout':
-                // Get Checkout
-                /** Checkout $checkout */
+                /** @var ?Checkout $checkout */
                 $checkout = Checkout::find($modelID);
+                if (is_null($checkout)) abort(200, 'Checkout not found');
 
-                if (is_null($checkout)) {
-                    return response()->json(
-                        ['message' => 'Checkout not found'],
-                        200
-                    );
-                }
-
-                // Get Order
+                /** @var ?Order $order */
                 $order = $checkout->order;
-
-                if (is_null($order)) {
-                    return response()->json(
-                        ['message' => 'Order not found'],
-                        200
-                    );
-                }
+                if (is_null($order)) abort(200, 'Order not found');
 
                 // Update Checkout and Order
                 if ($eventType == 'charge.succeeded') {
                     // Update Checkout
-                    $checkout->updateOnlineResponse((object) $request->all());
+                    Checkout::where('id', $checkout->id)->update([
+                        'online.api_response' => $request->all()
+                    ]);
                     $checkout->createApproval(
-                        CheckoutApprovalStatus::APPROVED,
+                        CheckoutApprovalStatus::APPROVED->value,
                         'Payment verified by Stripe'
                     );
 
                     // Update Order
-                    if ($order->current_status !== ShipmentDeliveryStatus::PROCESSING) {
-                        $order->updateStatus(ShipmentDeliveryStatus::PROCESSING);
+                    if ($order->current_status !== ShipmentDeliveryStatus::PROCESSING->value) {
+                        $order->updateStatus(ShipmentDeliveryStatus::PROCESSING->value);
                     }
 
                     // Update Product and AuctionLot
-                    $storeID = $order->store_id;
-                    $store = Store::find($storeID);
-
+                    $store = Store::find($order->store_id);
                     if (
                         !is_null($store) &&
                         in_array($store->auction_type, ['LIVE', 'ONLINE'])
                     ) {
                         $productIDs = collect($order->cart_items)->pluck('product_id')->all();
 
-                        AuctionLot::where('store_id', $storeID)
+                        AuctionLot::where('store_id', $order->store_id)
                             ->whereIn('product_id', $productIDs)
                             ->update(['is_paid' => true]);
 
                         Product::objectIDs($productIDs)->update([
                             'owned_by_customer_id' => $order->customer_id,
-                            'status' => 'ACTIVE',
+                            'status' => Status::ACTIVE->value,
                             'listing_status' => 'ALREADY_CHECKOUT'
                         ]);
                     }
 
-                    return response()->json(
-                        [
-                            'message' => 'Checkout approved, and Order status updated',
-                            'order_id' => $order->_id
-                        ],
-                        200
-                    );
+                    return [
+                        'message' => 'Checkout approved, and Order status updated',
+                        'order_id' => $order->_id
+                    ];
                 }
 
-                return response()->json(
-                    [
-                        'message' => 'Invalid Stripe event type',
-                        'order_id' => null
-                    ],
-                    400
-                );
+                abort(404, 'Invalid Stripe event type');
+                break;
             default:
-                return response()->json(
-                    [
-                        'message' => 'Invalid model_type for metadata',
-                    ],
-                    400
-                );
+                abort(400, 'Invalid model_type for metadata');
+                break;
         }
+        return ['message' => 'Payment was not processed properly due to invalie event_type'];
     }
 
-    public function updateAuctionStatuses(Request $requests)
+    public function updateAuctionStatuses(): array
     {
         $now = now();
 
@@ -341,7 +251,7 @@ class ServiceController extends Controller
 
         // Make stores ACTIVE
         $archivedStores = Store::where('auction_type', 'ONLINE')
-            ->where('status', Status::ARCHIVED)
+            ->where('status', Status::ARCHIVED->value)
             ->get();
 
         $archivedStoresUpdateCount = 0;
@@ -350,14 +260,14 @@ class ServiceController extends Controller
             $endTime = Carbon::parse($store->end_datetime)->startOfMinute();
 
             if ($now >= $startTime && $now <= $endTime) {
-                $store->update(['status' => Status::ACTIVE]);
+                $store->update(['status' => Status::ACTIVE->value]);
                 $archivedStoresUpdateCount++;
             }
         }
 
         // Make stores ARCHIVED
         $activeStores = Store::where('auction_type', 'ONLINE')
-            ->where('status', Status::ACTIVE)
+            ->where('status', Status::ACTIVE->value)
             ->get();
 
         $activeStoresUpdateCount = 0;
@@ -365,7 +275,7 @@ class ServiceController extends Controller
             $endTime = Carbon::parse($store->end_datetime)->startOfMinute();
 
             if ($now >= $endTime) {
-                $store->update(['status' => Status::ARCHIVED]);
+                $store->update(['status' => Status::ARCHIVED->value]);
                 $activeStoresUpdateCount++;
             }
         }
@@ -379,9 +289,9 @@ class ServiceController extends Controller
         // ----------------------
 
         // Make lots ACTIVE
-        $archivedLots = AuctionLot::where('status', Status::ARCHIVED)
+        $archivedLots = AuctionLot::where('status', Status::ARCHIVED->value)
             ->whereHas('store', function ($query) {
-                return $query->where('status', Status::ACTIVE)
+                return $query->where('status', Status::ACTIVE->value)
                     ->where('auction_type', 'ONLINE');
             })
             ->get();
@@ -392,15 +302,13 @@ class ServiceController extends Controller
             $endTime = Carbon::parse($lot->end_datetime)->startOfMinute();
 
             if ($now >= $startTime && $now < $endTime) {
-                // Log::info("Updating lot id " . $lot->id);
-                $lot->update(['status' => Status::ACTIVE]);
+                $lot->update(['status' => Status::ACTIVE->value]);
                 $archivedLotsUpdateCount++;
             }
         }
-        // Log::info("Updated Count: " . $archivedLotsUpdateCount);
 
         // Make lots ARCHIVED
-        $activeLots = AuctionLot::where('status', Status::ACTIVE)
+        $activeLots = AuctionLot::where('status', Status::ACTIVE->value)
             ->whereHas('store', function ($query) {
                 return $query->where('auction_type', 'ONLINE');
             })->get();
@@ -410,7 +318,7 @@ class ServiceController extends Controller
             $endTime = Carbon::parse($lot->end_datetime)->startOfMinute();
 
             if ($now >= $endTime) {
-                $lot->update(['status' => Status::ARCHIVED]);
+                $lot->update(['status' => Status::ARCHIVED->value]);
                 $activeLotsUpdateCount++;
             }
         }
@@ -419,24 +327,24 @@ class ServiceController extends Controller
         // Auction Lot Ends
         // ----------------------
 
-        return response()->json([
+        return [
             'now_time' => $now,
             'activated_store_count' => $archivedStoresUpdateCount,
             'archived_store_count' => $activeStoresUpdateCount,
             'activated_lot_count' => $archivedLotsUpdateCount,
             'archived_lot_count' => $activeLotsUpdateCount,
             'message' => "Updated Successfully"
-        ], 200);
+        ];
     }
 
-    public function updateAuctionLotStatuses(Request $requests)
+    public function updateAuctionLotStatuses(): array
     {
         $now = now();
 
         // Make lots ACTIVE
-        $archivedLots = AuctionLot::where('status', Status::ARCHIVED)
+        $archivedLots = AuctionLot::where('status', Status::ARCHIVED->value)
             ->whereHas('store', function ($query) {
-                return $query->where('status', Status::ACTIVE);
+                return $query->where('status', Status::ACTIVE->value);
             })
             ->get();
 
@@ -446,36 +354,36 @@ class ServiceController extends Controller
             $endTime = Carbon::parse($lot->end_datetime);
 
             if ($now >= $startTime && $now < $endTime) {
-                $lot->update(['status' => Status::ACTIVE]);
+                $lot->update(['status' => Status::ACTIVE->value]);
                 $archivedLotsUpdateCount++;
             }
         }
 
         // Make lots ARCHIVED
-        $activeLots = AuctionLot::where('status', Status::ACTIVE)->get();
+        $activeLots = AuctionLot::where('status', Status::ACTIVE->value)->get();
 
         $activeLotsUpdateCount = 0;
         foreach ($activeLots as $lot) {
             $endTime = Carbon::parse($lot->end_datetime);
 
             if ($now >= $endTime) {
-                $lot->update(['status' => Status::ARCHIVED]);
+                $lot->update(['status' => Status::ARCHIVED->value]);
                 $activeLotsUpdateCount++;
             }
         }
 
-        return response()->json([
+        return [
             'now_time' => $now,
             'message' => "Updated {$archivedLotsUpdateCount} AuctionLot(s) as ACTIVE, and {$activeLotsUpdateCount} AuctionLot(s) as ARCHIVED"
-        ], 200);
+        ];
     }
 
-    private function cancelDeposit(Deposit $deposit)
+    private function cancelDeposit(Deposit $deposit): bool
     {
         switch ($deposit->payment_method) {
-            case 'ONLINE':
+            case OrderPaymentMethod::ONLINE->value:
                 $paymentIntentID = $deposit->online['payment_intent_id'];
-                $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.Starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
+                $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
 
                 try {
                     $response = Http::post(
@@ -492,7 +400,7 @@ class ServiceController extends Controller
                     $deposit->updateStatus('return-failed');
                     return false;
                 }
-            case 'OFFLINE':
+            case OrderPaymentMethod::OFFLINE->value:
                 $deposit->update([
                     'amount_captured' => 0,
                     'amount_refunded' => $deposit->amount,
@@ -506,31 +414,23 @@ class ServiceController extends Controller
     private function captureDeposit(Deposit $deposit, $captureAmount)
     {
         switch ($deposit->payment_method) {
-            case 'ONLINE':
-                $paymentIntentID = $deposit->online['payment_intent_id'];
-                $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.Starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/capture';
-
+            case OrderPaymentMethod::ONLINE->value:
                 try {
-                    $data = [
-                        'amount' => $captureAmount * 100
-                    ];
+                    $paymentIntentID = $deposit->online['payment_intent_id'];
+                    $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/capture';
 
-                    $response = Http::post(
-                        $url,
-                        $data
-                    );
+                    $data = ['amount' => $captureAmount * 100];
+                    $response = Http::post($url, $data);
 
-                    if ($response->status() === 200) {
-                        return true;
-                    } else {
-                        return false;
-                    }
+                    if ($response->status() === 200) return true;
+                    return false;
                 } catch (\Throwable $th) {
                     Log::error('Failed to capture deposit, deposit_id: ' . $deposit->_id);
                     $deposit->updateStatus('return-failed');
                     return false;
                 }
-            case 'OFFLINE':
+                return false;
+            case OrderPaymentMethod::OFFLINE->value:
                 $deposit->update([
                     'amount_captured' => $captureAmount,
                     'amount_refunded' => $deposit->amount - $captureAmount,
@@ -546,7 +446,7 @@ class ServiceController extends Controller
         Customer $customer,
         Collection $winningLots,
         Collection $deposits
-    ) {
+    ): Order {
         // Create ShoppingCartItem(s) from each AuctionLot
         foreach ($winningLots as $lot) {
             $attributes = [
@@ -562,25 +462,45 @@ class ServiceController extends Controller
             $customer->shoppingCartItems()->create($attributes);
         }
 
+        // Get ShoppingCartItem(s), then do calculations before creating Order
+        $cartItems = ShoppingCartItem::where('customer_id', $customer->id)
+            ->where('store_id', $store->id)
+            ->get()
+            ->append([
+                // Product information related
+                'product_title',
+                'product_variant_title',
+                'image',
+                // Calculation-related
+                'local_discount_type',
+                'original_price_per_unit',
+                'discounted_price_per_unit',
+                'original_subtotal_price',
+                'subtotal_price',
+                'original_point_per_unit',
+                'discounted_point_per_unit',
+                'original_subtotal_point',
+                'subtotal_point',
+            ])
+            ->each(function ($item) {
+                $item->is_checkout = true;
+                $item->is_refundable = false;
+                $item->global_discount = null;
+            });
+
         // Initialize calculation variables
         $itemTotalPrice = 0;
-        $shippingFee = 0;
 
-        // Get ShoppingCartItem(s), then do calculations before creating Order
-        $cartItems = $customer->getAllCartItemsByStore($store);
-
-        foreach ($cartItems as $item) {
-            // Add default keys for Order's cart_item attributes integrity
+        // Update items and calculate total price
+        $cartItems->each(function ($item) use (&$itemTotalPrice) {
             $item->is_checkout = true;
             $item->is_refundable = false;
             $item->global_discount = null;
-
-            // Get sold_price, update subtotal_price
             $itemTotalPrice += $item->sold_price;
-        }
+        });
 
         // Get total price
-        $orderTotalPrice = $itemTotalPrice + $shippingFee;
+        $orderTotalPrice = $itemTotalPrice;
 
         // Calculate totalCapturedDeposit
         $totalCustomerOnHoldDepositAmount = $deposits->sum('amount');
@@ -595,7 +515,6 @@ class ServiceController extends Controller
                 $currentDepositAmount = $deposit->amount;
                 $captureDeposit = min($currentDepositAmount, $depositToBeDeducted);
                 $isCapturedSuccessfully = $this->captureDeposit($deposit, $captureDeposit);
-
                 if ($isCapturedSuccessfully == true) $depositToBeDeducted -= $captureDeposit;
             }
         }
@@ -607,8 +526,8 @@ class ServiceController extends Controller
         $rawCalculation = [
             'currency' => 'HKD',
             'price' => [
-                'subtotal' => $itemTotalPrice,
-                'total' => $orderTotalPrice, // Deduct price_discount.local and .global
+                'subtotal' => number_format($itemTotalPrice, 2, '.', ''),
+                'total' => number_format($orderTotalPrice, 2, '.', '') // Deduct price_discount.local and .global
             ],
             'price_discount' => [
                 'local' => 0,
@@ -619,21 +538,17 @@ class ServiceController extends Controller
                 'total' => 0,
             ],
             'service_charge' => 0,
-            'deposit' => $totalCapturableDeposit,
+            'deposit' => number_format($totalCapturableDeposit, 2, '.', ''),
             'storage_fee' => 0,
-            'shipping_fee' => $shippingFee
+            'shipping_fee' => 0
         ];
-        $roundedCalculation = $this->roundingNestedArray($rawCalculation); // Round off values
-
-        // Round up calculations.price.total only
-        $roundedCalculation['price']['total'] = ceil($roundedCalculation['price']['total']) . '.00';
 
         // Create Order
         $orderAttributes = [
             'is_paid' => false,
-            'payment_method' => CheckoutType::OFFLINE,
+            'payment_method' => CheckoutType::OFFLINE->value,
             'discounts' => [],
-            'calculations' => $roundedCalculation,
+            'calculations' => $rawCalculation,
             'delivery_info' => [
                 'country_code' => 'HK',
                 'method' => 'FACE_TO_FACE_PICKUP',
@@ -668,28 +583,25 @@ class ServiceController extends Controller
         }
 
         // Update Order
-        $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED);
+        $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED->value);
         $order->updateStatus($status);
 
         // Create Checkout
-        $attributes = [
-            'payment_method' => CheckoutType::OFFLINE
-        ];
+        $attributes = ['payment_method' => CheckoutType::OFFLINE->value];
         $order->checkout()->create($attributes);
 
         // Delete ShoppingCartItem(s)
-        $variantIDs = $cartItems->map(function ($item) {
-            return $item['product_variant_id'];
-        })->toArray();
-        $variants = ProductVariant::objectIDs($variantIDs)->get();
-        $customer->clearCartByStore($store, $variants);
+        $variantIDs = $cartItems->pluck('product_variant_id')->toArray();
+        ShoppingCartItem::where('customer_id', $customer->id)
+            ->where('store_id', $store->id)
+            ->whereIn('product_variant_id', $variantIDs)
+            ->delete();
 
         return $order;
     }
 
-    private function createPaidAuctionOrder(
-        Order $originalOrder
-    ) {
+    private function createPaidAuctionOrder(Order $originalOrder): Order
+    {
         // Replicate new Order
         $newOrder = $originalOrder->replicate();
 
@@ -740,144 +652,27 @@ class ServiceController extends Controller
         return $newOrder;
     }
 
-    // public function generateAuctionOrdersAndRefundDeposits(Request $request)
-    // {
-    //     // Extract attributes from request
-    //     $storeID = $request->route('store_id');
-
-    //     // Check Store status, for validation before mass-generating Order(s)
-    //     $store = Store::find($storeID);
-
-    //     if ($store->status === Status::ACTIVE) {
-    //         return response()->json([
-    //             'message' => "Store is still ACTIVE. Skipping generating auction order sequences."
-    //         ], 200);
-    //     }
-
-    //     if ($store->status === Status::DELETED) {
-    //         return response()->json([
-    //             'message' => "Store is already DELETED. Skipping generating auction order sequences."
-    //         ], 200);
-    //     }
-
-    //     // Get AuctionLot(s) from Store
-    //     $unpaidAuctionLots = AuctionLot::where('store_id', $storeID)
-    //         ->where('status', Status::ARCHIVED)
-    //         ->whereNotNull('winning_bid_customer_id')
-    //         ->get()
-    //         ->filter(function ($item) {
-    //             return $item->current_bid >= $item->reserve_price;
-    //         });
-
-    //     // Get unique winning_bid_customer_id from all AuctionLot(s)
-    //     $winningCustomerIDs = $unpaidAuctionLots
-    //         ->pluck('winning_bid_customer_id')
-    //         ->unique()
-    //         ->values()
-    //         ->all();
-
-    //     // Get all Deposit(s), with on-hold current_deposit_status, from non-winning Customer(s)
-    //     $allFullRefundDeposits = Deposit::whereHas('auctionRegistrationRequest', function ($query) use ($storeID) {
-    //         $query->whereHas('store', function ($query2) use ($storeID) {
-    //             $query2->where('_id', $storeID);
-    //         });
-    //     })
-    //         ->whereNotIn('requested_by_customer_id', $winningCustomerIDs)
-    //         ->where('current_deposit_status', 'on-hold')
-    //         ->get();
-
-    //     // Full-refund all Deposit(s) from all non-winning Customer(s)
-    //     foreach ($allFullRefundDeposits as $deposit) {
-    //         $this->cancelDeposit($deposit);
-    //     }
-
-    //     // Generate OFFLINE order by system
-    //     $generatedOrderCount = 0;
-
-    //     foreach ($winningCustomerIDs as $customerID) {
-    //         try {
-    //             $customer = Customer::find($customerID);
-
-    //             // Find all winning Auction Lots
-    //             $winningLots = $unpaidAuctionLots->where('winning_bid_customer_id', $customerID);
-
-    //             // Get all Deposit(s), with on-hold current_deposit_status, from this Customer
-    //             $customerOnHoldDeposits = Deposit::whereHas('auctionRegistrationRequest', function ($query) use ($storeID) {
-    //                 $query->whereHas('store', function ($query2) use ($storeID) {
-    //                     $query2->where('_id', $storeID);
-    //                 });
-    //             })
-    //                 ->where('requested_by_customer_id', $customer->_id)
-    //                 ->where('current_deposit_status', 'on-hold')
-    //                 ->get();
-
-    //             // Create Order, and capture/refund deposits
-    //             $this->createAuctionOrder(
-    //                 $store,
-    //                 $customer,
-    //                 $winningLots,
-    //                 $customerOnHoldDeposits
-    //             );
-
-    //             $generatedOrderCount++;
-    //         } catch (\Throwable $th) {
-    //             print($th);
-    //         }
-    //     }
-
-    //     return response()->json([
-    //         'message' => "Generated {$generatedOrderCount} Auction Store Orders Successfully"
-    //     ], 200);
-    // }
-
-    public function generateAuctionOrdersAndRefundDeposits(Request $request)
+    public function generateAuctionOrdersAndRefundDeposits(Request $request): array
     {
-        // Extract attributes from request
-        $storeID = $request->route('store_id');
-
-        // Check Store status, for validation before mass-generating Order(s)
-        $store = Store::find($storeID);
-
-        if ($store->status === Status::ACTIVE) {
-            return response()->json([
-                'message' => "Store is still ACTIVE. Skipping generating auction order sequences."
-            ], 200);
-        }
-
-        if ($store->status === Status::DELETED) {
-            return response()->json([
-                'message' => "Store is already DELETED. Skipping generating auction order sequences."
-            ], 200);
-        }
-
-        // Get AuctionLot(s) from Store
-        // $unpaidAuctionLots = AuctionLot::where('store_id', $storeID)
-        //     ->where('status', Status::ARCHIVED)
-        //     ->whereNotNull('winning_bid_customer_id')
-        //     ->get()
-        //     ->filter(function ($item) {
-        //         return $item->current_bid >= $item->reserve_price;
-        //     });
-
-        // // Get unique winning_bid_customer_id from all AuctionLot(s)
-        // $winningCustomerIDs = $unpaidAuctionLots
-        //     ->pluck('winning_bid_customer_id')
-        //     ->unique()
-        //     ->values()
-        //     ->all();
+        /** @var ?Store $store */
+        $store = Store::find($request->route('store_id'));
+        if (is_null($store)) abort(404, 'Store not found');
+        if ($store->status === Status::ACTIVE->value) abort(200, "Store is still ACTIVE. Skipping generating auction order sequences.");
+        if ($store->status === Status::DELETED->value) abort(200, "Store is already DELETED. Skipping generating auction order sequences.");
 
         // Get all winning customer ids
-        $winningCustomerIDs = array_map(function ($result) {
-            return $result['customer_id'];
-        }, $request->results);
-
+        $winningCustomerIDs = collect($request->results)->pluck('customer_id')->filter()->unique()->values()->toArray();
 
         // Get all Deposit(s), with on-hold current_deposit_status, from non-winning Customer(s)
-        $allFullRefundDeposits = Deposit::whereHas('auctionRegistrationRequest', function ($query) use ($storeID) {
-            $query->whereHas('store', function ($query2) use ($storeID) {
-                $query2->where('_id', $storeID);
-            });
-        })
+        $storeID = $store->id;
+        $allFullRefundDeposits = Deposit::whereHas(
+            'auctionRegistrationRequest',
+            function ($query) use ($storeID) {
+                $query->whereHas('store', function ($query2) use ($storeID) {
+                    $query2->where('_id', $storeID);
+                });
+            }
+        )
             ->whereNotIn('requested_by_customer_id', $winningCustomerIDs)
             ->where('current_deposit_status', 'on-hold')
             ->get();
@@ -909,14 +704,13 @@ class ServiceController extends Controller
                 $customerID = $result['customer_id'];
                 $confirmedLots = collect($result['lots']);
 
-                // Get Customer
+                /** @var ?Customer $customer */
                 $customer = Customer::find($customerID);
+                if (is_null($customer)) continue;
 
                 // Find all winning Auction Lots
-                $winningLotIds = $confirmedLots->map(function ($lot) {
-                    return $lot['lot_id'];
-                })->all();
-                $winningLots = AuctionLot::find($winningLotIds);
+                $winningLotIDs = $confirmedLots->pluck('lot_id')->all();
+                $winningLots = AuctionLot::find($winningLotIDs);
 
                 // Get all Deposit(s), with on-hold current_deposit_status, from this Customer
                 $customerOnHoldDeposits = Deposit::whereHas('auctionRegistrationRequest', function ($query) use ($storeID) {
@@ -929,17 +723,7 @@ class ServiceController extends Controller
                     ->get();
 
                 // Create Order, and capture/refund deposits
-                $order = $this->createAuctionOrder(
-                    $store,
-                    $customer,
-                    $winningLots,
-                    $customerOnHoldDeposits
-                );
-
-                // Create non-system Order is total price is 0
-                // if ($order->calculations['price']['total'] == 0) {
-                //     $this->createPaidAuctionOrder($order);
-                // }
+                $this->createAuctionOrder($store, $customer, $winningLots, $customerOnHoldDeposits);
 
                 $generatedOrderCount++;
             } catch (\Throwable $th) {
@@ -947,56 +731,30 @@ class ServiceController extends Controller
             }
         }
 
-        return response()->json([
-            'message' => "Generated {$generatedOrderCount} Auction Store Orders Successfully"
-        ], 200);
+        return ['message' => "Generated {$generatedOrderCount} Auction Store Orders Successfully"];
     }
 
-    public function generateLiveAuctionOrdersAndRefundDeposits(Request $request)
+    public function generateLiveAuctionOrdersAndRefundDeposits(Request $request): array
     {
-        // Extract attributes from request
-        $storeID = $request->route('store_id');
+        /** @var ?Store $store */
+        $store = Store::find($request->route('store_id'));
+        if (is_null($store)) abort(404, 'Store not found');
+        if ($store->status === Status::ACTIVE->value) abort(200, "Store is still ACTIVE. Skipping generating auction order sequences.");
+        if ($store->status === Status::DELETED->value) abort(200, "Store is already DELETED. Skipping generating auction order sequences.");
 
-        // Check Store status, for validation before mass-generating Order(s)
-        $store = Store::find($storeID);
-
-        if ($store->status === Status::ACTIVE) {
-            return response()->json([
-                'message' => "Store is still ACTIVE. Skipping generating auction order sequences."
-            ], 200);
-        }
-
-        if ($store->status === Status::DELETED) {
-            return response()->json([
-                'message' => "Store is already DELETED. Skipping generating auction order sequences."
-            ], 200);
-        }
-
-        // // Get AuctionLot(s) from Store
-        // $unpaidAuctionLots = AuctionLot::where('store_id', $storeID)
-        //     ->where('status', Status::ARCHIVED)
-        //     ->whereNotNull('winning_bid_customer_id')
-        //     ->get()
-        //     ->filter(function ($item) {
-        //         return $item->current_bid >= $item->reserve_price;
-        //     });
-
-        // // Get unique winning_bid_customer_id from all AuctionLot(s)
-        // $winningCustomerIDs = $unpaidAuctionLots
-        //     ->pluck('winning_bid_customer_id')
-        //     ->unique()
-        //     ->values()
-        //     ->all();
-        $winningCustomerIDs = array_map(function ($result) {
-            return $result['customer_id'];
-        }, $request->results);
+        // Get all winning customer ids
+        $winningCustomerIDs = collect($request->results)->pluck('customer_id')->filter()->unique()->values()->toArray();
 
         // Get all Deposit(s), with on-hold current_deposit_status, from non-winning Customer(s)
-        $allFullRefundDeposits = Deposit::whereHas('auctionRegistrationRequest', function ($query) use ($storeID) {
-            $query->whereHas('store', function ($query2) use ($storeID) {
-                $query2->where('_id', $storeID);
-            });
-        })
+        $storeID = $store->id;
+        $allFullRefundDeposits = Deposit::whereHas(
+            'auctionRegistrationRequest',
+            function ($query) use ($storeID) {
+                $query->whereHas('store', function ($query2) use ($storeID) {
+                    $query2->where('_id', $storeID);
+                });
+            }
+        )
             ->whereNotIn('requested_by_customer_id', $winningCustomerIDs)
             ->where('current_deposit_status', 'on-hold')
             ->get();
@@ -1015,7 +773,9 @@ class ServiceController extends Controller
                 AuctionLot::where('_id', $lot['lot_id'])
                     ->update([
                         'winning_bid_customer_id' => $result['customer_id'],
-                        'current_bid' => $lot['price']
+                        'current_bid' => $lot['price'],
+                        'sold_price' => $lot['sold_price'],
+                        'commission' => $lot['commission'],
                     ]);
             }
         }
@@ -1023,23 +783,17 @@ class ServiceController extends Controller
         // foreach ($winningCustomerIDs as $customerID) {
         foreach ($request->results as $result) {
             try {
-                // $customer = Customer::find($customerID);
-                $customer = Customer::find($result['customer_id']);
+                // Extract attributes from $result
+                $customerID = $result['customer_id'];
                 $confirmedLots = collect($result['lots']);
 
+                /** @var ?Customer $customer */
+                $customer = Customer::find($customerID);
+                if (is_null($customer)) continue;
+
                 // Find all winning Auction Lots
-                // $winningLots = $unpaidAuctionLots->where('winning_bid_customer_id', $customerID);
-                $winningLotIds = $confirmedLots->map(function ($lot) {
-                    return $lot['lot_id'];
-                })->all();
-                $winningLots = AuctionLot::find($winningLotIds);
-                // $winningLots = $winningLots->map(function ($winningLot) use ($confirmedLots) {
-                //     $confirmedLot = $confirmedLots->first(function ($lot) use ($winningLot) {
-                //         return $lot['lot_id'] === $winningLot->_id;
-                //     });
-                //     $winningLot->current_bid = $confirmedLot['price'];
-                //     return $winningLot;
-                // });
+                $winningLotIDs = $confirmedLots->pluck('lot_id')->all();
+                $winningLots = AuctionLot::find($winningLotIDs);
 
                 // Get all Deposit(s), with on-hold current_deposit_status, from this Customer
                 $customerOnHoldDeposits = Deposit::whereHas('auctionRegistrationRequest', function ($query) use ($storeID) {
@@ -1052,12 +806,7 @@ class ServiceController extends Controller
                     ->get();
 
                 // Create Order, and capture/refund deposits
-                $this->createAuctionOrder(
-                    $store,
-                    $customer,
-                    $winningLots,
-                    $customerOnHoldDeposits
-                );
+                $this->createAuctionOrder($store, $customer, $winningLots, $customerOnHoldDeposits);
 
                 $generatedOrderCount++;
             } catch (\Throwable $th) {
@@ -1065,81 +814,63 @@ class ServiceController extends Controller
             }
         }
 
-        return response()->json([
-            'message' => "Generated {$generatedOrderCount} Auction Store Orders Successfully"
-        ], 200);
+        return ['message' => "Generated {$generatedOrderCount} Auction Store Orders Successfully"];
     }
 
-    public function returnDeposit(Request $request)
+    public function returnDeposit(Request $request): array
     {
-        $paymentIntentID = $request->data['object']['id'];
-
-        $deposit = Deposit::where(
-            'online.payment_intent_id',
-            $paymentIntentID
-        )
-            ->first();
+        /** @var ?Deposit $deposit */
+        $deposit = Deposit::where('online.payment_intent_id', $request->data['object']['id'])->first();
+        if (is_null($deposit)) abort(404, 'Deposit not found');
 
         $deposit->updateStatus('returned');
 
-        return response()->json([
+        return [
             'message' => 'Updated Deposit as returned Successfully',
             'deposit_id' => $deposit->id
-        ]);
+        ];
     }
 
-    public function confirmOrderPaid(Request $request)
+    public function confirmOrderPaid(Request $request): array
     {
-        $paymentIntentID = $request->data['object']['id'];
-        $isPaid = true;
+        /** @var ?Checkout $checkout */
+        $checkout = Checkout::where('online.payment_intent_id',  $request->data['object']['id'])->first();
+        if (is_null($checkout)) abort(404, 'Checkout not found');
 
-        // Find Checkout
-        $checkout = Checkout::where(
-            'online.payment_intent_id',
-            $paymentIntentID
-        )
-            ->first();
+        /** @var ?Order $order */
+        $order = $checkout->order;
+        if (is_null($order)) abort(404, 'Order not found');
 
-        $checkout->updateOnlineResponse(
-            (object) $request->all()
-        );
+        Checkout::where('id', $checkout->id)->update(['online.api_response' => $request->all()]);
 
         // Update Checkout and Order
+        $isPaid = $request->boolean('is_paid', true);
         $status = $isPaid ?
-            CheckoutApprovalStatus::APPROVED :
-            CheckoutApprovalStatus::REJECTED;
+            CheckoutApprovalStatus::APPROVED->value :
+            CheckoutApprovalStatus::REJECTED->value;
         $reason = $isPaid ?
             'Payment verified by System' :
             'Payment failed';
-
         $checkout->createApproval($status, $reason);
 
-        // Get Order and Customer
-        /** @var Order $order */
-        $order = $checkout->order;
-
         // Update Order status
-        if ($isPaid && $order->current_status !== ShipmentDeliveryStatus::PROCESSING) {
-            // $order->setTransactionMethod($paymentMethod);
-            $order->updateStatus(ShipmentDeliveryStatus::PROCESSING);
+        if ($isPaid && $order->current_status !== ShipmentDeliveryStatus::PROCESSING->value) {
+            $order->updateStatus(ShipmentDeliveryStatus::PROCESSING->value);
+        } else if (!$isPaid && $order->current_status !== ShipmentDeliveryStatus::CANCELLED->value) {
+            $order->updateStatus(ShipmentDeliveryStatus::CANCELLED->value);
         }
 
-        if (!$isPaid && $order->current_status !== ShipmentDeliveryStatus::CANCELLED) {
-            $order->updateStatus(ShipmentDeliveryStatus::CANCELLED);
-            return;
-        }
-
-        return response()->json([
+        return [
             'message' => 'Updated Order as paid Successfully',
             'order_id' => $order->id
-        ]);
+        ];
     }
 
 
-    public function getAuctionCurrentState(Request $request)
+    public function getAuctionCurrentState(Request $request): ?Response
     {
-        $storeId = $request->route('store_id');
-        $request->merge(['store_id' => $storeId]);
+        // Get all AuctionLots
+        $request->merge(['store_id' => $request->route('store_id')]);
 
         $adminAuctionLotController = new AdminAuctionLotController();
         $lots = $adminAuctionLotController->getAllAuctionLots($request);
@@ -1157,7 +888,7 @@ class ServiceController extends Controller
         $customerAuctionLotController = new CustomerAuctionLotController();
         $histories = $customerAuctionLotController->getBiddingHistory($request);
 
-        $events = LiveBiddingEvent::where('store_id', $storeId)
+        $events = LiveBiddingEvent::where('store_id', $request->route('store_id'))
             ->where('value_1', $currentLotId)
             ->get();
 
@@ -1171,12 +902,12 @@ class ServiceController extends Controller
         ];
 
         try {
-            $url = env('PARAQON_SOCKET_BASE_URL', 'https://socket.paraqon.Starsnet.hk') . '/api/publish';
+            $url = env('PARAQON_SOCKET_BASE_URL', 'https://socket.paraqon.starsnet.hk') . '/api/publish';
             $response = Http::post(
                 $url,
                 [
                     'site' => 'paraqon',
-                    'room' => 'live-' . $storeId,
+                    'room' => 'live-' . $request->route('store_id'),
                     'data' => $data,
                     'event' => 'liveBidding',
                 ]
@@ -1191,42 +922,40 @@ class ServiceController extends Controller
     {
         // Find PREPARING lot
         $preparingLot = $lots->first(function ($lot) {
-            return $lot->status === 'ARCHIVED' && !$lot->is_disabled && $lot->is_closed;
+            return $lot->status === Status::ARCHIVED->value &&
+                !$lot->is_disabled &&
+                $lot->is_closed;
         });
-        if ($preparingLot) {
-            return $preparingLot;
-        }
+        if ($preparingLot) return $preparingLot;
 
         // Find OPEN lot
         $openedLot = $lots->first(function ($lot) {
-            return $lot->status === 'ACTIVE' && !$lot->is_disabled && !$lot->is_closed;
+            return $lot->status === Status::ACTIVE->value &&
+                !$lot->is_disabled &&
+                !$lot->is_closed;
         });
-        if ($openedLot) {
-            return $openedLot;
-        }
+        if ($openedLot) return $openedLot;
 
         $sortedLots = $lots->sortBy('lot_number')->values();
 
         // Return last lot_number if all SOLD / CLOSE
-        $isAllLotsDisabled = $lots->every(function ($lot) {
-            return $lot->is_disabled;
-        });
-        if ($isAllLotsDisabled) {
-            return $sortedLots->last();
-        }
+        $isAllLotsDisabled = $lots->every(fn($lot) => $lot->is_disabled);
+        if ($isAllLotsDisabled) return $sortedLots->last();
 
         // Return first lot_number if all UPCOMING
         $isAllLotsUpcoming = $lots->every(function ($lot) {
-            return $lot->status == 'ARCHIVED' && !$lot->is_disabled && !$lot->is_closed;
+            return $lot->status == Status::ARCHIVED->value &&
+                !$lot->is_disabled &&
+                !$lot->is_closed;
         });
-        if ($isAllLotsUpcoming) {
-            return $sortedLots->first();
-        }
+        if ($isAllLotsUpcoming) return $sortedLots->first();
 
         // Find last updated SOLD or CLOSE lot
         $latestActiveLot = $lots->filter(function ($lot) {
-            return $lot->status === 'ACTIVE';
-        })->sortByDesc('updated_at')->first();
+            return $lot->status === Status::ACTIVE->value;
+        })
+            ->sortByDesc('updated_at')
+            ->first();
 
         return $latestActiveLot;
     }

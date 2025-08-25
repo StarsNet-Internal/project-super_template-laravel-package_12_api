@@ -19,103 +19,67 @@ use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
 class WatchlistItemController extends Controller
 {
-    public function addAndRemoveItem(Request $request)
+    public function addAndRemoveItem(Request $request): array
     {
         // Extract attributes from $request
         $itemType = $request->item_type;
-
-        // Validation
         $validItemTypes = ['store', 'auction-lot'];
-        if (!in_array($itemType, $validItemTypes)) {
-            return response()->json([
-                'message' => $itemType . ' is not a valid value for item_type'
-            ], 404);
-        }
+        if (!in_array($itemType, $validItemTypes)) abort(404, $itemType . ' is not a valid value for item_type');
 
         // Get authenticated User information
         $customer = $this->customer();
 
         // Check if item exists
         $itemID = $request->item_id;
-        $isItemExists =  WatchlistItem::where('customer_id', $customer->_id)
+        $isItemExists = WatchlistItem::where('customer_id', $customer->id)
             ->where('item_type', $itemType)
             ->where('item_id', $itemID)
             ->exists();
 
         if ($isItemExists) {
-            // Remove from Watchlist
-            WatchlistItem::where('customer_id', $customer->_id)
+            WatchlistItem::where('customer_id', $customer->id)
                 ->where('item_type', $itemType)
                 ->where('item_id', $itemID)
                 ->delete();
-
-            // Return success message
-            return response()->json([
-                'message' => 'Removed Item from Watchlist successfully'
-            ], 200);
+            return ['message' => 'Removed Item from Watchlist successfully'];
         } else {
-            // Add to Watchlist
-            $attributes = [
-                'customer_id' => $customer->_id,
+            WatchlistItem::create([
+                'customer_id' => $customer->id,
                 'item_type' => $itemType,
                 'item_id' => $itemID,
-            ];
-            WatchlistItem::create($attributes);
-
-            // Return success message
-            return response()->json([
-                'message' => 'Added Item to Watchlist successfully'
-            ], 200);
+            ]);
+            return ['message' => 'Added Item to Watchlist successfully'];
         }
     }
 
-    public function getWatchedStores(Request $request)
+    public function getWatchedStores(): Collection
     {
-        // Get authenticated User information
-        $customer = $this->customer();
-
-        // Get Items
-        $itemIDs = WatchlistItem::where('customer_id', $customer->_id)
+        $itemIDs = WatchlistItem::where('customer_id', $this->customer()->id)
             ->where('item_type', 'store')
             ->pluck('item_id')
             ->all();
 
-        // Get Store(s)
-        $stores = Store::objectIDs($itemIDs)->get();
-
-        // Append keys
-        foreach ($stores as $store) {
-            $store->is_watching = true;
-        }
-
-        return $stores;
+        return Store::whereIn('_id', $itemIDs)->get()
+            ->each(function ($store) {
+                $store->is_watching = true;
+            });
     }
 
-    public function getWatchedAuctionLots(Request $request)
+    public function getWatchedAuctionLots(): Collection
     {
-        // Extract attributes from $request
-        $keyword = $request->input('keyword');
-        if ($keyword === "") $keyword = "*";
-
-        // Get authenticated User information
-        $customer = $this->customer();
-
-        // Get Items
-        $watchingAuctionLotIDs = WatchlistItem::where('customer_id', $customer->_id)
+        $watchingAuctionLotIDs = WatchlistItem::where('customer_id', $this->customer()->id)
             ->where('item_type', 'auction-lot')
             ->pluck('item_id')
             ->all();
 
-        $productIDs = AuctionLot::objectIDs($watchingAuctionLotIDs)
+        $productIDs = AuctionLot::whereIn('_id', $watchingAuctionLotIDs)
             ->get()
             ->pluck('product_id')
             ->all();
 
         // Get Products
         $products = $this->getProductsInfoByAggregation($productIDs);
-        $products = $products->filter(function ($item) {
-            return $item->auction_lot_id != '0';
-        })->values();
+        $products = $products->filter(fn($item) =>  $item->auction_lot_id != '0')->values();
 
         foreach ($products as $product) {
             $auctionLotID = $product->auction_lot_id;
@@ -154,7 +118,7 @@ class WatchlistItemController extends Controller
         return $products;
     }
 
-    private function getProductsInfoByAggregation(array $productIDs, ?Store $store = null)
+    private function getProductsInfoByAggregation(array $productIDs): Collection
     {
         $productIDs = array_values($productIDs);
 
@@ -162,9 +126,9 @@ class WatchlistItemController extends Controller
         if (count($productIDs) == 0) return new Collection();
 
         // Get StoreIDs
-        $validStoreIDs = Store::whereIn('status', [Status::ACTIVE, Status::ARCHIVED])
+        $validStoreIDs = Store::whereIn('status', [Status::ACTIVE->value, Status::ARCHIVED->value])
             ->get()
-            ->pluck('_id')
+            ->pluck('id')
             ->all();
 
         $products = Product::raw(function ($collection) use ($productIDs, $validStoreIDs) {
@@ -178,13 +142,11 @@ class WatchlistItemController extends Controller
             ];
 
             // Find matching IDs
-            if (count($productIDs) > 0) {
-                $aggregate[]['$match'] = [
-                    '_id' => [
-                        '$in' => $productIDs
-                    ]
-                ];
-            }
+            $aggregate[]['$match'] = [
+                '_id' => [
+                    '$in' => $productIDs
+                ]
+            ];
 
             // Get AuctionLot
             $aggregate[]['$lookup'] = [
@@ -206,9 +168,9 @@ class WatchlistItemController extends Controller
                                         '$in' => [
                                             '$status',
                                             [
-                                                Status::DRAFT,
-                                                Status::ACTIVE,
-                                                Status::ARCHIVED
+                                                Status::DRAFT->value,
+                                                Status::ACTIVE->value,
+                                                Status::ARCHIVED->value
                                             ]
                                         ]
                                     ]
@@ -216,6 +178,13 @@ class WatchlistItemController extends Controller
                             ],
                         ],
                     ],
+                    // ! Laravel 12 Required
+                    [
+                        '$addFields' => [
+                            'id' => ['$toString' => '$_id']
+                        ]
+                    ],
+                    // ! Laravel 12 Required
                 ],
                 'as' => 'auction_lots',
             ];
@@ -229,7 +198,6 @@ class WatchlistItemController extends Controller
                         '$match' => [
                             '$expr' => [
                                 '$and' => [
-                                    // ['$eq' => ['$store_id', $storeID]],
                                     ['$eq' => ['$product_id', '$$product_id']],
                                     ['$eq' => ['$is_hidden', false]],
                                 ],
@@ -317,12 +285,6 @@ class WatchlistItemController extends Controller
                         '$match' => [
                             '$expr' => [
                                 '$and' => [
-                                    // [
-                                    //     '$in' => [
-                                    //         $storeID,
-                                    //         '$store_ids',
-                                    //     ],
-                                    // ],
                                     ['$lt' => ['$start_datetime', '$$NOW']],
                                     ['$gte' => ['$end_datetime', '$$NOW']],
                                     ['$eq' => ['$status', 'ACTIVE']],
@@ -388,7 +350,7 @@ class WatchlistItemController extends Controller
                         'branches' => [
                             [
                                 'case' => [
-                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PRICE]
+                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PRICE->value]
                                 ],
                                 'then' => [
                                     '$subtract' => [
@@ -399,7 +361,7 @@ class WatchlistItemController extends Controller
                             ],
                             [
                                 'case' => [
-                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PERCENTAGE]
+                                    '$eq' => ['$local_discount_type', ProductVariantDiscountType::PERCENTAGE->value]
                                 ],
                                 'then' => [
                                     '$divide' => [
@@ -447,30 +409,6 @@ class WatchlistItemController extends Controller
             ];
 
             $aggregate[]['$addFields'] = [
-                // 'current_bid' => [
-                //     '$cond' => [
-                //         'if' => [
-                //             '$gt' => [
-                //                 ['$size' => '$auction_lots'],
-                //                 0
-                //             ]
-                //         ],
-                //         'then' => ['$first' => '$auction_lots.current_bid'],
-                //         'else' => 0
-                //     ],
-                // ],
-                // 'is_reserve_price_met' => [
-                //     '$cond' => [
-                //         'if' => [
-                //             '$gte' => [
-                //                 ['$first' => '$auction_lots.current_bid'],
-                //                 ['$first' => '$auction_lots.reserve_price'],
-                //             ],
-                //         ],
-                //         'then' => true,
-                //         'else' => false
-                //     ],
-                // ],
                 'is_bid_placed' => ['$last' => '$auction_lots.is_bid_placed'],
                 'auction_lot_id' => [
                     '$cond' => [

@@ -2,92 +2,120 @@
 
 namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
+// Laravel built-in
 use App\Http\Controllers\Controller;
-
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\Status;
-use App\Constants\Model\StoreType;
-use App\Constants\Model\ProductVariantDiscountType;
-
-use App\Models\ProductVariant;
-use App\Models\Store;
-use App\Models\Product;
-
-use Carbon\Carbon;
-use Illuminate\Support\Facades\Auth;
-
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
+
+// Enums
+use App\Enums\Status;
+use App\Enums\ReplyStatus;
+use App\Models\CustomerGroup;
+// Models
+use App\Models\Store;
+use Illuminate\Support\Collection;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
 
 class AuctionRegistrationRequestController extends Controller
 {
-    public function registerAuction(Request $request)
+    public function registerAuction(Request $request): array
     {
-        // Get authenticated User information
-        $customer = $this->customer();
-
-        // Extract attributes from $request
-        $storeID = $request->store_id;
-
         // Check CustomerGroup for reply_status value
+        $customer = $this->customer();
         $hasWaivedAuctionRegistrationGroup = $customer->groups()
             ->where('is_waived_auction_registration_deposit', true)
             ->exists();
-        $replyStatus = $hasWaivedAuctionRegistrationGroup ?
-            ReplyStatus::APPROVED :
-            ReplyStatus::PENDING;
 
-        // Check if store exists
-        $store = Store::find($storeID);
-        if (is_null($store)) {
-            return response()->json([
-                'message' => 'Auction not found',
-            ], 404);
-        }
+        /** @var ?Store $store */
+        $store = Store::find($request->store_id);
+        if (is_null($store)) abort(404, 'Auction not found');
 
         // Check if there's existing AuctionRegistrationRequest
-        $oldForm =
-            AuctionRegistrationRequest::where('requested_by_customer_id', $customer->_id)
-            ->where('store_id', $storeID)
+        /** @var AuctionRegistrationRequest $oldForm */
+        $oldForm = AuctionRegistrationRequest::where('requested_by_customer_id', $customer->id)
+            ->where('store_id', $request->store_id)
             ->first();
+
+        $replyStatus = $hasWaivedAuctionRegistrationGroup ?
+            ReplyStatus::APPROVED->value :
+            ReplyStatus::PENDING->value;
 
         if (!is_null($oldForm)) {
             $oldFormAttributes = [
                 'approved_by_account_id' => null,
-                'status' => Status::ACTIVE,
+                'status' => Status::ACTIVE->value,
                 'reply_status' => $replyStatus,
             ];
+
+            // Calculate paddle_id if not exists in original AuctionRegistrationRequest yet
+            if ($oldForm->paddle_id === null && $replyStatus === ReplyStatus::APPROVED->value) {
+                $newPaddleID = null;
+                $allPaddles = AuctionRegistrationRequest::where('store_id', $store->id)
+                    ->pluck('paddle_id')
+                    ->filter(fn($id) => is_numeric($id))
+                    ->map(fn($id) => (int) $id)
+                    ->sort()
+                    ->values();
+                $latestPaddleId = $allPaddles->last();
+                if (is_null($latestPaddleId)) {
+                    $newPaddleID = $store->paddle_number_start_from ?? 1;
+                } else {
+                    $newPaddleID = $latestPaddleId + 1;
+                }
+                if (is_numeric($newPaddleID)) {
+                    $oldFormAttributes['paddle_id'] = $newPaddleID;
+                }
+            }
+
             $oldForm->update($oldFormAttributes);
 
-            return response()->json([
+            return [
                 'message' => 'Re-activated previously created AuctionRegistrationRequest successfully',
                 'id' => $oldForm->_id,
-            ], 200);
+            ];
         }
 
         $newFormAttributes = [
             'requested_by_customer_id' => $customer->_id,
-            'store_id' => $storeID,
-            'status' => Status::ACTIVE,
+            'store_id' => $request->store_id,
+            'status' => Status::ACTIVE->value,
             'paddle_id' => null,
             'reply_status' => $replyStatus,
         ];
+
+        // Calculate paddle_id if APPROVED
+        if ($replyStatus === ReplyStatus::APPROVED->value) {
+            $newPaddleID = null;
+            $allPaddles = AuctionRegistrationRequest::where('store_id', $store->id)
+                ->pluck('paddle_id')
+                ->filter(fn($id) => is_numeric($id))
+                ->map(fn($id) => (int) $id)
+                ->sort()
+                ->values();
+            $latestPaddleId = $allPaddles->last();
+            if (is_null($latestPaddleId)) {
+                $newPaddleID = $store->paddle_number_start_from ?? 1;
+            } else {
+                $newPaddleID = $latestPaddleId + 1;
+            }
+            if (is_numeric($newPaddleID)) {
+                $newFormAttributes['paddle_id'] = $newPaddleID;
+            }
+        }
+
         $newForm = AuctionRegistrationRequest::create($newFormAttributes);
 
-        // Return Auction Store
-        return response()->json([
+        return [
             'message' => 'Created New AuctionRegistrationRequest successfully',
-            'id' => $newForm->_id,
-        ], 200);
+            'id' => $newForm->id,
+        ];
     }
 
-    public function createDeposit(Request $request)
+    public function createDeposit(Request $request): array
     {
         // Extract attributes from $request
-        $formID = $request->route('id');
         $paymentMethod = $request->payment_method;
         $amount = $request->amount;
         $currency = $request->input('currency', 'HKD');
@@ -97,58 +125,25 @@ class AuctionRegistrationRequestController extends Controller
         // Get authenticated User information
         $customer = $this->customer();
 
-        // Check if there's existing AuctionRegistrationRequest
-        $form = AuctionRegistrationRequest::find($formID);
-
-        if (is_null($form)) {
-            return response()->json([
-                'message' => 'Auction Registration Request not found',
-            ], 200);
-        }
-
-        if ($form->requested_by_customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'You do not have the permission to create Deposit'
-            ], 404);
-        }
+        /** @var AuctionRegistrationRequest $form */
+        $form = AuctionRegistrationRequest::find($request->route('id'));
+        if (is_null($form)) abort(404, 'Auction Registration Request not found');
+        if ($form->requested_by_customer_id != $customer->_id) abort(404, 'You do not have the permission to create Deposit');
 
         // If auction_lot_id is provided, find the correct deposit amount written in Store deposit_permissions
         $lotPermissionType = null;
         if (!is_null($auctionLotID)) {
             $auctionLot = AuctionLot::find($auctionLotID);
-
-            if (is_null($auctionLot)) {
-                return response()->json([
-                    'message' => 'Invalid auction_lot_id'
-                ], 404);
-            }
-
-            if ($auctionLot->status == Status::DELETED) {
-                return response()->json([
-                    'message' => 'Auction Lot not found'
-                ], 404);
-            }
+            if (is_null($auctionLot)) abort(404, 'Invalid auction_lot_id');
+            if ($auctionLot->status == Status::DELETED->value) abort(404, 'Auction Lot not found');
 
             $lotPermissionType = $auctionLot->permission_type;
-
             if (!is_null($lotPermissionType)) {
-                $storeID = $form->store_id;
-                $store = Store::find($storeID);
-
-                if (is_null($store)) {
-                    return response()->json([
-                        'message' => 'Invalid Store'
-                    ], 404);
-                }
-
-                if ($store->status == Status::DELETED) {
-                    return response()->json([
-                        'message' => 'Store not found'
-                    ], 404);
-                }
+                $store = Store::find($form->store_id);
+                if (is_null($store)) abort(404, 'Invalid Store');
+                if ($store->status == Status::DELETED->value) abort(404, 'Store not found');
 
                 $depositPermissions = $store->deposit_permissions;
-
                 if (!empty($depositPermissions)) {
                     foreach ($depositPermissions as $permission) {
                         if ($permission['permission_type'] === $lotPermissionType) {
@@ -164,8 +159,8 @@ class AuctionRegistrationRequestController extends Controller
             case 'ONLINE':
                 // Create Deposit
                 $depositAttributes = [
-                    'requested_by_customer_id' => $customer->_id,
-                    'auction_registration_request_id' => $form->_id,
+                    'requested_by_customer_id' => $customer->id,
+                    'auction_registration_request_id' => $form->id,
                     'payment_method' => 'ONLINE',
                     'amount' => $amount,
                     'currency' => 'HKD',
@@ -186,40 +181,29 @@ class AuctionRegistrationRequestController extends Controller
                     "captureMethod" => "manual",
                     "metadata" => [
                         "model_type" => "deposit",
-                        "model_id" => $deposit->_id
+                        "model_id" => $deposit->id
                     ]
                 ];
 
                 try {
-                    $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.Starsnet.hk') . '/payment-intents';
-                    $res = Http::post(
-                        $url,
-                        $data
-                    );
-
-                    // Update Deposit
-                    $paymentIntentID = $res['id'];
-                    $clientSecret = $res['clientSecret'];
-
+                    $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents';
+                    $res = Http::post($url, $data);
                     $deposit->update([
                         'online' => [
-                            'payment_intent_id' => $paymentIntentID,
-                            'client_secret' => $clientSecret,
+                            'payment_intent_id' => $res['id'],
+                            'client_secret' => $res['clientSecret'],
                             'api_response' => null
                         ]
                     ]);
                 } catch (\Throwable $th) {
-                    return response()->json([
-                        'message' => 'Connection to Payment API Failed',
-                        'deposit' => null
-                    ], 404);
+                    abort(404, 'Connection to Payment API Failed');
                 }
 
                 // Return Auction Store
-                return response()->json([
+                return [
                     'message' => 'Created New Deposit successfully',
                     'deposit' => $deposit
-                ], 200);
+                ];
             case 'OFFLINE':
                 $depositAttributes = [
                     'requested_by_customer_id' => $customer->_id,
@@ -241,18 +225,16 @@ class AuctionRegistrationRequestController extends Controller
                 $deposit = Deposit::create($depositAttributes);
                 $deposit->updateStatus('submitted');
 
-                return response()->json([
+                return [
                     'message' => 'Created New Deposit successfully',
                     'deposit' => $deposit
-                ], 200);
+                ];
             default:
-                return response()->json([
-                    'message' => 'payment_method ' . $paymentMethod . ' is not supported.',
-                ], 200);
+                return ['message' => 'payment_method ' . $paymentMethod . ' is not supported.'];
         }
     }
 
-    public function registerAuctionAgain(Request $request)
+    public function registerAuctionAgain(Request $request): array
     {
         // Get authenticated User information
         $customer = $this->customer();
@@ -266,26 +248,9 @@ class AuctionRegistrationRequestController extends Controller
 
         // Check if there's existing AuctionRegistrationRequest
         $form = AuctionRegistrationRequest::find($formID);
-
-        if (is_null($form)) {
-            return response()->json([
-                'message' => 'AuctionRegistrationRequest not found'
-            ], 404);
-        }
-
-        if ($form->status != Status::ACTIVE) {
-            return response()->json([
-                'message' => 'AuctionRegistrationRequest not found'
-            ], 404);
-        }
-
-        if (
-            $form->requested_by_customer_id != $customer->_id
-        ) {
-            return response()->json([
-                'message' => 'You do not have the permission to update this AuctionRegistrationRequest'
-            ], 404);
-        }
+        if (is_null($form)) abort(404, 'Auction Registration Request not found');
+        if ($form->status != Status::ACTIVE) abort(404, 'AuctionRegistrationRequest not found');
+        if ($form->requested_by_customer_id != $customer->_id) abort(404, 'You do not have the permission to update this AuctionRegistrationRequest');
 
         // Create Deposit
         $depositAttributes = [
@@ -314,102 +279,62 @@ class AuctionRegistrationRequestController extends Controller
             ]
         ];
 
-        $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.Starsnet.hk') . '/payment-intents';
-        $res = Http::post(
-            $url,
-            $data
-        );
-
-        // Update Deposit
-        $paymentIntentID = $res['id'];
-        $clientSecret = $res['clientSecret'];
-
+        $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents';
+        $res = Http::post($url, $data);
         $deposit->update([
             'online' => [
-                'payment_intent_id' => $paymentIntentID,
-                'client_secret' => $clientSecret,
+                'payment_intent_id' => $res['id'],
+                'client_secret' => $res['clientSecret'],
                 'api_response' => null
             ]
         ]);
 
-        // Return Auction Store
-        return response()->json([
+        return [
             'message' => 'Created New AuctionRegistrationRequest successfully',
-            'auction_registration_request_id' => $form->_id,
-            'deposit_id' => $deposit->_id
-        ], 200);
+            'auction_registration_request_id' => $form->id,
+            'deposit_id' => $deposit->id
+        ];
     }
 
 
-    public function getAllRegisteredAuctions(Request $request)
+    public function getAllRegisteredAuctions(): Collection
     {
-        // Get authenticated User information
-        $customer = $this->customer();
-
-        // Get Items
-        $forms = AuctionRegistrationRequest::where('requested_by_customer_id', $customer->_id)
+        return AuctionRegistrationRequest::where('requested_by_customer_id', $this->customer()->id)
             ->with(['store'])
             ->get();
-
-        return $forms;
     }
 
-    public function getRegisteredAuctionDetails(Request $request)
+    public function getRegisteredAuctionDetails(Request $request): AuctionRegistrationRequest
     {
-        // Get AuctionRegistrationRequest
+        /** @var ?AuctionRegistrationRequest $form */
         $form = null;
-        $customer = $this->customer();
-
-        if ($request->exists('id')) {
-            $form = AuctionRegistrationRequest::objectID($request->id)
-                ->with(['store', 'deposits'])
-                ->latest()
-                ->first();
-        }
-
-        if ($request->exists('store_id')) {
+        if ($request->filled('id')) {
+            $form = AuctionRegistrationRequest::with(['store', 'deposits'])->find($request->id);
+        } else if ($request->filled('store_id')) {
             $form = AuctionRegistrationRequest::where('store_id', $request->store_id)
-                ->where('requested_by_customer_id', $customer->_id)
+                ->where('requested_by_customer_id', $this->customer()->id)
                 ->with(['store', 'deposits'])
                 ->latest()
                 ->first();
         }
-
-        if (is_null($form)) {
-            return response()->json([
-                'message' => 'Auction Registration Request not found'
-            ], 404);
-        }
+        if (is_null($form)) abort(404, 'AuctionRegistrationRequest not found');
 
         return $form;
     }
 
-    public function archiveAuctionRegistrationRequest(Request $request)
+    public function archiveAuctionRegistrationRequest(Request $request): array
     {
-        // Extract attributes from $request
-        $formID = $request->route('auction_registration_request_id');
-
-        // Get AuctionRegistrationRequest
-        $form = AuctionRegistrationRequest::find($formID);
-
-        if (is_null($form)) {
-            return response()->json([
-                'message' => 'Auction Registration Request not found'
-            ], 404);
-        }
+        /** @var ?AuctionRegistrationRequest $form */
+        $form = AuctionRegistrationRequest::find($request->route('auction_registration_request_id'));
+        if (is_null($form)) abort(404, 'AuctionRegistrationRequest not found');
 
         $customer = $this->customer();
+        if ($form->requested_by_customer_id != $customer->_id) abort(403, 'Access denied');
 
-        if ($form->requested_by_customer_id != $customer->_id) {
-            return response()->json([
-                'message' => 'Access denied'
-            ], 404);
-        }
+        $form->update(['status' => Status::ARCHIVED->value]);
 
-        $form->update(['status' => Status::ARCHIVED]);
-
-        return response()->json([
+        return [
             'message' => 'Updated AuctionRegistrationRequest status to ARCHIVED',
-        ], 200);
+        ];
     }
 }

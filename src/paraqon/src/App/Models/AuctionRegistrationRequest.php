@@ -2,85 +2,49 @@
 
 namespace Starsnet\Project\Paraqon\App\Models;
 
-// Constants
-use App\Constants\Model\ReplyStatus;
-use App\Constants\Model\Status;
+// Default
+use MongoDB\Laravel\Eloquent\Model;
+use MongoDB\Laravel\Relations\HasMany;
+use MongoDB\Laravel\Relations\BelongsTo;
 
 // Traits
-use App\Traits\Model\ObjectIDTrait;
-use App\Traits\Model\StatusFieldTrait;
+use App\Models\Traits\ObjectIDTrait;
+use App\Models\Traits\StatusFieldTrait;
 
-// Laravel classes and MongoDB relationships, default import
-use Illuminate\Support\Collection;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
-use Jenssegers\Mongodb\Eloquent\Model as Eloquent;
-use Jenssegers\Mongodb\Relations\EmbedsMany;
-use Jenssegers\Mongodb\Relations\EmbedsOne;
+// Enums
+use App\Enums\ReplyStatus;
+use App\Enums\Status;
 
+// Models
 use App\Models\Account;
-use App\Models\Configuration;
 use App\Models\Customer;
-use App\Models\Product;
-use App\Models\ProductVariant;
 use App\Models\Store;
 
-use Starsnet\Project\Paraqon\App\Models\Bid;
-
-class AuctionRegistrationRequest extends Eloquent
+class AuctionRegistrationRequest extends Model
 {
     use ObjectIDTrait,
         StatusFieldTrait;
 
-    /**
-     * Define database connection.
-     *
-     * @var string
-     */
+    // Connection
     protected $connection = 'mongodb';
-
-    /**
-     * The database collection used by the model.
-     *
-     * @var string
-     */
     protected $collection = 'auction_registration_requests';
 
+    // Attributes
     protected $attributes = [
         // Relationships
         'requested_by_customer_id' => null,
         'approved_by_account_id' => null,
         'store_id' => null,
         'paddle_id' => null,
-
         // Default
         'status' => Status::ACTIVE,
-        'reply_status' => ReplyStatus::PENDING,
+        'reply_status' => ReplyStatus::PENDING->value,
         'remarks' => null,
-
-        // Timestamps
     ];
 
-    protected $dates = [
-        'deleted_at'
-    ];
-
-    protected $casts = [];
-
-    protected $appends = [];
-
-    /**
-     * Blacklisted model properties from doing mass assignment.
-     * None are blacklisted by default for flexibility.
-     * 
-     * @var array
-     */
     protected $guarded = [];
-
-    protected $hidden = [];
+    protected $appends = ['_id'];
+    protected $hidden = ['id'];
 
     // -----------------------------
     // Relationship Begins
@@ -117,7 +81,6 @@ class AuctionRegistrationRequest extends Eloquent
         );
     }
 
-
     // -----------------------------
     // Relationship Ends
     // -----------------------------
@@ -152,13 +115,5 @@ class AuctionRegistrationRequest extends Eloquent
 
     // -----------------------------
     // Accessor Ends
-    // -----------------------------
-
-    // -----------------------------
-    // Action Begins
-    // -----------------------------
-
-    // -----------------------------
-    // Action Ends
     // -----------------------------
 }
