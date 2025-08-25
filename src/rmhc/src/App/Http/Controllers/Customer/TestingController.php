@@ -9,10 +9,6 @@ class TestingController extends Controller
 {
     public function healthCheck()
     {
-        $order = Order::find('6873c3a75be4567eb00c1688');
-        $duplicatedOrder = $order->replicate();
-        $duplicatedOrder->save();
-        return $duplicatedOrder;
         return response()->json([
             'message' => 'OK from package/rmhc2'
         ], 200);
