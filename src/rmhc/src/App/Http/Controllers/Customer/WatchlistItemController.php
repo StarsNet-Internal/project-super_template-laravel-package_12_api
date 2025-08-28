@@ -38,8 +38,7 @@ class WatchlistItemController extends Controller
             ->orderByDesc('created_at')
             ->get()
             ->unique('auction_lot_id')
-            ->keyBy('auction_lot_id')
-            ->toArray();
+            ->keyBy('auction_lot_id');
 
         // Get Products
         $products = $this->getProductsInfoByAggregation($productIDs);
@@ -74,13 +73,7 @@ class WatchlistItemController extends Controller
 
             // winning customer ids
             $winnerHistory = $latestHistories[$auctionLot->id] ?? null;
-            $winningCustomerIDs = collect($winnerHistory['winning_customers'] ?? [])
-                ->pluck('customer_id')
-                ->filter()
-                ->values()
-                ->toArray();
-
-            $product->winning_bid_customer_ids = $winningCustomerIDs;
+            $product->winning_customers = $winnerHistory?->winning_customers;
 
             unset(
                 $product->bids,

@@ -3,6 +3,7 @@
 // Default Imports
 use Illuminate\Support\Facades\Route;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\AuctionLotController;
+use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\BidController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\OrderController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\ProductManagementController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\TestingController;
@@ -40,6 +41,7 @@ Route::group(
 |--------------------------------------------------------------------------
 */
 
+// AuctionLots
 Route::group(
     ['prefix' => 'auction-lots'],
     function () {
@@ -49,6 +51,19 @@ Route::group(
                 Route::get('/{auction_lot_id}/details', [AuctionLotController::class, 'getAuctionLotDetails']);
                 Route::get('/participated/all', [AuctionLotController::class, 'getAllParticipatedAuctionLots'])->middleware(['pagination']);
                 Route::post('/{auction_lot_id}/bids', [AuctionLotController::class, 'createMaximumBid']);
+            }
+        );
+    }
+);
+
+// Bids
+Route::group(
+    ['prefix' => 'bids'],
+    function () {
+        Route::group(
+            ['middleware' => 'auth:api'],
+            function () {
+                Route::get('/all', [BidController::class, 'getAllBids']);
             }
         );
     }

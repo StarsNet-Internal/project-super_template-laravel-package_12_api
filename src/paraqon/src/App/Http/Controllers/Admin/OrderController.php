@@ -178,9 +178,10 @@ class OrderController extends Controller
             ->toArray();
 
         // Get totalPriceText
-        $total = floatval($document['calculations']['price']['total'] ?? 0);
-        $deposit = floatval($document['calculations']['deposit'] ?? 0);
+        $total = floatval($order['calculations']['price']['total'] ?? 0);
+        $deposit = floatval($order['calculations']['deposit'] ?? 0);
         $totalFormatted = number_format($total + $deposit, 2, '.', ',');
+
         $creditChargeText = $language === 'zh'
             ? "包括3.5%信用卡收費"
             : "Includes 3.5% credit card charge";
@@ -190,7 +191,7 @@ class OrderController extends Controller
 
         // Get paddle_id
         $paddleID = $auctionRegistrationRequest['paddle_id'];
-        $invoiceID = "OA1-{$paddleID}";
+        $invoiceID = ($store->invoice_prefix ?? 'OA1') . '-' . $paddleID;
 
         return [
             'model' => "INVOICE",

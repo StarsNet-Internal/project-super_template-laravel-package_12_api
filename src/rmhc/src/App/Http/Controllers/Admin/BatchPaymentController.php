@@ -85,14 +85,36 @@ class BatchPaymentController extends Controller
                 // Update Order
                 $order->update(['is_paid' => true]);
 
-                if ($order->current_status !== ShipmentDeliveryStatus::PENDING->value) {
-                    $order->updateStatus(ShipmentDeliveryStatus::PENDING->value);
+                if ($order->current_status !== ShipmentDeliveryStatus::PROCESSING->value) {
+                    $order->updateStatus(ShipmentDeliveryStatus::PROCESSING->value);
                 }
             }
         }
 
         if ($approvalStatus == ReplyStatus::REJECTED->value) {
             $batchPayment->update(['is_approved' => false]);
+
+            $orders = Order::whereIn('_id', $batchPayment->order_ids)
+                ->with(['store'])
+                ->get();
+
+            foreach ($orders as $order) {
+                $checkout = $order->checkout()->latest()->first();
+
+                $checkout->update([
+                    'offline' => [
+                        'image' => $batchPayment->payment_image,
+                        'uploaded_at' => $batchPayment->payment_image_uploaded_at,
+                        'api_response' => null
+                    ]
+                ]);
+
+                $checkout->approval()->create([
+                    'status' => ReplyStatus::REJECTED->value,
+                    'reason' => "Batch Payment Rejected by Admin",
+                    'user_id' => $this->user()->id
+                ]);
+            }
         }
 
         return ['message' => 'Updated BatchPayment successfully'];

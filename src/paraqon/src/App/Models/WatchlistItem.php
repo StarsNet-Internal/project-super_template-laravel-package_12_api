@@ -8,15 +8,13 @@ use MongoDB\Laravel\Relations\BelongsTo;
 
 // Traits
 use App\Models\Traits\ObjectIDTrait;
-use App\Models\Traits\StatusFieldTrait;
 
 // Models
 use App\Models\Customer;
 
 class WatchlistItem extends Model
 {
-    use ObjectIDTrait,
-        StatusFieldTrait;
+    use ObjectIDTrait;
 
     // Connection
     protected $connection = 'mongodb';

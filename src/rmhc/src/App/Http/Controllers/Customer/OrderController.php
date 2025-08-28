@@ -138,7 +138,9 @@ class OrderController extends Controller
                     'is_system' => false,
                     'delivery_info' => $request->delivery_info,
                     'delivery_details' => $request->delivery_details,
-                    'is_paid' => false
+                    'is_paid' => false,
+                    'system_order_id' => $order->_id,
+                    'payment_method' => $request->payment_method
                 ]);
             $duplicatedOrder->save();
 

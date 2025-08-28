@@ -85,8 +85,7 @@ class ProductManagementController extends Controller
             ->orderByDesc('created_at')
             ->get()
             ->unique('auction_lot_id')
-            ->keyBy('auction_lot_id')
-            ->toArray();
+            ->keyBy('auction_lot_id');
 
         // Map auctionLots
         $auctionLots = $auctionLots->keyBy('product_id');
@@ -102,11 +101,6 @@ class ProductManagementController extends Controller
 
                 // winning customer ids
                 $winnerHistory = $latestHistories[$auctionLot->id] ?? null;
-                $winningCustomerIDs = collect($winnerHistory['winning_customers'] ?? [])
-                    ->pluck('customer_id')
-                    ->filter()
-                    ->values()
-                    ->toArray();
 
                 $product->fill([
                     'auction_lot_id' => $auctionLot->_id,
@@ -129,7 +123,7 @@ class ProductManagementController extends Controller
                     'watchlist_item_count' => $auctionLot->watchlist_item_count,
                     'is_watching' => in_array($auctionLot->_id, $watchingAuctionIDs, true),
                     'store' => $this->store,
-                    'winning_bid_customer_ids' => $winningCustomerIDs
+                    'winning_customers' => $winnerHistory?->winning_customers ?? []
                 ]);
 
                 unset($product->reserve_price);

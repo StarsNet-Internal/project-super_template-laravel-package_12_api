@@ -61,8 +61,7 @@ class AuctionLotController extends Controller
             ->orderByDesc('created_at')
             ->get()
             ->unique('auction_lot_id')
-            ->keyBy('auction_lot_id')
-            ->toArray();
+            ->keyBy('auction_lot_id');
 
         // Get Bids statistics
         foreach ($auctionLots as $lot) {
@@ -80,7 +79,7 @@ class AuctionLotController extends Controller
                 ->created_at;
 
             // Append winning_customer_ids
-            $winnerHistory = $latestHistories[$lot->id] ?? null;
+            $winnerHistory = $latestHistories[$lot->_id] ?? null;
             $lot->winning_customers = $winnerHistory?->winning_customers ?? [];
 
             unset($lot->bids);

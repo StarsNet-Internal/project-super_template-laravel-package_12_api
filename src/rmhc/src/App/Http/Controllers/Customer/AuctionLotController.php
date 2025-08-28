@@ -46,13 +46,7 @@ class AuctionLotController extends Controller
             ->latest()
             ->first();
 
-        $winningCustomerIDs = collect($winnerHistory?->winning_customers ?? [])
-            ->pluck('customer_id')
-            ->filter()
-            ->values()
-            ->toArray();
-
-        $auctionLot->winning_bid_customer_ids = $winningCustomerIDs;
+        $auctionLot->winning_customers = $winnerHistory?->winning_customers;
 
         return $auctionLot;
     }
@@ -81,21 +75,14 @@ class AuctionLotController extends Controller
             ->orderByDesc('created_at')
             ->get()
             ->unique('auction_lot_id')
-            ->keyBy('auction_lot_id')
-            ->toArray();
+            ->keyBy('auction_lot_id');
 
         // Calculate highest bid
         foreach ($auctionLots as $auctionLot) {
             $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
 
             $winnerHistory = $latestHistories[$auctionLot->id] ?? null;
-            $winningCustomerIDs = collect($winnerHistory['winning_customers'] ?? [])
-                ->pluck('customer_id')
-                ->filter()
-                ->values()
-                ->toArray();
-
-            $auctionLot->winning_bid_customer_ids = $winningCustomerIDs;
+            $auctionLot->winning_customers = $winnerHistory?->winning_customers;
         }
 
         return $auctionLots;
