@@ -19,11 +19,11 @@ class ProductController extends Controller
     public function getAllProducts(Request $request): Collection
     {
         // Extract attributes from $request
-        $statuses = (array) $request->input('status', Status::values());
+        $statuses = (array) $request->input('status', Status::defaultStatuses());
 
         $getKeys = ['_id', 'title', 'images', 'status', 'updated_at', 'created_at', 'product_interface', 'prefix', 'stock_no', 'owned_by_customer_id', 'reserve_price', 'bid_incremental_settings'];
         /** @var Collection $products */
-        $products = Product::statusesAllowed(Status::values(), $statuses)
+        $products = Product::statusesAllowed(Status::defaultStatuses(), $statuses)
             ->with([
                 'variants' => function ($productVariant) {
                     $productVariant->with([

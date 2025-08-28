@@ -29,7 +29,7 @@ class ServiceController extends Controller
     public function paymentCallback(Request $request): array
     {
         $acceptableEventTypes = [
-            'charge.succeeded',
+            'charge.succeeded'
         ];
 
         if (!in_array($request->type, $acceptableEventTypes)) {

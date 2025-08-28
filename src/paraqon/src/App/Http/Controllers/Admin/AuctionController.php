@@ -206,10 +206,10 @@ class AuctionController extends Controller
 
     public function getAllAuctions(Request $request): Collection
     {
-        $statuses = (array) $request->input('status', Status::values());
+        $statuses = (array) $request->input('status', Status::defaultStatuses());
         /** @var Collection $stores */
         $stores = Store::where('auction_type', $request->input('auction_type'))
-            ->statusesAllowed(Status::values(), $statuses)
+            ->statusesAllowed(Status::defaultStatuses(), $statuses)
             ->latest()
             ->get();
 
