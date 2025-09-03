@@ -175,22 +175,12 @@ class ProductManagementController extends Controller
                     'start_datetime' => $auctionLot->start_datetime,
                     'end_datetime' => $auctionLot->end_datetime,
                     'lot_number' => $auctionLot->lot_number,
-                    // 'status' => $auctionLot->status,
-                    // 'is_disabled' => $auctionLot->is_disabled,
-                    // 'is_closed' => $auctionLot->is_closed,
                     'sold_price' => $auctionLot->sold_price,
                     'commission' => $auctionLot->commission,
                     'max_estimated_price' => $estimatePrice['max'] ?? 0,
                     'min_estimated_price' => $estimatePrice['min'] ?? 0,
                     'auction_lots' => [$auctionLot],
                     'starting_price' => $auctionLot->starting_price,
-                    // 'local_discount_type' => null,
-                    // 'global_discount' => null,
-                    // 'rating' => null,
-                    // 'review_count' => 0,
-                    // 'inventory_count' => 0,
-                    // 'is_liked' => false,
-                    // 'discounted_price' => "0",
                     'is_bid_placed' => $auctionLot->is_bid_placed,
                     'watchlist_item_count' => $auctionLot->watchlist_item_count,
                     'is_watching' => in_array($auctionLot->_id, $watchingAuctionIDs, true),
@@ -378,16 +368,13 @@ class ProductManagementController extends Controller
         }
 
         $productMap = array_column($products->all(), null, 'id');
-        $sortedProducts = array_map(fn($id) => $productMap[$id], $productIDs);
-
-        // Return data
-        return $sortedProducts;
+        return array_map(fn($id) => $productMap[$id], $productIDs);
     }
 
     public function getAllWishlistAuctionLots(Request $request): Collection
     {
         // Extract attributes from $request
-        $categoryIDs = $request->input('category_ids', []);
+        $categoryIDs = (array) $request->category_ids;
 
         // Get authenticated User information
         $customer = $this->customer();

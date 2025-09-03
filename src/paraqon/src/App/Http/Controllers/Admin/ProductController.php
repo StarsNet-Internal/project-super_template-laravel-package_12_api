@@ -82,7 +82,6 @@ class ProductController extends Controller
             $product['prefix'] = $product->prefix;
             $product['stock_no'] = $product->stock_no;
             $product['owned_by_customer_id'] = $product->owned_by_customer_id;
-
             $product['reserve_price'] = $product->reserve_price;
             $product['bid_incremental_settings'] = $product->bid_incremental_settings;
 
@@ -92,7 +91,7 @@ class ProductController extends Controller
         return $products;
     }
 
-    public function createProduct(Request $request)
+    public function createProduct(Request $request): array
     {
         // Create Product
         /** @var Product $product */
@@ -102,24 +101,18 @@ class ProductController extends Controller
         $pattern = '/^' . $yearPrefix . '\d{6}$/';
 
         // Get the largest stock_no matching {yy}{6 digits}
-        $maxStockNo = Product::where('stock_no', 'regexp', $pattern)
-            ->max('stock_no');
+        $maxStockNo = Product::where('stock_no', 'regexp', $pattern)->max('stock_no');
 
-        if ($maxStockNo) {
-            $increment = (int) substr($maxStockNo, 2);
-            $nextIncrement = $increment + 1;
-        } else {
-            $nextIncrement = 1;
-        }
+        $nextIncrement = 1;
+        if ($maxStockNo) $nextIncrement = (int) substr($maxStockNo, 2) + 1;
 
         $stockNo = $yearPrefix . str_pad($nextIncrement, 6, '0', STR_PAD_LEFT);
 
         $product->update(['stock_no' => $stockNo]);
 
-        // Return success message
-        return response()->json([
+        return [
             'message' => 'Created New Product successfully',
             '_id' => $product->_id
-        ], 200);
+        ];
     }
 }

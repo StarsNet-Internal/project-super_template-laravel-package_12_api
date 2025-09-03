@@ -94,7 +94,6 @@ class CustomerController extends Controller
     public function hideBid(Request $request): array
     {
         Bid::where('_id', $request->route('bid_id'))->update(['is_hidden' => true]);
-
         return ['message' => 'Bid updated is_hidden as true'];
     }
 

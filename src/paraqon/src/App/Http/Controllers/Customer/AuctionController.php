@@ -20,11 +20,10 @@ use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
 class AuctionController extends Controller
 {
-    public function getAllAuctions(Request $request)
+    public function getAllAuctions(Request $request): Collection
     {
         // Extract attributes from $request
         $statuses = (array) $request->input('status', [Status::ACTIVE->value, Status::ARCHIVED->value]);
-
         $customer = $this->customer();
 
         /** @var Collection $auctions */

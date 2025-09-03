@@ -327,9 +327,7 @@ class AuthenticationController extends Controller
             'used_at' => $now
         ]);
 
-        return [
-            'message' => 'Updated phone successfully',
-        ];
+        return ['message' => 'Updated phone successfully'];
     }
 
     public function forgetPassword(Request $request): array
@@ -394,16 +392,21 @@ class AuthenticationController extends Controller
         return User::find($userID);
     }
 
-    private function generateVerificationCodeByType(string $codeType, int $minutesAllowed = 15, User $user, ?string $notificationType = 'EMAIL')
-    {
+    private function generateVerificationCodeByType(
+        string $codeType,
+        int $minutesAllowed = 15,
+        User $user,
+        ?string $notificationType = 'EMAIL'
+    ): string {
         $code = (string) random_int(100000, 999999);
 
-        $user->verificationCodes()->create([
-            'type' => $codeType,
-            'code' => $code,
-            'expires_at' => now()->addMinutes($minutesAllowed),
-            'notification_type' => $notificationType
-        ]);
+        $user->verificationCodes()
+            ->create([
+                'type' => $codeType,
+                'code' => $code,
+                'expires_at' => now()->addMinutes($minutesAllowed),
+                'notification_type' => $notificationType
+            ]);
 
         return $code;
     }
@@ -412,7 +415,6 @@ class AuthenticationController extends Controller
     {
         // Get User, then validate
         $user = $this->user();
-        if (is_null($user)) abort(404, 'User not found');
         if ($user->is_disabled === true) abort(403, 'Account is disabled.');
 
         // Get Role 
@@ -420,10 +422,9 @@ class AuthenticationController extends Controller
 
         // Get Unread Message Count
         $account = $this->account();
-        $unreadNotificationCount = Notification::where('account_id', $account->_id)
+        $user->unread_notification_count = Notification::where('account_id', $account->_id)
             ->where('is_read', false)
             ->count();
-        $user->unread_notification_count = $unreadNotificationCount;
 
         return ['user' => $user];
     }

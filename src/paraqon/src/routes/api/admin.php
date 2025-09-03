@@ -215,6 +215,7 @@ Route::group(
         Route::post('/orders/paid', [ServiceController::class, 'confirmOrderPaid']);
 
         Route::get('/auctions/{store_id}/state', [ServiceController::class, 'getAuctionCurrentState']);
+        Route::get('/orders/capture', [ServiceController::class, 'captureOrderPayment']);
     }
 );
 
@@ -244,6 +245,7 @@ Route::group(
                 Route::get('/all', [OrderController::class, 'getAllAuctionOrders'])->middleware(['pagination']);
                 Route::put('/{order_id}/upload', [OrderController::class, 'uploadPaymentProofAsCustomer']);
                 Route::put('/{order_id}/details', [OrderController::class, 'updateOrderDetails']);
+                Route::put('/{order_id}/cancel', [OrderController::class, 'cancelOrderPayment']);
                 Route::get('/{id}/invoice/{language}', [OrderController::class, 'getInvoiceData']);
                 Route::put('/{id}/offline-payment', [OrderController::class, 'approveOrderOfflinePayment']);
             }

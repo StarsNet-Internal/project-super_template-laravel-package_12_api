@@ -5,6 +5,7 @@ namespace StarsNet\Project\Paraqon\App\Http\Controllers\Admin;
 // Laravel built-in
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 
 // Models
 use App\Models\Product;
@@ -12,7 +13,7 @@ use StarsNet\Project\Paraqon\App\Models\LocationHistory;
 
 class LocationHistoryController extends Controller
 {
-    public function getAllLocationHistories(Request $request)
+    public function getAllLocationHistories(Request $request): Collection
     {
         $productId = $request->input('product_id');
         return LocationHistory::when($productId, function ($query, $productId) {
@@ -21,7 +22,7 @@ class LocationHistoryController extends Controller
             ->get();
     }
 
-    public function createHistory(Request $request)
+    public function createHistory(Request $request): array
     {
         $product = Product::find($request->route('product_id'));
 
@@ -29,10 +30,10 @@ class LocationHistoryController extends Controller
         $history = LocationHistory::create($request->all());
         $history->associateProduct($product);
 
-        return response()->json([
+        return [
             'message' => 'Success',
             'history' => $history
-        ]);
+        ];
     }
 
     public function massUpdateLocationHistories(Request $request): array

@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Http;
 // Enums
 use App\Enums\Status;
 use App\Enums\ReplyStatus;
-use App\Models\CustomerGroup;
+
 // Models
 use App\Models\Store;
 use Illuminate\Support\Collection;
@@ -38,9 +38,9 @@ class AuctionRegistrationRequestController extends Controller
             ->where('store_id', $request->store_id)
             ->first();
 
-        $replyStatus = $hasWaivedAuctionRegistrationGroup ?
-            ReplyStatus::APPROVED->value :
-            ReplyStatus::PENDING->value;
+        $replyStatus = $hasWaivedAuctionRegistrationGroup
+            ? ReplyStatus::APPROVED->value
+            : ReplyStatus::PENDING->value;
 
         if (!is_null($oldForm)) {
             $oldFormAttributes = [
@@ -52,21 +52,21 @@ class AuctionRegistrationRequestController extends Controller
             // Calculate paddle_id if not exists in original AuctionRegistrationRequest yet
             if ($oldForm->paddle_id === null && $replyStatus === ReplyStatus::APPROVED->value) {
                 $newPaddleID = null;
+
                 $allPaddles = AuctionRegistrationRequest::where('store_id', $store->id)
                     ->pluck('paddle_id')
                     ->filter(fn($id) => is_numeric($id))
                     ->map(fn($id) => (int) $id)
                     ->sort()
                     ->values();
+
                 $latestPaddleId = $allPaddles->last();
-                if (is_null($latestPaddleId)) {
-                    $newPaddleID = $store->paddle_number_start_from ?? 1;
-                } else {
-                    $newPaddleID = $latestPaddleId + 1;
-                }
-                if (is_numeric($newPaddleID)) {
-                    $oldFormAttributes['paddle_id'] = $newPaddleID;
-                }
+
+                $newPaddleID = is_null($latestPaddleId)
+                    ? $store->paddle_number_start_from ?? 1
+                    : $latestPaddleId + 1;
+
+                if (is_numeric($newPaddleID)) $oldFormAttributes['paddle_id'] = $newPaddleID;
             }
 
             $oldForm->update($oldFormAttributes);
@@ -85,24 +85,23 @@ class AuctionRegistrationRequestController extends Controller
             'reply_status' => $replyStatus,
         ];
 
-        // Calculate paddle_id if APPROVED
         if ($replyStatus === ReplyStatus::APPROVED->value) {
             $newPaddleID = null;
+
             $allPaddles = AuctionRegistrationRequest::where('store_id', $store->id)
                 ->pluck('paddle_id')
                 ->filter(fn($id) => is_numeric($id))
                 ->map(fn($id) => (int) $id)
                 ->sort()
                 ->values();
+
             $latestPaddleId = $allPaddles->last();
-            if (is_null($latestPaddleId)) {
-                $newPaddleID = $store->paddle_number_start_from ?? 1;
-            } else {
-                $newPaddleID = $latestPaddleId + 1;
-            }
-            if (is_numeric($newPaddleID)) {
-                $newFormAttributes['paddle_id'] = $newPaddleID;
-            }
+
+            $newPaddleID = is_null($latestPaddleId)
+                ? $store->paddle_number_start_from ?? 1
+                : $latestPaddleId + 1;
+
+            if (is_numeric($newPaddleID)) $newFormAttributes['paddle_id'] = $newPaddleID;
         }
 
         $newForm = AuctionRegistrationRequest::create($newFormAttributes);
@@ -199,7 +198,6 @@ class AuctionRegistrationRequestController extends Controller
                     abort(404, 'Connection to Payment API Failed');
                 }
 
-                // Return Auction Store
                 return [
                     'message' => 'Created New Deposit successfully',
                     'deposit' => $deposit
@@ -240,20 +238,20 @@ class AuctionRegistrationRequestController extends Controller
         $customer = $this->customer();
 
         // Extract attributes from $request
-        $storeID = $request->store_id;
         $amount = $request->amount;
         $currency = $request->currency;
         $conversionRate = $request->conversion_rate;
-        $formID = $request->route('auction_registration_request_id');
 
         // Check if there's existing AuctionRegistrationRequest
-        $form = AuctionRegistrationRequest::find($formID);
+        /** @var ?AuctionRegistrationRequest $form */
+        $form = AuctionRegistrationRequest::find($request->route('auction_registration_request_id'));
         if (is_null($form)) abort(404, 'Auction Registration Request not found');
-        if ($form->status != Status::ACTIVE) abort(404, 'AuctionRegistrationRequest not found');
+        if ($form->status != Status::ACTIVE->value) abort(404, 'AuctionRegistrationRequest not found');
         if ($form->requested_by_customer_id != $customer->_id) abort(404, 'You do not have the permission to update this AuctionRegistrationRequest');
 
         // Create Deposit
-        $depositAttributes = [
+        /** @var Deposit $deposit */
+        $deposit = Deposit::create([
             'customer_id' => $customer->_id,
             'auction_registration_request_id' => $form->_id,
             'payment_method' => 'ONLINE',
@@ -263,8 +261,7 @@ class AuctionRegistrationRequestController extends Controller
                 'currency' => $currency,
                 'conversion_rate' => $conversionRate
             ]
-        ];
-        $deposit = Deposit::create($depositAttributes);
+        ]);
         $deposit->updateStatus('submitted');
 
         // Create payment-intent
@@ -295,7 +292,6 @@ class AuctionRegistrationRequestController extends Controller
             'deposit_id' => $deposit->id
         ];
     }
-
 
     public function getAllRegisteredAuctions(): Collection
     {
@@ -333,8 +329,6 @@ class AuctionRegistrationRequestController extends Controller
 
         $form->update(['status' => Status::ARCHIVED->value]);
 
-        return [
-            'message' => 'Updated AuctionRegistrationRequest status to ARCHIVED',
-        ];
+        return ['message' => 'Updated AuctionRegistrationRequest status to ARCHIVED'];
     }
 }

@@ -6,11 +6,15 @@ namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Http;
 
 // Enums
+use App\Enums\CheckoutApprovalStatus;
 use App\Enums\CheckoutType;
 use App\Enums\ShipmentDeliveryStatus;
 use App\Enums\StoreType;
+
+// Utils
 use App\Http\Starsnet\PinkiePay;
 
 // Models
@@ -82,9 +86,6 @@ class OrderController extends Controller
         if ($this->customer()->id !== $order->customer_id) abort(403, 'Customer do not own this order');
 
         // Create paymentToken
-        $amount = $order->getTotalPrice();
-        $url = $this->serviceApiUrl . $this->createTokenPath;
-
         $checkout = $order->checkout()->latest()->first();
         $checkout->update([
             'online' => [
@@ -95,11 +96,10 @@ class OrderController extends Controller
 
         $pinkiePay = new PinkiePay($order, $request->success_url, $request->cancel_url);
         $data = $pinkiePay->createPaymentToken();
-        $returnUrl = $data['shortened_url'];
 
         return [
             'message' => 'Generated new payment url successfully',
-            'return_url' => $returnUrl ?? null,
+            'return_url' => $data['shortened_url'] ?? null,
             'order_id' => $order->id
         ];
     }
@@ -141,9 +141,32 @@ class OrderController extends Controller
         if (is_null($order)) abort(404, 'Order not found');
         if ($this->customer()->id !== $order->customer_id) abort(403, 'Customer do not own this order');
 
-        // Update Order
         $order->update($request->all());
-
         return ['message' => 'Updated Order Successfully'];
+    }
+
+    public function cancelOrderPayment(Request $request)
+    {
+        /** @var ?Order $order */
+        $order = Order::find($request->route('order_id'));
+        if (is_null($order)) abort(404, 'Order not found');
+        if ($order->customer_id !== $this->customer()->id) abort(403, 'Order does not belong to you');
+        if (is_null($order->scheduled_payment_at)) abort(400, 'Order does not have scheduled_payment_at');
+        if (now()->gt($order->scheduled_payment_at)) abort(403, 'The scheduled payment time has already passed');
+
+        /** @var ?Checkout $checkout */
+        $checkout = $order->checkout()->latest()->first();
+        $paymentIntentID = $checkout->online['payment_intent_id'];
+
+        $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
+        $response = Http::post($url);
+
+        if ($response->status() === 200) {
+            $order->updateStatus(ShipmentDeliveryStatus::CANCELLED->values);
+            $checkout->updateApprovalStatus(CheckoutApprovalStatus::REJECTED->values);
+            return ['message' => 'Update Order status as cancelled'];
+        }
+
+        return response()->json(['message' => 'Unable to cancel payment from Stripe, paymentIntent might have been closed']);
     }
 }

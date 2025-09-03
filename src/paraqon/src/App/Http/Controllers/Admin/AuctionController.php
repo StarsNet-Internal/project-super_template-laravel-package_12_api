@@ -17,6 +17,7 @@ use App\Enums\ReplyStatus;
 use App\Enums\ShipmentDeliveryStatus;
 
 // Models
+use App\Models\Checkout;
 use App\Models\Customer;
 use App\Models\Order;
 use App\Models\Product;
@@ -514,7 +515,10 @@ class AuctionController extends Controller
                 $order->updateStatus($status);
 
                 // Create Checkout
-                $this->createBasicCheckout($order, $paymentMethod);
+                Checkout::create([
+                    'order_id' => $order->_id,
+                    'payment_method' => $paymentMethod
+                ]);
 
                 // Delete ShoppingCartItem(s)
                 ShoppingCartItem::where('customer_id', $customer->id)
@@ -529,16 +533,6 @@ class AuctionController extends Controller
         }
 
         return ['message' => "Generated All {$generatedOrderCount} Auction Store Orders Successfully"];
-    }
-
-    private function createBasicCheckout(Order $order, string $paymentMethod = CheckoutType::ONLINE->value)
-    {
-        $attributes = [
-            'payment_method' => $paymentMethod
-        ];
-        /** @var Checkout $checkout */
-        $checkout = $order->checkout()->create($attributes);
-        return $checkout;
     }
 
     public function getAllUnpaidAuctionLots(Request $request): Collection

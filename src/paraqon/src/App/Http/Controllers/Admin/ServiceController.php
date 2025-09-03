@@ -386,15 +386,8 @@ class ServiceController extends Controller
                 $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
 
                 try {
-                    $response = Http::post(
-                        $url
-                    );
-
-                    if ($response->status() === 200) {
-                        return true;
-                    } else {
-                        return false;
-                    }
+                    $response = Http::post($url);
+                    return $response->status() === 200;
                 } catch (\Throwable $th) {
                     Log::error('Failed to cancel deposit, deposit_id: ' . $deposit->_id);
                     $deposit->updateStatus('return-failed');
@@ -421,9 +414,7 @@ class ServiceController extends Controller
 
                     $data = ['amount' => $captureAmount * 100];
                     $response = Http::post($url, $data);
-
-                    if ($response->status() === 200) return true;
-                    return false;
+                    return $response->status() === 200;
                 } catch (\Throwable $th) {
                     Log::error('Failed to capture deposit, deposit_id: ' . $deposit->_id);
                     $deposit->updateStatus('return-failed');
@@ -598,58 +589,6 @@ class ServiceController extends Controller
             ->delete();
 
         return $order;
-    }
-
-    private function createPaidAuctionOrder(Order $originalOrder): Order
-    {
-        // Replicate new Order
-        $newOrder = $originalOrder->replicate();
-
-        // Get Customer's deliveryDetails
-        $customerID = $originalOrder->customer_id;
-        $customer = Customer::find($customerID);
-        $account = optional($customer)->account;
-
-        $deliveryDetails = [
-            'recipient_name' => [
-                'first_name' => null,
-                'last_name' => null,
-            ],
-            'email' => optional($account)->email,
-            'area_code' => optional($account)->area_code,
-            'phone' => optional($account)->phone,
-            'address' => [
-                'country' => null,
-                'city' => null,
-                'address_line_1' => null,
-                'address_line_2' => null,
-                'building' => null,
-                'state' => null,
-                'postal_code' => null,
-                'company_name' => null,
-            ],
-            'remarks' => null,
-        ];
-
-        // Update new Order
-        $newOrder->fill([
-            'is_system' => false,
-            'is_paid' => true,
-            'payment_information' => [
-                'currency' => 'HKD',
-                'conversion_rate' => '1.00000'
-            ],
-            'delivery_details' => $deliveryDetails
-        ]);
-        $newOrder->save();
-
-        // Update original Order is_paid
-        $originalOrder->update(['is_paid' => true]);
-
-        // Update new Order's status
-        $newOrder->updateStatus('processing');
-
-        return $newOrder;
     }
 
     public function generateAuctionOrdersAndRefundDeposits(Request $request): array
@@ -866,7 +805,6 @@ class ServiceController extends Controller
         ];
     }
 
-
     public function getAuctionCurrentState(Request $request): ?Response
     {
         // Get all AuctionLots
@@ -918,21 +856,17 @@ class ServiceController extends Controller
         }
     }
 
-    public function getCurrentLot(Collection $lots)
+    public function getCurrentLot(Collection $lots): ?AuctionLot
     {
         // Find PREPARING lot
         $preparingLot = $lots->first(function ($lot) {
-            return $lot->status === Status::ARCHIVED->value &&
-                !$lot->is_disabled &&
-                $lot->is_closed;
+            return $lot->status === Status::ARCHIVED->value && !$lot->is_disabled && $lot->is_closed;
         });
         if ($preparingLot) return $preparingLot;
 
         // Find OPEN lot
         $openedLot = $lots->first(function ($lot) {
-            return $lot->status === Status::ACTIVE->value &&
-                !$lot->is_disabled &&
-                !$lot->is_closed;
+            return $lot->status === Status::ACTIVE->value && !$lot->is_disabled && !$lot->is_closed;
         });
         if ($openedLot) return $openedLot;
 
@@ -944,19 +878,43 @@ class ServiceController extends Controller
 
         // Return first lot_number if all UPCOMING
         $isAllLotsUpcoming = $lots->every(function ($lot) {
-            return $lot->status == Status::ARCHIVED->value &&
-                !$lot->is_disabled &&
-                !$lot->is_closed;
+            return $lot->status == Status::ARCHIVED->value && !$lot->is_disabled && !$lot->is_closed;
         });
         if ($isAllLotsUpcoming) return $sortedLots->first();
 
         // Find last updated SOLD or CLOSE lot
-        $latestActiveLot = $lots->filter(function ($lot) {
+        return $lots->filter(function ($lot) {
             return $lot->status === Status::ACTIVE->value;
         })
             ->sortByDesc('updated_at')
             ->first();
+    }
 
-        return $latestActiveLot;
+    public function captureOrderPayment(Request $request): array
+    {
+        $orders = Order::where('scheduled_payment_at', '<=', now())
+            ->whereNull('scheduled_payment_received_at')
+            ->get();
+
+        $orderIDs = [];
+        foreach ($orders as $order) {
+            try {
+                $checkout = $order->checkout()->latest()->first();
+                $paymentIntentID = $checkout->online['payment_intent_id'];
+                $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/capture';
+                $response = Http::post($url, ['amount' => null]);
+                if ($response->status() == 200) {
+                    $orderIDs[] = $order->_id;
+                    $order->update(['scheduled_payment_received_at' => now()]);
+                }
+            } catch (\Throwable $th) {
+                Log::error('Failed to capture order, order_id: ' . $order->_id);
+            }
+        }
+
+        return [
+            'message' => 'Approved order count: ' . count($orderIDs),
+            'order_ids' => $orderIDs
+        ];
     }
 }

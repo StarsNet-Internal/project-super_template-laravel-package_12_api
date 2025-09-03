@@ -5,11 +5,13 @@ namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 // Laravel built-in
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Carbon\Carbon;
 
 // Enums
 use App\Enums\CheckoutApprovalStatus;
 use App\Enums\CheckoutType;
+use App\Enums\ShipmentDeliveryStatus;
 use App\Enums\Status;
 
 // Models
@@ -164,14 +166,14 @@ class OrderController extends Controller
 
         $itemsData = collect($order['cart_items'])
             ->map(function ($item) use ($language) {
-                $formatted = number_format($item['winning_bid'], 2, '.', ',');
+                $formatted = number_format($item['winning_bid'], 2, '.', '');
                 return [
                     'lotNo' => $item['lot_number'],
                     'lotImage' => $item['image'],
                     'description' => $item['product_title'][$language],
                     'hammerPrice' => $formatted,
-                    'commission' => number_format(0, 2, '.', ','),
-                    'otherFees' => number_format(0, 2, '.', ','),
+                    'commission' => number_format(0, 2, '.', ''),
+                    'otherFees' => number_format(0, 2, '.', ''),
                     'totalOrSum' => $formatted
                 ];
             })
@@ -180,7 +182,7 @@ class OrderController extends Controller
         // Get totalPriceText
         $total = floatval($order['calculations']['price']['total'] ?? 0);
         $deposit = floatval($order['calculations']['deposit'] ?? 0);
-        $totalFormatted = number_format($total + $deposit, 2, '.', ',');
+        $totalFormatted = number_format($total + $deposit, 2, '.', '');
 
         $creditChargeText = $language === 'zh'
             ? "包括3.5%信用卡收費"
@@ -220,8 +222,6 @@ class OrderController extends Controller
         try {
             $start = Carbon::parse($startDateTime)->utc();
             $end = Carbon::parse($endDateTime)->utc();
-
-            // Optional: handle end-before-start case
             if ($end->lt($start)) [$start, $end] = [$end, $start];
 
             if ($start->isSameDay($end) && $start->isSameMonth($end) && $start->isSameYear($end)) return $start->format('d M Y');
@@ -229,7 +229,32 @@ class OrderController extends Controller
             if ($start->isSameYear($end)) return $start->format('d M') . ' - ' . $end->format('d M Y');
             return $start->format('d M Y') . ' - ' . $end->format('d M Y');
         } catch (\Exception $e) {
-            return "";
+            return $startDateTime ?? $endDateTime ?? "";
         }
+    }
+
+    public function cancelOrderPayment(Request $request)
+    {
+        /** @var ?Order $order */
+        $order = Order::find($request->route('order_id'));
+        if (is_null($order)) abort(404, 'Order not found');
+        if ($order->customer_id !== $this->customer()->id) abort(403, 'Order does not belong to you');
+        if (is_null($order->scheduled_payment_at)) abort(400, 'Order does not have scheduled_payment_at');
+        if (now()->gt($order->scheduled_payment_at)) abort(403, 'The scheduled payment time has already passed');
+
+        /** @var ?Checkout $checkout */
+        $checkout = $order->checkout()->latest()->first();
+        $paymentIntentID = $checkout->online['payment_intent_id'];
+
+        $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/cancel';
+        $response = Http::post($url);
+
+        if ($response->status() === 200) {
+            $order->updateStatus(ShipmentDeliveryStatus::CANCELLED->values);
+            $checkout->updateApprovalStatus(CheckoutApprovalStatus::REJECTED->values);
+            return ['message' => 'Update Order status as cancelled'];
+        }
+
+        return response()->json(['message' => 'Unable to cancel payment from Stripe, paymentIntent might have been closed']);
     }
 }

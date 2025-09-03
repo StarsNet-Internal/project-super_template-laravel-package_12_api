@@ -50,7 +50,7 @@ class ShoppingCartController extends Controller
     public function getAllAuctionCartItems(Request $request): array
     {
         // Extract attributes from $request
-        $store = self::getStore($request->route('store_id'));
+        $store = $this->getStore($request->route('store_id'));
         $checkoutVariantIDs = $request->checkout_product_variant_ids;
 
         // Get authenticated User information
@@ -199,7 +199,7 @@ class ShoppingCartController extends Controller
     public function getAllMainStoreCartItems(Request $request): array
     {
         $storeID = $request->route('store_id');
-        $store = self::getStore($storeID);
+        $store = $this->getStore($storeID);
 
         // Extract attributes from $request
         $checkoutVariantIDs = $request->checkout_product_variant_ids;
@@ -325,7 +325,7 @@ class ShoppingCartController extends Controller
         $now = now();
 
         // Extract attributes from $request
-        $store = self::getStore($request->route('store_id'));
+        $store = $this->getStore($request->route('store_id'));
         $isPaid = $request->boolean('is_paid', false);
 
         // Get authenticated User information
@@ -545,12 +545,12 @@ class ShoppingCartController extends Controller
                     $stripeAmount = (int) $totalPrice * 100;
 
                     $data = [
-                        "amount" => $stripeAmount,
-                        "currency" => 'HKD',
-                        "captureMethod" => "automatic_async",
-                        "metadata" => [
-                            "model_type" => "checkout",
-                            "model_id" => $checkout->_id
+                        'amount' => $stripeAmount,
+                        'currency' => 'HKD',
+                        'captureMethod' => 'automatic_async',
+                        'metadata' => [
+                            'model_type' => 'checkout',
+                            'model_id' => $checkout->_id
                         ]
                     ];
 
@@ -599,7 +599,7 @@ class ShoppingCartController extends Controller
     {
         $now = now();
 
-        $store = self::getStore($request->route('store_id'));
+        $store = $this->getStore($request->route('store_id'));
 
         // Get authenticated User information
         $customer = $this->customer();
@@ -635,15 +635,30 @@ class ShoppingCartController extends Controller
         $deliveryInfo = $request->delivery_info;
         $deliveryDetails = $request->delivery_details;
         $paymentMethod = $request->payment_method;
-        $successUrl = $request->success_url;
-        $cancelUrl = $request->cancel_url;
+
+        $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY->value ?
+            $deliveryInfo['courier_id'] :
+            null;
 
         // getShoppingCartDetails calculations
+        $subtotalPrice = $cartItems->sum('subtotal_price');
+        $localPriceDiscount = 0;
+        $totalPrice = $subtotalPrice - $localPriceDiscount;
+
+        $shippingFee = 0;
+        if (!is_null($courierID)) {
+            $courier = Courier::find($courierID);
+            $shippingFee = !is_null($courier) ?
+                $courier->getShippingFeeByTotalFee($totalPrice) :
+                0;
+        }
+        $totalPrice += $shippingFee;
+
         $rawCalculation = [
             'currency' => 'HKD',
             'price' => [
-                'subtotal' => '0.00',
-                'total' => '0.00', // Deduct price_discount.local and .global
+                'subtotal' => $subtotalPrice,
+                'total' => $totalPrice, // Deduct price_discount.local and .global
             ],
             'price_discount' => [
                 'local' => '0.00',
@@ -653,12 +668,9 @@ class ShoppingCartController extends Controller
                 'subtotal' => '0.00',
                 'total' => '0.00',
             ],
-            'service_charge' => '0.00',
-            'storage_fee' => '0.00',
-            'shipping_fee' => '0.00'
+            'shipping_fee' => $shippingFee
         ];
 
-        // Return data
         $checkoutDetails = [
             'cart_items' => $cartItems,
             'gift_items' => [],
@@ -675,7 +687,9 @@ class ShoppingCartController extends Controller
         if ($totalPrice <= 0) $paymentMethod = CheckoutType::OFFLINE->value;
 
         // Create Order
-        $orderAttributes = [
+        $order = Order::create([
+            'store_id' => $store->_id,
+            'customer_id' => $customer->id,
             'is_paid' => $request->input('is_paid', false),
             'payment_method' => $paymentMethod,
             'discounts' => $checkoutDetails['discounts'],
@@ -683,8 +697,7 @@ class ShoppingCartController extends Controller
             'delivery_info' => $this->getDeliveryInfo($deliveryInfo),
             'delivery_details' => $deliveryDetails,
             'is_voucher_applied' => $checkoutDetails['is_voucher_applied'],
-        ];
-        $order = $customer->createOrder($orderAttributes, $store);
+        ]);
 
         // Create OrderCartItem(s)
         $checkoutItems = collect($checkoutDetails['cart_items'])
@@ -693,10 +706,7 @@ class ShoppingCartController extends Controller
 
         foreach ($checkoutItems as $item) {
             $attributes = $item->toArray();
-            unset(
-                $attributes['_id'],
-                $attributes['is_checkout']
-            );
+            unset($attributes['_id'], $attributes['is_checkout']);
 
             // Update WarehouseInventory(s)
             $variantID = $attributes['product_variant_id'];
@@ -721,13 +731,34 @@ class ShoppingCartController extends Controller
         // Create Checkout
         $checkout = $this->createBasicCheckout($order, $paymentMethod);
 
-        $returnUrl = null;
         if ($order->getTotalPrice() > 0) {
             switch ($paymentMethod) {
                 case CheckoutType::ONLINE->value:
-                    $pinkiePay = new PinkiePay($order, $successUrl, $cancelUrl);
-                    $data = $pinkiePay->createPaymentToken();
-                    $returnUrl = $data['shortened_url'];
+                    $stripeAmount = (int) $totalPrice * 100;
+
+                    $data = [
+                        'amount' => $stripeAmount,
+                        'currency' => 'HKD',
+                        'captureMethod' => 'manual',
+                        'metadata' => [
+                            'model_type' => 'checkout',
+                            'model_id' => $checkout->_id,
+                            'custom_event_type' => 'one_day_delay'
+                        ]
+                    ];
+
+                    $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents';
+                    $res = Http::post($url, $data);
+
+                    $checkout->update([
+                        'amount' => number_format($totalPrice, 2, '.', ''),
+                        'currency' => 'HKD',
+                        'online' => [
+                            'payment_intent_id' => $res['id'],
+                            'client_secret' => $res['clientSecret'],
+                            'api_response' => null
+                        ],
+                    ]);
                     break;
                 case CheckoutType::OFFLINE->value:
                     $checkout->update([
@@ -758,8 +789,9 @@ class ShoppingCartController extends Controller
 
         return [
             'message' => 'Submitted Order successfully',
-            'return_url' => $returnUrl ?? null,
-            'order_id' => $order->_id
+            'order_id' => $order->_id,
+            'order' => $order,
+            'checkout' => $checkout
         ];
     }
 
@@ -767,7 +799,7 @@ class ShoppingCartController extends Controller
     {
         // Extract attributes from $request
         $storeID = $request->route('store_id');
-        $store = self::getStore($storeID);
+        $store = $this->getStore($storeID);
         $isPaid = $request->input('is_paid', false);
 
         // Get authenticated User information

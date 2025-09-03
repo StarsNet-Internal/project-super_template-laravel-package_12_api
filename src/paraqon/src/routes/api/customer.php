@@ -184,6 +184,7 @@ Route::group(
                 Route::put('/{order_id}/upload', [OrderController::class, 'uploadPaymentProofAsCustomer']);
                 Route::post('/{order_id}/payment', [OrderController::class, 'payPendingOrderByOnlineMethod']);
                 Route::put('/{order_id}/details', [OrderController::class, 'updateOrderDetails']);
+                Route::put('/{order_id}/cancel', [OrderController::class, 'cancelOrderPayment']);
             }
         );
     }
@@ -263,6 +264,7 @@ Route::group(
                 Route::post('/add-to-watchlist', [WatchlistItemController::class, 'addAndRemoveItem']);
                 Route::get('/stores', [WatchlistItemController::class, 'getWatchedStores'])->middleware(['pagination']);
                 Route::get('/auction-lots', [WatchlistItemController::class, 'getWatchedAuctionLots'])->middleware(['pagination']);
+                Route::get('/compare', [WatchlistItemController::class, 'getCompareItems'])->middleware(['pagination']);
             }
         );
     }
