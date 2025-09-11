@@ -3,12 +3,11 @@
 // Default Imports
 use Illuminate\Support\Facades\Route;
 
-use Starsnet\Project\Auction\App\Http\Controllers\Customer\TestingController;
+use Starsnet\Project\Auction\App\Http\Controllers\Customer\AuctionRegistrationRequestController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\ConsignmentRequestController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\CreditCardController;
-use Starsnet\Project\Auction\App\Http\Controllers\Customer\AuctionRegistrationRequestController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\SiteMapController;
-
+use Starsnet\Project\Auction\App\Http\Controllers\Customer\TestingController;
 
 /*
 |--------------------------------------------------------------------------
@@ -30,9 +29,7 @@ use Starsnet\Project\Auction\App\Http\Controllers\Customer\SiteMapController;
 Route::group(
     ['prefix' => 'tests'],
     function () {
-        $defaultController = TestingController::class;
-
-        Route::get('/health-check', [$defaultController, 'healthCheck']);
+        Route::get('/health-check', [TestingController::class, 'healthCheck']);
     }
 );
 
@@ -45,9 +42,7 @@ Route::group(
 Route::group(
     ['prefix' => 'auction-registration-requests'],
     function () {
-        $defaultController = AuctionRegistrationRequestController::class;
-
-        Route::put('/{auction_registration_request_id}/details', [$defaultController, 'updateAuctionRegistrationRequest'])->middleware(['auth:api']);
+        Route::put('/{auction_registration_request_id}/details', [AuctionRegistrationRequestController::class, 'updateAuctionRegistrationRequest'])->middleware(['auth:api']);
     }
 );
 
@@ -55,34 +50,25 @@ Route::group(
 Route::group(
     ['prefix' => 'credit-cards'],
     function () {
-        $defaultController = CreditCardController::class;
-
-        Route::post('/bind', [$defaultController, 'bindCard'])->middleware(['auth:api']);
-        Route::get('/validate', [$defaultController, 'validateCard'])->middleware(['auth:api']);
+        Route::post('/bind', [CreditCardController::class, 'bindCard'])->middleware(['auth:api']);
+        Route::get('/validate', [CreditCardController::class, 'validateCard'])->middleware(['auth:api']);
     }
 );
 
 Route::group(
     ['prefix' => 'consignments'],
     function () {
-        $defaultController = ConsignmentRequestController::class;
-
-        Route::group(
-            ['middleware' => 'auth:api'],
-            function () use ($defaultController) {
-                Route::post('/', [$defaultController, 'createConsignmentRequest']);
-            }
-        );
+        Route::group(['middleware' => 'auth:api'],  function () {
+            Route::post('/', [ConsignmentRequestController::class, 'createConsignmentRequest']);
+        });
     }
 );
 
 Route::group(
     ['prefix' => 'sitemap'],
     function () {
-        $defaultController = SiteMapController::class;
-
-        Route::get('/auctions/all', [$defaultController, 'getAllAuctions'])->middleware(['pagination']);
-        Route::get('/auctions/{store_id}/products/all', [$defaultController, 'filterAuctionProductsByCategories'])->middleware(['pagination']);
-        Route::get('/auction-lots/{auction_lot_id}/details', [$defaultController, 'getAuctionLotDetails']);
+        Route::get('/auctions/all', [SiteMapController::class, 'getAllAuctions'])->middleware(['pagination']);
+        Route::get('/auctions/{store_id}/products/all', [SiteMapController::class, 'filterAuctionProductsByCategories'])->middleware(['pagination']);
+        Route::get('/auction-lots/{auction_lot_id}/details', [SiteMapController::class, 'getAuctionLotDetails']);
     }
 );

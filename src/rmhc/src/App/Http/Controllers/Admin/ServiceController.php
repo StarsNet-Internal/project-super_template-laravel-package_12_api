@@ -29,7 +29,9 @@ class ServiceController extends Controller
     public function paymentCallback(Request $request): array
     {
         $acceptableEventTypes = [
-            'charge.succeeded'
+            'charge.succeeded',
+            'setup_intent.succeeded',
+            'payment_method.attached'
         ];
 
         if (!in_array($request->type, $acceptableEventTypes)) {
@@ -42,15 +44,48 @@ class ServiceController extends Controller
         // Extract metadata from $request
         $model = $request->data['object']['metadata']['model_type'] ?? null;
         $modelID = $request->data['object']['metadata']['model_id'] ?? null;
+        $customEventType = $request->data['object']['metadata']['custom_event_type'] ?? null;
 
         // ===============
         // Handle Events
         // ===============
         switch ($request->type) {
+            case 'setup_intent.succeeded': {
+                    if ($customEventType === 'bind_credit_card') {
+                        /** @var ?Customer $customer */
+                        $customer = Customer::find($modelID);
+                        if (is_null($customer)) abort(404, 'Customer not found');
+
+                        $customer->update(['stripe_payment_method_id' => $request->data['object']['payment_method']]);
+
+                        return [
+                            'message' => 'Customer updated',
+                            'customer_id' => $customer->id,
+                        ];
+                    }
+                    break;
+                }
+            case 'payment_method.attached': {
+                    /** @var ?Customer $customer */
+                    $customer = Customer::where('stripe_payment_method_id', $request->data['object']['id'])
+                        ->latest()
+                        ->first();
+                    if (is_null($customer)) abort(404, 'Customer not found');
+
+                    $customer->update([
+                        'stripe_customer_id' => $request->data['object']['customer'],
+                        'stripe_card_binded_at' => now(),
+                        'stripe_card_data' => $request->data['object']['card']
+                    ]);
+
+                    return [
+                        'message' => 'Customer updated',
+                        'customer_id' => $customer->_id,
+                    ];
+                }
             case 'charge.succeeded': {
                     if ($model === 'batch_payment') {
                         // Update BatchPayment
-
                         /** @var ?BatchPayment $batchPayment */
                         $batchPayment = BatchPayment::find($modelID);
                         if (is_null($batchPayment)) abort(404, 'BatchPayment not found');
@@ -88,6 +123,7 @@ class ServiceController extends Controller
                             'order_id' => $order->id
                         ];
                     }
+                    break;
                 }
             default: {
                     abort(400, "Invalid eventType given: $request->type");
@@ -142,14 +178,9 @@ class ServiceController extends Controller
             ->get()
             ->keyBy('_id');
 
-        // $winningHistories = WinningCustomerHistory::whereIn('auction_lot_id', $winningLotIDs)
-        //     ->get()
-        //     ->keyBy('auction_lot_id');
-
         // Create ShoppingCartItem(s) from each AuctionLot
         foreach ($resultLots as $resultLot) {
             $winningLot = $winningLots[$resultLot['lot_id']] ?? null;
-            // $winningHistory = $winningHistories[$resultLot->lot_id] ?? null;
             $price = $resultLot['price'];
 
             $attributes = [

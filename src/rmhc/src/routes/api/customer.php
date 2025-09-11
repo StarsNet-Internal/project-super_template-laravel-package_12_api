@@ -4,6 +4,7 @@
 use Illuminate\Support\Facades\Route;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\AuctionLotController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\BidController;
+use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\CreditCardController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\OrderController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\ProductManagementController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\TestingController;
@@ -29,9 +30,7 @@ use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\WatchlistItemController;
 Route::group(
     ['prefix' => 'tests'],
     function () {
-        $defaultController = TestingController::class;
-
-        Route::get('/health-check', [$defaultController, 'healthCheck']);
+        Route::get('/health-check', [TestingController::class, 'healthCheck']);
     }
 );
 
@@ -66,6 +65,15 @@ Route::group(
                 Route::get('/all', [BidController::class, 'getAllBids']);
             }
         );
+    }
+);
+
+
+Route::group(
+    ['prefix' => 'credit-cards'],
+    function () {
+        Route::post('/bind', [CreditCardController::class, 'bindCard'])->middleware(['auth:api']);
+        // Route::get('/validate', [CreditCardController::class, 'validateCard'])->middleware(['auth:api']);
     }
 );
 

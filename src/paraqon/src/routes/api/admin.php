@@ -254,14 +254,20 @@ Route::group(
 );
 
 Route::group(
+    ['prefix' => '/stores/{store_id}/shopping-cart'],
+    function () {
+        Route::group(['middleware' => 'auth:api'], function () {
+            Route::post('/add-to-cart', [ShoppingCartController::class, 'checkOut']);
+        });
+    }
+);
+
+Route::group(
     ['prefix' => 'shopping-cart'],
     function () {
-        Route::group(
-            ['middleware' => 'auth:api'],
-            function () {
-                Route::get('/all', [ShoppingCartController::class, 'getShoppingCartItems'])->middleware(['pagination']);
-            }
-        );
+        Route::group(['middleware' => 'auth:api'],  function () {
+            Route::get('/all', [ShoppingCartController::class, 'getShoppingCartItems'])->middleware(['pagination']);
+        });
     }
 );
 
