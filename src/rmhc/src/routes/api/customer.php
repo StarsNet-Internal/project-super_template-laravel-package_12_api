@@ -87,6 +87,7 @@ Route::group(
                 Route::post('/donate', [OrderController::class, 'createDonationOrder']);
                 Route::get('/batch/preview', [OrderController::class, 'getOrdersByBatchPreview']);
                 Route::post('/batch', [OrderController::class, 'payOrdersByBatch']);
+                Route::get('/all', [OrderController::class, 'getAllOrders'])->middleware(['pagination']);
             }
         );
     }

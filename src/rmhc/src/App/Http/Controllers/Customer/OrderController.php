@@ -100,6 +100,18 @@ class OrderController extends Controller
         ];
     }
 
+    public function getAllOrders(Request $request)
+    {
+        $storeID = Alias::where('key', $request->store_id)
+            ->latest()
+            ->first()
+            ?->value
+            ?? $request->store_id;
+        return Order::where('store_id', $storeID)
+            ->where('is_system', $request->boolean('is_system') ?? true)
+            ->get();
+    }
+
     public function getOrdersByBatchPreview(Request $request): array
     {
         $customer = $this->customer();
