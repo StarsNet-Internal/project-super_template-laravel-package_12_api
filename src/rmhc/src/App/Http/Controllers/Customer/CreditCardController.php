@@ -36,15 +36,18 @@ class CreditCardController extends Controller
                 'account' => $this->account()
             ];
         } catch (\Exception $e) {
+            $customerID = $this->customer()->id;
             // Log the full error for debugging (not exposed to user)
             Log::error('Stripe setup intent failed: ' . $e->getMessage(), [
                 'exception' => $e,
-                'customer_id' => $this->customer()->id
+                'customer_id' => $customerID
             ]);
 
-            // Return a generic error response to the frontend
             return response()->json([
                 'message' => 'Unable to process payment method at this time',
+                'given_url' => $url,
+                'given_data' => $data,
+                'customer_id' => $customerID,
                 'error' => 'payment_processing_error'
             ], 500);
         }

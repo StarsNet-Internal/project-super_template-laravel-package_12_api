@@ -28,19 +28,18 @@ class AuctionRegistrationRequestController extends Controller
         $customer = Customer::find($request->customer_id);
         if (is_null($customer)) abort(404, 'Customer not found');
 
-        // Check if there's existing AuctionRegistrationRequest
+        // Check if there is existing AuctionRegistrationRequest
         /** @var ?AuctionRegistrationRequest $oldForm */
         $oldForm = AuctionRegistrationRequest::where('requested_by_customer_id', $customer->id)
             ->where('store_id', $store->id)
             ->first();
 
         if ($oldForm instanceof AuctionRegistrationRequest) {
-            $oldFormAttributes = [
+            $oldForm->update([
                 'approved_by_account_id' => $this->account()->id,
                 'status' => Status::ACTIVE->value,
                 'reply_status' => ReplyStatus::APPROVED->value,
-            ];
-            $oldForm->update($oldFormAttributes);
+            ]);
 
             return [
                 'message' => 'Re-activated previously created AuctionRegistrationRequest successfully',
@@ -48,13 +47,11 @@ class AuctionRegistrationRequestController extends Controller
             ];
         }
 
-        // Create AuctionRegistrationRequest
-        $newFormAttributes = [
+        /** @var AuctionRegistrationRequest $newForm */
+        $newForm = AuctionRegistrationRequest::create([
             'requested_by_customer_id' => $customer->id,
             'store_id' => $store->id,
-        ];
-        /** @var AuctionRegistrationRequest $newForm */
-        $newForm = AuctionRegistrationRequest::create($newFormAttributes);
+        ]);
 
         return [
             'message' => 'Created New AuctionRegistrationRequest successfully',

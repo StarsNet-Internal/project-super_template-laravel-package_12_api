@@ -83,5 +83,6 @@ Route::group(
     function () {
         Route::post('/payment/callback', [ServiceController::class, 'paymentCallback']);
         Route::post('/auctions/{store_id}/orders/create', [ServiceController::class, 'generateAuctionOrders']);
+        Route::post('/batch-payments/charge', [ServiceController::class, 'createBatchPaymentAndCharge']);
     }
 );

@@ -3,6 +3,7 @@
 // Default Imports
 use Illuminate\Support\Facades\Route;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\AuctionLotController;
+use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\AuthenticationController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\BidController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\CreditCardController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\OrderController;
@@ -39,6 +40,18 @@ Route::group(
 | Product related
 |--------------------------------------------------------------------------
 */
+
+Route::group(
+    ['prefix' => 'auth'],
+    function () {
+        Route::group(
+            ['middleware' => 'auth:api'],
+            function () {
+                Route::post('/migrate', [AuthenticationController::class, 'migrateToRegistered']);
+            }
+        );
+    }
+);
 
 // AuctionLots
 Route::group(

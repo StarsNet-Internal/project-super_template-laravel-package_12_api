@@ -85,6 +85,7 @@ class OrderController extends Controller
             'delivery_info' => $request->delivery_info,
             'delivery_details' => $request->delivery_details,
             'is_voucher_applied' => false,
+            'is_receipt_required' => $request->is_receipt_required ?? false
         ];
 
         /** @var Order $order */
@@ -107,8 +108,15 @@ class OrderController extends Controller
             ->first()
             ?->value
             ?? $request->store_id;
+
         return Order::where('store_id', $storeID)
-            ->where('is_system', $request->boolean('is_system') ?? true)
+            ->when(
+                $request->has('is_system'),
+                function ($query) use ($request) {
+                    $isSystem = filter_var($request->is_system, FILTER_VALIDATE_BOOLEAN);
+                    $query->where('is_system', $isSystem);
+                }
+            )
             ->get();
     }
 

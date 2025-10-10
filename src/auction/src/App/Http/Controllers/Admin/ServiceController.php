@@ -390,6 +390,9 @@ class ServiceController extends Controller
             abort(404, 'Payment processing failed');
             return [
                 'message' => 'Payment processing failed',
+                'url' => $url,
+                'method' => 'POST',
+                'data' => $stripeData,
                 'error' => json_decode($e->getMessage(), true) ?: $e->getMessage()
             ];
         }

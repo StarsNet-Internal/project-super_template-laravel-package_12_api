@@ -135,9 +135,9 @@ class AuctionController extends Controller
                 ->value('paddle_id');
 
             /** @var int $newPaddleId */
-            $newPaddleId = is_int($latestPaddleId)
-                ? $latestPaddleId + 1
-                : ($store->paddle_number_start_from ?? 1);
+            $newPaddleId = is_null($latestPaddleId)
+                ? ($store->paddle_number_start_from ?? 1)
+                : $latestPaddleId + 1;
 
             /** @var AuctionRegistrationRequest $newForm */
             $newForm = AuctionRegistrationRequest::create([

@@ -129,86 +129,172 @@ class OrderController extends Controller
         return ['message' => 'Uploaded image successfully'];
     }
 
-    public function getInvoiceData(Request $request): array
+    public function getInvoiceData(Request $request)
     {
-        /** @var ?Order $order */
-        $order = Order::find($request->route('id'));
-        if (is_null($order)) abort(404, 'Order not found');
+        $document = Order::find($request->route('id'));
+        $store = $document->store;
 
-        // Get AuctionRegistrationRequest
-        $store = $order->store;
-        $customer = $order->customer;
+        return isset($store->auction_type)
+            ? $this->getAuctionInvoiceData($request)
+            : $this->getPrivateSaleInvoiceData($request);
+    }
+
+    public function getAuctionInvoiceData(Request $request)
+    {
+        $orderId = $request->route('id');
+        $language = $request->route('language');
+
+        $document = Order::find($orderId);
+        if (is_null($document)) abort(404, 'Order not found');
+
+        $storeId = $document->store_id;
+        $customerId = $document->customer_id;
+
+        $store = $document->store;
+        $storeName = $store->title[$language];
+        $invoicePrefix = $store->invoice_prefix ?? 'OA1';
+
+        $customer = $document->customer;
         $account = $customer->account;
 
-        /** @var AuctionRegistrationRequest $auctionRegistrationRequest */
-        $auctionRegistrationRequest = AuctionRegistrationRequest::where('store_id', $store->id)
-            ->where('requested_by_customer_id', $customer->id)
+        // Get AuctionRegistrationRequest
+        $auctionRegistrationRequest = AuctionRegistrationRequest::where('store_id', $storeId)
+            ->where('requested_by_customer_id', $customerId)
             ->first();
+        $paddleId = $auctionRegistrationRequest->paddle_id;
 
-        // Get Store metadata
-        $language = $request->route('language');
-        $dateText = $this->formatDateRange($store['start_datetime'], $store['display_end_datetime']);
-        $auctionTitle = $store['title'][$language] . ' ' . $dateText;
+        // Construct Store Name
+        $dateText = $this->formatDateRange($store->start_datetime, $store->display_end_datetime);
+        $storeNameText = "{$storeName} {$dateText}";
 
-        // Get buyer name
-        $buyerName = $account['username'];
-        if (
-            $order['is_system'] === false &&
-            isset($order['delivery_details']['recipient_name'])
-        ) {
-            $first = $order['delivery_details']['recipient_name']['first_name'] ?? '';
-            $last = $order['delivery_details']['recipient_name']['last_name'] ?? '';
-            if ($last) $buyerName = "$last, $first";
+        // Get buyerName
+        $buyerName = $account->username;
+
+        if (!empty($account->legal_name_verification['name'])) {
+            $buyerName = $account->legal_name_verification['name'];
+        } else if (!$document->is_system) {
+            $firstName = optional($document->delivery_details)['recipient_name']['first_name'];
+            $lastName = optional($document->delivery_details)['recipient_name']['last_name'];
+            if ($lastName) $buyerName = "{$lastName}, {$firstName}";
         }
 
-        $createdAt = Carbon::parse($order['created_at'])->addHours(8);
-        $formattedIssueDate = $createdAt->format('d/m/Y');
+        // Format data
+        $issueDate = Carbon::parse($document->created_at)->addHours(8);
+        $formattedIssueDate = $issueDate->format('d/m/Y');
 
-        $itemsData = collect($order['cart_items'])
-            ->map(function ($item) use ($language) {
-                $formatted = number_format($item['winning_bid'], 2, '.', '');
-                return [
-                    'lotNo' => $item['lot_number'],
-                    'lotImage' => $item['image'],
-                    'description' => $item['product_title'][$language],
-                    'hammerPrice' => $formatted,
-                    'commission' => number_format(0, 2, '.', ''),
-                    'otherFees' => number_format(0, 2, '.', ''),
-                    'totalOrSum' => $formatted
-                ];
-            })
-            ->toArray();
+        $itemsData = collect($document->cart_items)->map(function ($item) use ($language) {
+            $hammerPrice = number_format($item->winning_bid, 2, '.', ',');
+            $commission = number_format($item->commission ?? 0, 2, '.', ',');
+            $otherFees = number_format(0, 2, '.', ',');
+            $totalOrSumValue = $item->sold_price ?? $item->winning_bid;
+            $totalOrSum = number_format($totalOrSumValue, 2, '.', ',');
 
-        // Get totalPriceText
-        $total = floatval($order['calculations']['price']['total'] ?? 0);
-        $deposit = floatval($order['calculations']['deposit'] ?? 0);
-        $totalFormatted = number_format($total + $deposit, 2, '.', '');
+            return [
+                'lotNo' => $item->lot_number,
+                'lotImage' => $item->image,
+                'description' => $item->product_title[$language],
+                'hammerPrice' => $hammerPrice,
+                'commission' => $commission,
+                'otherFees' => $otherFees,
+                'totalOrSum' => $totalOrSum,
+            ];
+        });
 
-        $creditChargeText = $language === 'zh'
-            ? "包括3.5%信用卡收費"
-            : "Includes 3.5% credit card charge";
-        $totalPriceText = $order['payment_method'] === "ONLINE"
-            ? "$totalFormatted ($creditChargeText)"
-            : $totalFormatted;
-
-        // Get paddle_id
-        $paddleID = $auctionRegistrationRequest['paddle_id'];
-        $invoiceID = ($store->invoice_prefix ?? 'OA1') . '-' . $paddleID;
+        $total = (float) $document->calculations['price']['total'];
+        $deposit = (float) $document->calculations['deposit'];
+        $totalPrice = is_nan($total) || is_nan($deposit) ? NAN : number_format($total + $deposit, 2, '.', ',');
+        $totalPriceText = ($document->payment_method == "ONLINE" && $invoicePrefix == 'OA1')
+            ? "{$totalPrice} (includes credit card charge of 3.5%)"
+            : $totalPrice;
 
         return [
-            'model' => "INVOICE",
-            'type' => "Buyer",
+            'model' => 'INVOICE',
+            'type' => 'Buyer',
             'data' => [
                 'lang' => $language,
                 'buyerName' => $buyerName,
                 'date' => $formattedIssueDate,
-                'clientNo' => substr($customer->id, -6),
-                'paddleNo' => "#$paddleID",
-                'auctionTitle' => $auctionTitle,
+                'clientNo' => substr($customerId, -6),
+                'paddleNo' => "#{$paddleId}",
+                'auctionTitle' => $storeNameText,
                 'shipTo' => "In-store pick up",
-                'invoiceNum' => $invoiceID,
+                'invoiceNum' => "{$invoicePrefix}-{$paddleId}",
                 'items' => $itemsData,
-                'tableTotal' => $totalPriceText
+                'tableTotal' => $totalPriceText,
+            ]
+        ];
+    }
+
+    public function getPrivateSaleInvoiceData(Request $request): array
+    {
+        $orderId = $request->route('id');
+        $language = $request->route('language');
+
+        $document = Order::find($orderId);
+        if (is_null($document)) abort(404, 'Order not found');
+
+        $customerId = $document->customer_id;
+
+        $store = $document->store;
+        $storeName = $store->title[$language];
+        $invoicePrefix = $store->invoice_prefix ?? 'OA1';
+
+        $customer = $document->customer;
+        $account = $customer->account;
+
+        // Construct Store Name
+        $storeNameText = $storeName;
+
+        // Get buyerName
+        $buyerName = $account->username;
+
+        if (!empty($account->legal_name_verification['name'])) {
+            $buyerName = $account->legal_name_verification['name'];
+        } else if (!$document->is_system) {
+            $firstName = optional($document->delivery_details)['recipient_name']['first_name'];
+            $lastName = optional($document->delivery_details)['recipient_name']['last_name'];
+            if ($lastName) $buyerName = "{$lastName}, {$firstName}";
+        }
+
+        // Format data
+        $issueDate = Carbon::parse($document->created_at)->addHours(8);
+        $formattedIssueDate = $issueDate->format('d/m/Y');
+
+        $itemsData = collect($document->cart_items)->map(function ($item) use ($language) {
+            // Calculate values with fallbacks
+            $hammerPrice = number_format((float) $item->subtotal_price, 2, '.', ',');
+            $commission = number_format(0, 2, '.', ',');
+            $otherFees = number_format(0, 2, '.', ',');
+            $totalOrSumValue = $hammerPrice;
+            $totalOrSum = $totalOrSumValue;
+
+            return [
+                'lotNo' => $item->stock_no,
+                'lotImage' => $item->image,
+                'description' => $item->product_title[$language],
+                'hammerPrice' => $hammerPrice,
+                'commission' => $commission,
+                'otherFees' => $otherFees,
+                'totalOrSum' => $totalOrSum,
+            ];
+        });
+
+        $total = (float) $document->calculations['price']['total'];
+        $totalPrice = is_nan($total) ? NAN : number_format($total, 2, '.', ',');
+
+        return [
+            'model' => 'PRIVATE_SALE_INVOICE',
+            'type' => 'Buyer',
+            'data' => [
+                'lang' => $language,
+                'buyerName' => $buyerName,
+                'date' => $formattedIssueDate,
+                'clientNo' => $account->client_no ?? substr($customerId, -6),
+                'auctionTitle' => $storeNameText,
+                'shipTo' => "In-store pick up",
+                'invoiceNum' => "{$invoicePrefix}-" . substr($orderId, -6),
+                'items' => $itemsData,
+                'tableTotal' => $totalPrice,
             ]
         ];
     }
@@ -217,20 +303,17 @@ class OrderController extends Controller
         string $startDateTime,
         string $endDateTime
     ): string {
-        if (empty($startDateTime) || empty($endDateTime)) return "";
+        if (!$startDateTime || !$endDateTime) return "";
 
-        try {
-            $start = Carbon::parse($startDateTime)->utc();
-            $end = Carbon::parse($endDateTime)->utc();
-            if ($end->lt($start)) [$start, $end] = [$end, $start];
+        $start = Carbon::parse($startDateTime)->utc();
+        $end = Carbon::parse($endDateTime)->utc();
 
-            if ($start->isSameDay($end) && $start->isSameMonth($end) && $start->isSameYear($end)) return $start->format('d M Y');
-            if ($start->isSameMonth($end) && $start->isSameYear($end)) return $start->format('d') . '-' . $end->format('d') . ' ' . $start->format('M Y');
-            if ($start->isSameYear($end)) return $start->format('d M') . ' - ' . $end->format('d M Y');
-            return $start->format('d M Y') . ' - ' . $end->format('d M Y');
-        } catch (\Exception $e) {
-            return $startDateTime ?? $endDateTime ?? "";
+        if ($start->format('M') === $end->format('M') && $start->year === $end->year) {
+            return $start->format('d') . '-' . $end->format('d') . ' ' . $start->format('M Y');
+        } elseif ($start->year === $end->year) {
+            return $start->format('d M') . ' - ' . $end->format('d M Y');
         }
+        return $start->format('d M Y') . ' - ' . $end->format('d M Y');
     }
 
     public function cancelOrderPayment(Request $request)
