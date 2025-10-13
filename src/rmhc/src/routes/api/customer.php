@@ -94,10 +94,14 @@ Route::group(
 Route::group(
     ['prefix' => 'customers'],
     function () {
-        Route::get('/all', [CustomerController::class, 'getAllCustomers'])->middleware(['auth:api']);
+        Route::group(
+            ['middleware' => 'auth:api'],
+            function () {
+                Route::get('/all', [CustomerController::class, 'getAllCustomers'])->middleware(['pagination']);
+            }
+        );
     }
 );
-
 // Orders (Donation and Batch Payment related)
 Route::group(
     ['prefix' => 'orders'],
