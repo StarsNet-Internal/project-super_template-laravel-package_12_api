@@ -373,7 +373,7 @@ class ServiceController extends Controller
             is_null($customer->stripe_payment_method_id) ||
             is_null($customer->stripe_card_data)
         ) {
-            abort(404, 'Customer stripe payment info not found');
+            abort(200, 'Customer stripe payment info not found, cannot auto-charge');
         }
 
         // Validate card
@@ -385,7 +385,7 @@ class ServiceController extends Controller
         if (!($expYear > $currentYear ||
             ($expYear === $currentYear && $expMonth >= $currentMonth)
         )) {
-            abort(400, 'Customer stripe payment info expired');
+            abort(400, 'Customer stripe payment info expired, cannot auto-charge');
         }
 
         // Clone Orders
