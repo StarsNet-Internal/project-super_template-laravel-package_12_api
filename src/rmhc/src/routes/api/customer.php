@@ -6,6 +6,7 @@ use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\AuctionLotController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\AuthenticationController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\BidController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\CreditCardController;
+use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\CustomerController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\OrderController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\ProductManagementController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\TestingController;
@@ -87,6 +88,13 @@ Route::group(
     function () {
         Route::post('/bind', [CreditCardController::class, 'bindCard'])->middleware(['auth:api']);
         // Route::get('/validate', [CreditCardController::class, 'validateCard'])->middleware(['auth:api']);
+    }
+);
+
+Route::group(
+    ['prefix' => 'customers'],
+    function () {
+        Route::get('/all', [CustomerController::class, 'getAllCustomers'])->middleware(['auth:api']);
     }
 );
 
