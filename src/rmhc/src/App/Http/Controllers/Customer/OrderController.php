@@ -3,6 +3,8 @@
 namespace Starsnet\Project\Rmhc\App\Http\Controllers\Customer;
 
 // Laravel built-in
+
+use App\Enums\CheckoutType;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -90,6 +92,11 @@ class OrderController extends Controller
 
         /** @var Order $order */
         $order = Order::create($orderAttributes);
+
+        /** @var Checkout $checkout */
+        $checkout = $order->checkout()->create([
+            'payment_method' => CheckoutType::ONLINE->value
+        ]);
 
         // Update Order status
         $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED->value);
