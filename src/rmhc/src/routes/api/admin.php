@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Route;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Admin\AuctionLotController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Admin\ArticleController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Admin\BatchPaymentController;
+use Starsnet\Project\Rmhc\App\Http\Controllers\Admin\OrderController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Admin\ServiceController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Admin\TestingController;
 
@@ -77,7 +78,18 @@ Route::group(
     }
 );
 
-// Watchlist
+Route::group(
+    ['prefix' => 'orders'],
+    function () {
+        Route::group(
+            ['middleware' => 'auth:api'],
+            function () {
+                Route::get('/invoice/generate', [OrderController::class, 'getInvoiceData']);
+            }
+        );
+    }
+);
+
 Route::group(
     ['prefix' => 'services'],
     function () {

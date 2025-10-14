@@ -373,7 +373,7 @@ class ServiceController extends Controller
             is_null($customer->stripe_payment_method_id) ||
             is_null($customer->stripe_card_data)
         ) {
-            abort(200, 'Customer stripe payment info not found, cannot auto-charge');
+            abort(404, 'Customer stripe payment info not found, cannot auto-charge');
         }
 
         // Validate card
@@ -469,7 +469,7 @@ class ServiceController extends Controller
 
             $url = env('RMHC_STRIPE_BASE_URL', 'http://192.168.0.83:8083') . '/bind-card/charge';
             $response = Http::post($url, $stripeData);
-            Log::info($response);
+
             if ($response->failed()) {
                 $error = $response->json()['error'] ?? 'Stripe API request failed';
                 throw new \Exception(json_encode($error));
@@ -488,14 +488,13 @@ class ServiceController extends Controller
                 'new_order_ids' => $clonedOrderIDs
             ];
         } catch (\Exception $e) {
-            abort(404, 'Payment processing failed');
-            return [
+            return response()->json([
                 'message' => 'Payment processing failed',
                 'url' => $url,
                 'method' => 'POST',
                 'data' => $stripeData,
                 'error' => json_decode($e->getMessage(), true) ?: $e->getMessage()
-            ];
+            ], 404);
         }
     }
 }
