@@ -122,8 +122,17 @@ class AuctionRegistrationRequestController extends Controller
         ];
     }
 
-    public function createDeposit(Request $request): array
+    public function createDeposit(Request $request)
     {
+        $user = $this->user();
+        if ($user->type === 'TEMP') {
+            return response()->json([
+                'message' => 'Customer is a TEMP user',
+                'error_status' => 1,
+                'current_user' => $user
+            ], 401);
+        }
+
         // Extract attributes from $request
         $paymentMethod = $request->payment_method;
         $amount = $request->amount;

@@ -129,7 +129,6 @@ Route::group(
             function () {
                 Route::post('/register', [AuctionRegistrationRequestController::class, 'registerAuction']);
                 Route::get('/all', [AuctionRegistrationRequestController::class, 'getAllRegisteredAuctions'])->middleware(['pagination']);
-                // Route::post('/{id}/deposit', [AuctionRegistrationRequestController::class, 'createDeposit']);
                 Route::put('/{id}/archive', [AuctionRegistrationRequestController::class, 'archiveAuctionRegistrationRequest']);
                 Route::put('/{id}/details', [AuctionRegistrationRequestController::class, 'updateAuctionRegistrationRequest']);
             }
