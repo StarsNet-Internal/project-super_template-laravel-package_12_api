@@ -20,16 +20,16 @@ use Starsnet\Project\Paraqon\App\Models\Deposit;
 
 class AuctionRegistrationRequestController extends Controller
 {
-    public function registerAuction(Request $request): array
+    public function registerAuction(Request $request)
     {
         // Check User
         $user = $this->user();
         if ($user->type === 'TEMP') {
-            return [
+            return response()->json([
                 'message' => 'Customer is a TEMP user',
                 'error_status' => 1,
                 'current_user' => $user
-            ];
+            ], 401);
         }
 
         // Check CustomerGroup for reply_status value
