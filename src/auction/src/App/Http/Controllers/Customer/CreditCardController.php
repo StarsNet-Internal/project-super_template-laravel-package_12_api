@@ -11,6 +11,15 @@ class CreditCardController extends Controller
 {
     public function bindCard()
     {
+        $user = $this->user();
+        if ($user->type === 'TEMP') {
+            return [
+                'message' => 'Customer is a TEMP user',
+                'error_status' => 1,
+                'current_user' => $user
+            ];
+        }
+
         try {
             $url = env('TCG_BID_STRIPE_BASE_URL', 'http://192.168.0.83:8083') . '/setup-intents';
 
@@ -35,16 +44,20 @@ class CreditCardController extends Controller
                 'account' => $this->account()
             ];
         } catch (\Exception $e) {
+            $customer = $this->customer();
             // Log the full error for debugging (not exposed to user)
             Log::error('Stripe setup intent failed: ' . $e->getMessage(), [
                 'exception' => $e,
-                'customer_id' => $this->customer()->id
+                'customer_id' => $customer->id
             ]);
 
             // Return a generic error response to the frontend
             return response()->json([
-                'message' => 'Unable to process payment method at this time',
-                'error' => 'payment_processing_error'
+                'message' => 'Unable to reach Stripe Node Container via nginx correctly, or url given below is incorrect',
+                'url' => $url,
+                'data' => $data,
+                'current_user' => $user,
+                'error_status' => 2
             ], 500);
         }
     }

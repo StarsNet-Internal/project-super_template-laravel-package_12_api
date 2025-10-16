@@ -22,6 +22,16 @@ class AuctionRegistrationRequestController extends Controller
 {
     public function registerAuction(Request $request): array
     {
+        // Check User
+        $user = $this->user();
+        if ($user->type === 'TEMP') {
+            return [
+                'message' => 'Customer is a TEMP user',
+                'error_status' => 1,
+                'current_user' => $user
+            ];
+        }
+
         // Check CustomerGroup for reply_status value
         $customer = $this->customer();
         $hasWaivedAuctionRegistrationGroup = $customer->groups()
