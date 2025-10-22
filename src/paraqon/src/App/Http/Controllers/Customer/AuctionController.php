@@ -128,12 +128,16 @@ class AuctionController extends Controller
     public function getAllPaddles(Request $request): Collection
     {
         return AuctionRegistrationRequest::where('store_id', $request->route('auction_id'))
+            ->whereNotNull('paddle_id')
+            ->where('status', '!=', Status::DELETED->value)
             ->get()
-            ->map(function ($item) {
-                return [
-                    'customer_id' => $item['requested_by_customer_id'],
-                    'paddle_id' => $item['paddle_id']
-                ];
-            });
+            ->map(
+                function ($item) {
+                    return [
+                        'customer_id' => $item['requested_by_customer_id'],
+                        'paddle_id' => $item['paddle_id']
+                    ];
+                }
+            );
     }
 }

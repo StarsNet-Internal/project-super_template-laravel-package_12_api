@@ -119,6 +119,7 @@ class ProductManagementController extends Controller
         $categoryIDs = array_filter(array_unique((array) $request->category_ids));
         if (count($categoryIDs) > 0) {
             $categoryProductIDs = Category::whereIn('_id', $categoryIDs)
+                ->status(Status::ACTIVE->value)
                 ->pluck('item_ids')
                 ->flatten()
                 ->filter(fn($id) => !is_null($id))
@@ -140,7 +141,7 @@ class ProductManagementController extends Controller
         /** @var Collection $auctionLots */
         $auctionLots = AuctionLot::whereIn('product_id', $productIDs)
             ->where('store_id', $this->store->id)
-            ->whereIn('status', [Status::ACTIVE->value, Status::ARCHIVED->value])
+            ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
             ->with(['watchlistItems'])
             ->get()
             ->map(function ($lot) {

@@ -206,26 +206,37 @@ class OrderController extends Controller
         $totalPriceText = ($document->payment_method == "ONLINE" && $invoicePrefix == 'OA1')
             ? "{$totalPrice} (includes credit card charge of 3.5%)"
             : $totalPrice;
+        $depositText = number_format($deposit, 2, '.', ',');
+        $formattedDepositText = $deposit > 0 ? "($depositText)" : $depositText;
+        $amountPayableText = number_format($total, 2, '.', ',');
+
+        // Construct entire data
+        $newCustomerId = substr($customerId, -6);
+        $invoiceId = "{$invoicePrefix}-{$paddleId}";
+
+        $data = [
+            'lang' => $language,
+            'buyerName' => $buyerName,
+            'date' => $formattedIssueDate,
+            'clientNo' => $newCustomerId,
+            'paddleNo' => "#{$paddleId}",
+            'auctionTitle' => $storeNameText,
+            'shipTo' => "In-store pick up",
+            'invoiceNum' => $invoiceId,
+            'items' => $itemsData,
+            'tableTotal' => $totalPriceText,
+            'tableDeposit' => $formattedDepositText,
+            'tableAmountPayable' => $amountPayableText,
+        ];
 
         return [
             'model' => 'INVOICE',
             'type' => 'Buyer',
-            'data' => [
-                'lang' => $language,
-                'buyerName' => $buyerName,
-                'date' => $formattedIssueDate,
-                'clientNo' => substr($customerId, -6),
-                'paddleNo' => "#{$paddleId}",
-                'auctionTitle' => $storeNameText,
-                'shipTo' => "In-store pick up",
-                'invoiceNum' => "{$invoicePrefix}-{$paddleId}",
-                'items' => $itemsData,
-                'tableTotal' => $totalPriceText,
-            ]
+            'data' => $data
         ];
     }
 
-    public function getPrivateSaleInvoiceData(Request $request): array
+    public function getPrivateSaleInvoiceData(Request $request)
     {
         $orderId = $request->route('id');
         $language = $request->route('language');
@@ -266,6 +277,7 @@ class OrderController extends Controller
             $commission = number_format(0, 2, '.', ',');
             $otherFees = number_format(0, 2, '.', ',');
             $totalOrSumValue = $hammerPrice;
+
             $totalOrSum = $totalOrSumValue;
 
             return [
@@ -282,20 +294,25 @@ class OrderController extends Controller
         $total = (float) $document->calculations['price']['total'];
         $totalPrice = is_nan($total) ? NAN : number_format($total, 2, '.', ',');
 
+        // Construct entire data
+        $invoiceId = "{$invoicePrefix}-" . substr($orderId, -6);
+
+        $data = [
+            'lang' => $language,
+            'buyerName' => $buyerName,
+            'date' => $formattedIssueDate,
+            'clientNo' => $account->client_no ?? substr($customerId, -6),
+            'auctionTitle' => $storeNameText,
+            'shipTo' => "In-store pick up",
+            'invoiceNum' => $invoiceId,
+            'items' => $itemsData,
+            'tableTotal' => $totalPrice,
+        ];
+
         return [
             'model' => 'PRIVATE_SALE_INVOICE',
             'type' => 'Buyer',
-            'data' => [
-                'lang' => $language,
-                'buyerName' => $buyerName,
-                'date' => $formattedIssueDate,
-                'clientNo' => $account->client_no ?? substr($customerId, -6),
-                'auctionTitle' => $storeNameText,
-                'shipTo' => "In-store pick up",
-                'invoiceNum' => "{$invoicePrefix}-" . substr($orderId, -6),
-                'items' => $itemsData,
-                'tableTotal' => $totalPrice,
-            ]
+            'data' => $data
         ];
     }
 

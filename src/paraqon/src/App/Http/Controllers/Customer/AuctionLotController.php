@@ -324,43 +324,6 @@ class AuctionLotController extends Controller
 
         // Update current_bid
         if (in_array($bidType, ['MAX', 'DIRECT'])) {
-            // Extend AuctionLot endDateTime
-            $currentLotEndDateTime = Carbon::parse($auctionLot->end_datetime);
-            $newLotEndDateTime = $currentLotEndDateTime;
-
-            $addExtendDays = $auctionLot->auction_time_settings['extension']['days'];
-            $addExtendHours = $auctionLot->auction_time_settings['extension']['hours'];
-            $addExtendMins = $auctionLot->auction_time_settings['extension']['mins'];
-
-            $extendLotDeadline = $currentLotEndDateTime->copy()
-                ->subDays($addExtendDays)
-                ->subHours($addExtendHours)
-                ->subMinutes($addExtendMins);
-
-            if ($now >= $extendLotDeadline && $now < $currentLotEndDateTime) {
-                $addMaxDays = $auctionLot->auction_time_settings['allow_duration']['days'];
-                $addMaxHours = $auctionLot->auction_time_settings['allow_duration']['hours'];
-                $addMaxMins = $auctionLot->auction_time_settings['allow_duration']['mins'];
-
-                $newEndDateTime = $currentLotEndDateTime->copy()
-                    ->addDays($addExtendDays)
-                    ->addHours($addExtendHours)
-                    ->addMinutes($addExtendMins);
-
-                $maxEndDateTime = $currentLotEndDateTime->copy()
-                    ->addDays($addMaxDays)
-                    ->addHours($addMaxHours)
-                    ->addMinutes($addMaxMins);
-
-                $newLotEndDateTime = $newEndDateTime >= $maxEndDateTime
-                    ? $maxEndDateTime :
-                    $newEndDateTime;
-
-                $auctionLot->update([
-                    'end_datetime' => $newLotEndDateTime->toISOString()
-                ]);
-            }
-
             // Update current_bid
             // Find winningCustomerID
             $auctionLotMaximumBid = Bid::where('auction_lot_id', $auctionLotId)
@@ -387,8 +350,8 @@ class AuctionLotController extends Controller
                 'winning_bid_customer_id' => $winningCustomerID,
             ]);
 
-            // Create Bid History Record
             if ($isBidPlaced == false || $newCurrentBid > $currentBid) {
+                // Create Bid History Record
                 $bidHistory = BidHistory::where('auction_lot_id', $auctionLotId)->first();
                 if ($bidHistory == null) {
                     $bidHistory = BidHistory::create([
@@ -404,14 +367,51 @@ class AuctionLotController extends Controller
                 ];
                 $bidHistory->histories()->create($bidHistoryItemAttributes);
                 $bidHistory->update(['current_bid' => $newCurrentBid]);
-            }
 
-            // Extend Store endDateTime
-            $currentStoreEndDateTime = Carbon::parse($store->end_datetime);
-            if ($newLotEndDateTime > $currentStoreEndDateTime) {
-                $store->update([
-                    'end_datetime' => $newLotEndDateTime->toISOString()
-                ]);
+                // Extend AuctionLot endDateTime
+                $currentLotEndDateTime = Carbon::parse($auctionLot->end_datetime);
+                $newLotEndDateTime = $currentLotEndDateTime;
+
+                $addExtendDays = $auctionLot->auction_time_settings['extension']['days'];
+                $addExtendHours = $auctionLot->auction_time_settings['extension']['hours'];
+                $addExtendMins = $auctionLot->auction_time_settings['extension']['mins'];
+
+                $extendLotDeadline = $currentLotEndDateTime->copy()
+                    ->subDays($addExtendDays)
+                    ->subHours($addExtendHours)
+                    ->subMinutes($addExtendMins);
+
+                if ($now >= $extendLotDeadline && $now < $currentLotEndDateTime) {
+                    $addMaxDays = $auctionLot->auction_time_settings['allow_duration']['days'];
+                    $addMaxHours = $auctionLot->auction_time_settings['allow_duration']['hours'];
+                    $addMaxMins = $auctionLot->auction_time_settings['allow_duration']['mins'];
+
+                    $newEndDateTime = $currentLotEndDateTime->copy()
+                        ->addDays($addExtendDays)
+                        ->addHours($addExtendHours)
+                        ->addMinutes($addExtendMins);
+
+                    $maxEndDateTime = $currentLotEndDateTime->copy()
+                        ->addDays($addMaxDays)
+                        ->addHours($addMaxHours)
+                        ->addMinutes($addMaxMins);
+
+                    $newLotEndDateTime = $newEndDateTime >= $maxEndDateTime
+                        ? $maxEndDateTime :
+                        $newEndDateTime;
+
+                    $auctionLot->update([
+                        'end_datetime' => $newLotEndDateTime->toISOString()
+                    ]);
+                }
+
+                // Extend Store endDateTime
+                $currentStoreEndDateTime = Carbon::parse($store->end_datetime);
+                if ($newLotEndDateTime > $currentStoreEndDateTime) {
+                    $store->update([
+                        'end_datetime' => $newLotEndDateTime->toISOString()
+                    ]);
+                }
             }
         }
 
