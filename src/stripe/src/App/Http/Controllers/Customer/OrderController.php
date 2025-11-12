@@ -82,7 +82,7 @@ class OrderController extends Controller
             $voucherCode,
             $now
         );
-        $giftItems = $this->processGiftItems($discounts['buyXGetYFree']);
+        $giftItems = $this->processGiftItems($discounts, $checkoutItems);
 
         $calculation = $this->calculateTotals(
             $priceDetails['subtotalPrice'],

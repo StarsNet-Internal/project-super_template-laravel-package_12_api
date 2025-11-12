@@ -248,6 +248,11 @@ class BidController extends Controller
                     ]);
                 }
 
+                // Extend Auction Lot
+                $auctionLot->update([
+                    'end_datetime' => $newLotEndDateTime->toISOString()
+                ]);
+
                 // Extend Store endDateTime
                 $currentStoreEndDateTime = Carbon::parse($store->end_datetime);
                 if ($newLotEndDateTime > $currentStoreEndDateTime) {

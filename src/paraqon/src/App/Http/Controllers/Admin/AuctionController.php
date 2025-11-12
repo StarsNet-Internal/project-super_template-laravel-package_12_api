@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
 // Enums
@@ -588,5 +589,18 @@ class AuctionController extends Controller
         return [
             'message' => 'Close all Lots successfully'
         ];
+    }
+
+    public function aggregate(Request $request)
+    {
+        $collection = $request->input('collection');
+        $pipeline = $request->input('pipeline');
+
+        return DB::connection('mongodb')
+            ->collection($collection)
+            ->raw(function ($collection) use ($pipeline) {
+                return $collection->aggregate($pipeline);
+            })
+            ->toArray();
     }
 }

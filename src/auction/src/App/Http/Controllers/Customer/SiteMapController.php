@@ -274,8 +274,18 @@ class SiteMapController extends Controller
                         '$match' => [
                             '$expr' => [
                                 '$and' => [
-                                    ['$lt' => ['$start_datetime', '$$NOW']],
-                                    ['$gte' => ['$end_datetime', '$$NOW']],
+                                    [
+                                        '$lt' => [
+                                            ['$toDate' => '$start_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
+                                    [
+                                        '$gte' => [
+                                            ['$toDate' => '$end_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
                                     ['$eq' => ['$status', 'ACTIVE']],
                                     [
                                         '$eq' => [
@@ -306,8 +316,18 @@ class SiteMapController extends Controller
                                     //         '$store_ids',
                                     //     ],
                                     // ],
-                                    ['$lt' => ['$start_datetime', '$$NOW']],
-                                    ['$gte' => ['$end_datetime', '$$NOW']],
+                                    [
+                                        '$lt' => [
+                                            ['$toDate' => '$start_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
+                                    [
+                                        '$gte' => [
+                                            ['$toDate' => '$end_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
                                     ['$eq' => ['$status', 'ACTIVE']],
                                     [
                                         '$eq' => [

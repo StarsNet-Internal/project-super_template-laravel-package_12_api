@@ -285,8 +285,18 @@ class WatchlistItemController extends Controller
                         '$match' => [
                             '$expr' => [
                                 '$and' => [
-                                    ['$lt' => ['$start_datetime', '$$NOW']],
-                                    ['$gte' => ['$end_datetime', '$$NOW']],
+                                    [
+                                        '$lt' => [
+                                            ['$toDate' => '$start_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
+                                    [
+                                        '$gte' => [
+                                            ['$toDate' => '$end_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
                                     ['$eq' => ['$status', 'ACTIVE']],
                                     [
                                         '$eq' => [
@@ -311,8 +321,18 @@ class WatchlistItemController extends Controller
                         '$match' => [
                             '$expr' => [
                                 '$and' => [
-                                    ['$lt' => ['$start_datetime', '$$NOW']],
-                                    ['$gte' => ['$end_datetime', '$$NOW']],
+                                    [
+                                        '$lt' => [
+                                            ['$toDate' => '$start_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
+                                    [
+                                        '$gte' => [
+                                            ['$toDate' => '$end_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
                                     ['$eq' => ['$status', 'ACTIVE']],
                                     [
                                         '$eq' => [

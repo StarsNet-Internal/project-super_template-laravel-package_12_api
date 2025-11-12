@@ -198,6 +198,19 @@ class ProductManagementController extends Controller
         return $products;
     }
 
+    public function getAllAuctionLotsAndNumber(Request $request)
+    {
+        return AuctionLot::where('store_id', $this->store->id)
+            ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
+            ->get()
+            ->map(function ($lot) {
+                return [
+                    'auction_lot_id' => $lot->_id ?? null,
+                    'lot_number' => $lot->lot_number ?? null
+                ];
+            });
+    }
+
     public function getRelatedAuctionProductsUrls(Request $request): array
     {
         // Extract attributes from $request
@@ -541,8 +554,18 @@ class ProductManagementController extends Controller
                         '$match' => [
                             '$expr' => [
                                 '$and' => [
-                                    ['$lt' => ['$start_datetime', '$$NOW']],
-                                    ['$gte' => ['$end_datetime', '$$NOW']],
+                                    [
+                                        '$lt' => [
+                                            ['$toDate' => '$start_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
+                                    [
+                                        '$gte' => [
+                                            ['$toDate' => '$end_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
                                     ['$eq' => ['$status', 'ACTIVE']],
                                     [
                                         '$eq' => [
@@ -573,8 +596,18 @@ class ProductManagementController extends Controller
                                     //         '$store_ids',
                                     //     ],
                                     // ],
-                                    ['$lt' => ['$start_datetime', '$$NOW']],
-                                    ['$gte' => ['$end_datetime', '$$NOW']],
+                                    [
+                                        '$lt' => [
+                                            ['$toDate' => '$start_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
+                                    [
+                                        '$gte' => [
+                                            ['$toDate' => '$end_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
                                     ['$eq' => ['$status', 'ACTIVE']],
                                     [
                                         '$eq' => [

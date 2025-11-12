@@ -213,6 +213,8 @@ Route::group(
         Route::group(
             ['prefix' => 'product-management'],
             function () {
+                Route::get('/auction-lots/number', [ProductManagementController::class, 'getAllAuctionLotsAndNumber'])->middleware(['pagination']);
+
                 Route::group(['middleware' => 'auth:api'], function () {
                     Route::get('/products/filter', [ProductManagementController::class, 'filterAuctionProductsByCategories'])->middleware(['pagination']);
                     Route::get('/products/filter/v2', [ProductManagementController::class, 'filterAuctionProductsByCategoriesV2'])->middleware(['pagination']);

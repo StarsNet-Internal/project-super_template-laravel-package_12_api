@@ -93,6 +93,8 @@ Route::group(
                 Route::put('/{store_id}/auction-lots/return', [AuctionController::class, 'returnAuctionLotToOriginalCustomer']);
 
                 Route::get('/{store_id}/close', [AuctionController::class, 'closeAllNonDisabledLots']);
+
+                Route::post('/aggregate', [AuctionController::class, 'aggregate']);
             }
         );
     }

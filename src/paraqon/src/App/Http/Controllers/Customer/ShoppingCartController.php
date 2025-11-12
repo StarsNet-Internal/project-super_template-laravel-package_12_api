@@ -1264,12 +1264,21 @@ class ShoppingCartController extends Controller
         float $price,
         int $productQty
     ): Collection {
+        $now = now();
+
         $customerGroups = $customer->groups()->get();
 
         // Get DiscountTemplate(s)
         /** @var Collection $discounts */
         $discounts = $store->discountTemplates()
-            ->whereTimeAvailableNow()
+            ->whereRaw([
+                '$expr' => [
+                    '$and' => [
+                        ['$lte' => [['$toDate' => '$start_datetime'], $now]],
+                        ['$gte' => [['$toDate' => '$end_datetime'], $now]]
+                    ]
+                ]
+            ])
             ->whereIsAutoApply()
             ->statusActive()
             ->byCustomerGroups($customerGroups)
@@ -1311,9 +1320,17 @@ class ShoppingCartController extends Controller
         $checkoutProductVariantIDs = $cartItems->pluck('product_variant_id')->all();
         if (count($checkoutProductVariantIDs) === 0) return collect();
 
+        $now = now();
         /** @var Collection $discounts */
         $discounts = $store->discountTemplates()
-            ->whereTimeAvailableNow()
+            ->whereRaw([
+                '$expr' => [
+                    '$and' => [
+                        ['$lte' => [['$toDate' => '$start_datetime'], $now]],
+                        ['$gte' => [['$toDate' => '$end_datetime'], $now]]
+                    ]
+                ]
+            ])
             ->whereIsAutoApply()
             ->statusActive()
             ->byCustomerGroups($customerGroups)
@@ -1350,10 +1367,18 @@ class ShoppingCartController extends Controller
     ): Collection {
         $customerGroups = $customer->groups()->get();
 
+        $now = now();
         // Get DiscountTemplate(s)
         /** @var Collection $discounts */
         $discounts = $store->discountTemplates()
-            ->whereTimeAvailableNow()
+            ->whereRaw([
+                '$expr' => [
+                    '$and' => [
+                        ['$lte' => [['$toDate' => '$start_datetime'], $now]],
+                        ['$gte' => [['$toDate' => '$end_datetime'], $now]]
+                    ]
+                ]
+            ])
             ->whereIsAutoApply()
             ->statusActive()
             ->byCustomerGroups($customerGroups)
@@ -1391,9 +1416,18 @@ class ShoppingCartController extends Controller
 
         /** @var DiscountTemplate $voucher */
         if (is_null($voucher)) {
+            $now = now();
+
             $customerGroups = $customer->groups()->get();
             $template = DiscountTemplate::wherePrefix($voucherCode)
-                ->whereTimeAvailableNow()
+                ->whereRaw([
+                    '$expr' => [
+                        '$and' => [
+                            ['$lte' => [['$toDate' => '$start_datetime'], $now]],
+                            ['$gte' => [['$toDate' => '$end_datetime'], $now]]
+                        ]
+                    ]
+                ])
                 ->whereIsAutoApply(false)
                 ->statusActive()
                 ->byCustomerGroups($customerGroups)

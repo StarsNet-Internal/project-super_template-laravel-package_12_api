@@ -76,8 +76,18 @@ trait ProjectProductTrait
                         '$match' => [
                             '$expr' => [
                                 '$and' => [
-                                    ['$lt' => ['$start_datetime', '$$NOW']],
-                                    ['$gte' => ['$end_datetime', '$$NOW']],
+                                    [
+                                        '$lt' => [
+                                            ['$toDate' => '$start_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
+                                    [
+                                        '$gte' => [
+                                            ['$toDate' => '$end_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
                                     ['$eq' => ['$status', 'ACTIVE']],
                                     [
                                         '$eq' => [
@@ -108,8 +118,18 @@ trait ProjectProductTrait
                                             '$store_ids',
                                         ],
                                     ],
-                                    ['$lt' => ['$start_datetime', '$$NOW']],
-                                    ['$gte' => ['$end_datetime', '$$NOW']],
+                                    [
+                                        '$lt' => [
+                                            ['$toDate' => '$start_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
+                                    [
+                                        '$gte' => [
+                                            ['$toDate' => '$end_datetime'],
+                                            '$$NOW'
+                                        ]
+                                    ],
                                     ['$eq' => ['$status', 'ACTIVE']],
                                     [
                                         '$eq' => [

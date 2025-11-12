@@ -53,7 +53,7 @@ class CustomerController extends Controller
     public function getAllOwnedProducts(Request $request): Collection
     {
         /** @var Collection $products */
-        $products = Product::statusActive()
+        $products = Product::where('status', '!=', Status::DELETED->value)
             ->where('owned_by_customer_id', $request->route('customer_id'))
             ->get();
 

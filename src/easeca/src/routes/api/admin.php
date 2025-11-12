@@ -133,6 +133,8 @@ Route::group(
 
                 Route::get('/{id}/details', [$defaultController, 'getCustomerDetails']);
 
+                Route::get('/{id}/credit-cards', [$defaultController, 'getCreditCards'])->middleware(['pagination']);
+
                 Route::put('/approve', [$defaultController, 'approveCustomerAccounts']);
                 Route::put('/{id}/store', [$defaultController, 'updateAssignedStore']);
             }
