@@ -16,7 +16,7 @@ use App\Enums\CheckoutType;
 use App\Enums\OrderPaymentMethod;
 use App\Enums\ReplyStatus;
 use App\Enums\ShipmentDeliveryStatus;
-
+use App\Models\Category;
 // Models
 use App\Models\Checkout;
 use App\Models\Customer;
@@ -199,8 +199,20 @@ class AuctionController extends Controller
             ->pluck('product_id')
             ->all();
 
+        $parentCategoryIDs = $categories->pluck('parent_id')->filter()->values()->all();
+        $parentCategories = Category::whereIn('id', $parentCategoryIDs)->get()->keyBy('_id');
+
         foreach ($categories as $category) {
+            /** @var Category $category */
             $category->lot_count = count(array_intersect($category->item_ids, $productIDs));
+
+            if (!is_null($category->parent_id)) {
+                $parentCategory = $parentCategories[$category->parent_id];
+                $category->parent_category = [
+                    '_id' => $parentCategory->id,
+                    'title' => $parentCategory->title
+                ];
+            }
         }
 
         return $categories;
@@ -593,11 +605,11 @@ class AuctionController extends Controller
 
     public function aggregate(Request $request)
     {
-        $collection = $request->input('collection');
-        $pipeline = $request->input('pipeline');
+        $collection = $request->collection;
+        $pipeline = $request->pipeline;
 
         return DB::connection('mongodb')
-            ->collection($collection)
+            ->table($collection)
             ->raw(function ($collection) use ($pipeline) {
                 return $collection->aggregate($pipeline);
             })
