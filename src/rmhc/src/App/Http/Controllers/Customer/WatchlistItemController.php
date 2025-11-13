@@ -249,6 +249,11 @@ class WatchlistItemController extends Controller
                             ],
                         ],
                     ],
+                    [
+                        '$sort' => [
+                            'updated_at' => -1
+                        ]
+                    ],
                 ],
                 'as' => 'local_discounts',
             ];
@@ -284,6 +289,11 @@ class WatchlistItemController extends Controller
                                 ],
                             ],
                         ],
+                    ],
+                    [
+                        '$sort' => [
+                            'updated_at' => -1
+                        ]
                     ],
                 ],
                 'as' => 'global_discounts',

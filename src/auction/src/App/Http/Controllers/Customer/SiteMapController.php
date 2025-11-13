@@ -297,6 +297,11 @@ class SiteMapController extends Controller
                             ],
                         ],
                     ],
+                    [
+                        '$sort' => [
+                            'updated_at' => -1
+                        ]
+                    ],
                 ],
                 'as' => 'local_discounts',
             ];
@@ -338,6 +343,11 @@ class SiteMapController extends Controller
                                 ],
                             ],
                         ],
+                    ],
+                    [
+                        '$sort' => [
+                            'updated_at' => -1
+                        ]
                     ],
                 ],
                 'as' => 'global_discounts',
