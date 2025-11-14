@@ -15,6 +15,11 @@ class ProjectServiceProvider extends ServiceProvider
         $this->loadRoutesFrom(__DIR__ . '/routes/api.php');
     }
 
+    public function boot()
+    {
+        $this->loadViewsFrom(__DIR__ . '/resources/views', 'paraqon');
+    }
+
     protected function loadRoutesFrom($path): void
     {
         Route::middleware('api')
@@ -29,6 +34,10 @@ class ProjectServiceProvider extends ServiceProvider
                 Route::prefix('customer/' . $this->routePrefix)
                     ->namespace('Customer')
                     ->group(__DIR__ . '/routes/api/customer.php');
+                // Email routes
+                Route::prefix('email/' . $this->routePrefix)
+                    ->namespace('Email')
+                    ->group(__DIR__ . '/routes/api/email.php');
             });
     }
 }

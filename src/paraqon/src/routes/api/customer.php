@@ -14,7 +14,6 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\ConsignmentRequestCon
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\DepositController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\DocumentController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\OrderController;
-use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\PaymentController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\ProductController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\ProductManagementController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\ServiceController;
