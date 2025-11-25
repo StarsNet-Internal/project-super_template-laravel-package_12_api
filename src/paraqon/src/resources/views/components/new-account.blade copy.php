@@ -36,6 +36,22 @@
           </div>
         </td>
       </tr>
+      <tr style="height: 80px">
+        <td style="text-align: center">
+          <a
+            href="{{ $data['link'] }}"
+            style="
+              background: #103947;
+              color: white;
+              font-size: 16px;
+              text-decoration: none;
+              padding: 16px;
+            "
+          >
+            {{ $data["buttonText"] }}
+          </a>
+        </td>
+      </tr>
     </tbody>
   </table>
   <hr style="margin: 0 auto; max-width: 600px" />

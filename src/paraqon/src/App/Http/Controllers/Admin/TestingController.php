@@ -4,6 +4,7 @@ namespace Starsnet\Project\Paraqon\App\Http\Controllers\Admin;
 
 use App\Enums\ShipmentDeliveryStatus;
 use App\Http\Controllers\Controller;
+use Illuminate\Support\Facades\DB;
 
 use Carbon\Carbon;
 use App\Models\Account;
@@ -18,25 +19,23 @@ class TestingController extends Controller
 {
     public function healthCheck()
     {
-        // Get current date instance
-        $now = now(); // or Carbon::now()
-        $code = $now->format('ym');
-        $existingAccounts = Account::where('client_no', 'regex', '/CT' . $code . '/i')
-            ->orderBy('client_no', 'desc')
-            ->pluck('client_no')
-            ->all();
+        $mysqlDbName = config('database.connections.mysql.database');
+        $mongoDbName = config('database.connections.mongodb.database');
 
-        $nextSequence = empty($existingAccounts)
-            ? 1
-            : ((int) substr($existingAccounts[0], -4)) + 1;
-        $nextClientCode = 'CT' . $code . str_pad($nextSequence, 4, '0', STR_PAD_LEFT);
-
-        return [
-            'code' => $code,
-            'startOfMonth' => $now->copy()->startOfMonth(),
-            'endOfMonth' => $now->copy()->endOfDay(),
-            'nextClientCode' => $nextClientCode
-        ];
+        return response()->json([
+            'status' => 'healthy',
+            'databases' => [
+                'mysql' => [
+                    'name' => $mysqlDbName,
+                    'status' => 'connected'
+                ],
+                'mongodb' => [
+                    'name' => $mongoDbName,
+                    'status' => 'connected'
+                ]
+            ],
+            'timestamp' => now()->toISOString()
+        ]);
     }
 
     public function createOrder()

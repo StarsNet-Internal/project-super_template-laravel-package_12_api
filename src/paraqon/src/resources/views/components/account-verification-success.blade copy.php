@@ -12,25 +12,26 @@
       <tr>
         <td style="padding: 10px 25px">
           <div style="font-size: 16px">
-            <p style="margin: 0">{{ $data["mainCaption"] }}</p>
-          </div>
-        </td>
-      </tr>
-      <tr>
-        <td style="padding: 10px 25px">
-          <div style="font-size: 16px">
             <p style="margin: 0">
-              {{ $data["codeCaption"] }}
-              <span style="font-weight: bold">{{ $data["code"] }}</span>
+              {{ $data["caption"] }}
             </p>
           </div>
         </td>
       </tr>
-      <tr>
-        <td style="padding: 10px 25px; word-break: break-word">
-          <div style="line-height: 20px; color: black">
-            {{ $data["warningCaption"] }}
-          </div>
+      <tr style="height: 120px">
+        <td style="text-align: center">
+          <a
+            href="{{ $data['link'] }}"
+            style="
+              background: #103947;
+              color: white;
+              font-size: 16px;
+              text-decoration: none;
+              padding: 16px;
+            "
+          >
+            {{ $data["buttonText"] }}
+          </a>
         </td>
       </tr>
     </tbody>

@@ -37,7 +37,7 @@ class AuctionRegistrationRequest extends Model
         'store_id' => null,
         'paddle_id' => null,
         // Default
-        'status' => Status::ACTIVE,
+        'status' => Status::ACTIVE->value,
         'reply_status' => ReplyStatus::PENDING->value,
         'remarks' => null,
     ];

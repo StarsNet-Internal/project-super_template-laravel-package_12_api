@@ -28,6 +28,23 @@
           </h1>
         </td>
       </tr>
+      <tr>
+        <td style="text-align: center">
+          <a
+            href="{{ $data['link'] }}"
+            style="
+              background: #103947;
+              color: white;
+              font-size: 20px;
+              line-height: 40px;
+              text-decoration: none;
+              padding: 16px 100px;
+            "
+          >
+            {{ $data["buttonText"] }}
+          </a>
+        </td>
+      </tr>
       <tr style="height: 24px"></tr>
       <tr>
         <td style="text-align: center">

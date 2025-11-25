@@ -10,6 +10,13 @@
             {{ $line }}<br />
             @endforeach
           </p>
+          <p>
+            @foreach ($data['links'] as $index => $item)
+            <a href="{{ $item['url'] }}">{{ $item["text"] }}</a>
+            @if ($index + 1 != count($data['links']))
+            <span class="o_hide-xs">&nbsp; • &nbsp;</span>
+            @endif @endforeach
+          </p>
         </td>
       </tr>
     </tbody>

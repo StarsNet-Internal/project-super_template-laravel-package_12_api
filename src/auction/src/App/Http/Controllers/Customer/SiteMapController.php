@@ -192,7 +192,7 @@ class SiteMapController extends Controller
                                     [
                                         '$in' => [
                                             '$status',
-                                            [Status::ACTIVE, Status::ARCHIVED]
+                                            [Status::ACTIVE->value, Status::ARCHIVED->value]
                                         ]
                                     ]
                                 ],
