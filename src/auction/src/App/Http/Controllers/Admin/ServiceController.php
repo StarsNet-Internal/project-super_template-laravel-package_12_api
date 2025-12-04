@@ -161,19 +161,58 @@ class ServiceController extends Controller
                             ]);
                         $checkout->createApproval(CheckoutApprovalStatus::APPROVED->value,  'Payment verified by Stripe');
 
-                        // Update Order
-                        if ($order->current_status !== ShipmentDeliveryStatus::PROCESSING->value) {
-                            $order->updateStatus(ShipmentDeliveryStatus::PROCESSING->value);
+                        $customEventType = $request->data['object']['metadata']['custom_event_type'] ?? null;
+
+                        if ($customEventType === null || $customEventType === 'full_capture') {
+                            $order->update(['is_paid' => true]);
+
+                            // Update Order
+                            if ($order->current_status !== ShipmentDeliveryStatus::PROCESSING->value) {
+                                $order->updateStatus(ShipmentDeliveryStatus::PROCESSING->value);
+                            }
+
+                            // Update Product and AuctionLot
+                            $storeID = $order->store_id;
+                            $store = Store::find($storeID);
+
+                            if (!is_null($store) && in_array($store->auction_type, ['LIVE', 'ONLINE'])) {
+                                $productIDs = collect($order->cart_items)->pluck('product_id')->all();
+
+                                AuctionLot::where('store_id', $storeID)
+                                    ->whereIn('product_id', $productIDs)
+                                    ->update(['is_paid' => true]);
+
+                                Product::objectIDs($productIDs)->update([
+                                    'owned_by_customer_id' => $order->customer_id,
+                                    'status' => 'ACTIVE',
+                                    'listing_status' => 'ALREADY_CHECKOUT'
+                                ]);
+                            }
                         }
 
-                        /** @var ?Store $store */
-                        $store = Store::find($order->store_id);
-                        if (is_null($store)) {
-                            return [
-                                'message' => 'Checkout approved, but cannot find Store',
-                                'order_id' => $order->id
-                            ];
+
+                        if ($customEventType === 'full_capture' || $customEventType === 'partial_capture') {
+                            $updateData = [];
+
+                            if (isset($request->data['object']['metadata']['deposit_amount'])) {
+                                $updateData['calculations.deposit'] = $request->data['object']['metadata']['deposit_amount'];
+                            }
+
+                            if (isset($request->data['object']['metadata']['new_total'])) {
+                                $updateData['calculations.price.total'] = $request->data['object']['metadata']['new_total'];
+                            }
+
+                            if (!empty($updateData)) {
+                                Order::where('_id', $order->id)->update($updateData);
+
+                                $originalOrderID = $request->data['object']['metadata']['original_order_id'] ?? null;
+                                $originalOrder = Order::find($originalOrderID);
+                                if (!is_null($originalOrder)) {
+                                    $originalOrder->updateNestedAttributes($updateData);
+                                }
+                            }
                         }
+
 
                         if (in_array($store->auction_type, ['LIVE', 'ONLINE'])) {
                             $productIDs = collect($order->cart_items)->pluck('product_id')->all();

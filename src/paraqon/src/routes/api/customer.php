@@ -14,6 +14,7 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\ConsignmentRequestCon
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\DepositController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\DocumentController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\OrderController;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\PaymentController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\ProductController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\ProductManagementController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\ServiceController;
@@ -219,6 +220,7 @@ Route::group(
                     Route::get('/products/filter/v2', [ProductManagementController::class, 'filterAuctionProductsByCategoriesV2'])->middleware(['pagination']);
                     Route::get('/related-products-urls', [ProductManagementController::class, 'getRelatedAuctionProductsUrls'])->middleware(['pagination']);
                     Route::get('/products/ids', [ProductManagementController::class, 'getAuctionProductsByIDs'])->name('paraqon.products.ids')->middleware(['pagination']);
+                    Route::get('/products/{product_id}/details', [ProductManagementController::class, 'getProductDetails']);
                 });
             }
         );
@@ -249,12 +251,12 @@ Route::group(
     }
 );
 
-// Route::group(
-//     ['prefix' => 'payments'],
-//     function () {
-//         Route::post('/callback', [PaymentController::class, 'onlinePaymentCallback']);
-//     }
-// );
+Route::group(
+    ['prefix' => 'payments'],
+    function () {
+        Route::post('/callback', [PaymentController::class, 'onlinePaymentCallback']);
+    }
+);
 
 Route::group(
     ['prefix' => 'watchlist'],

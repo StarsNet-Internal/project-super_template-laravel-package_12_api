@@ -3,9 +3,11 @@
 // Default Imports
 use Illuminate\Support\Facades\Route;
 
+use Starsnet\Project\Auction\App\Http\Controllers\Customer\AuthenticationController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\AuctionRegistrationRequestController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\ConsignmentRequestController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\CreditCardController;
+use Starsnet\Project\Auction\App\Http\Controllers\Customer\ReferralCodeController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\SiteMapController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\TestingController;
 
@@ -40,6 +42,18 @@ Route::group(
 */
 
 Route::group(
+    ['prefix' => 'auth'],
+    function () {
+        Route::group(
+            ['middleware' => 'auth:api'],
+            function () {
+                Route::post('/migrate', [AuthenticationController::class, 'migrateToRegistered']);
+            }
+        );
+    }
+);
+
+Route::group(
     ['prefix' => 'auction-registration-requests'],
     function () {
         Route::put('/{auction_registration_request_id}/details', [AuctionRegistrationRequestController::class, 'updateAuctionRegistrationRequest'])->middleware(['auth:api']);
@@ -61,6 +75,19 @@ Route::group(
         Route::group(['middleware' => 'auth:api'],  function () {
             Route::post('/', [ConsignmentRequestController::class, 'createConsignmentRequest']);
         });
+    }
+);
+
+Route::group(
+    ['prefix' => 'referral-codes'],
+    function () {
+        Route::group(
+            ['middleware' => 'auth:api'],
+            function () {
+                Route::get('/details', [ReferralCodeController::class, 'getReferralCodeDetails']);
+                Route::get('/histories/all', [ReferralCodeController::class, 'getAllReferralCodeHistories'])->middleware(['pagination']);
+            }
+        );
     }
 );
 

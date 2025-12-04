@@ -434,6 +434,37 @@ class ProductManagementController extends Controller
         return $products;
     }
 
+    public function getProductDetails(Request $request)
+    {
+        /** @var Product $product */
+        $product = Product::find($request->route('product_id'));
+        if (is_null($product)) abort(404, 'Product not found');
+        if ($product->status !== Status::ACTIVE->value) abort(404, 'Product is not available for public');
+
+        // Append attributes for Product
+        $product->is_liked = $this->customer()->wishlistItems()
+            ->where('product_id', $product->id)
+            ->where('store_id', $this->store->id)
+            ->exists();
+        $product->appendDisplayableFieldsForCustomer($this->store);
+
+        // Append Categories
+        $product->categories = Category::find($product->category_ids, ['_id', 'title']);
+
+        // Get active ProductVariant(s) by Product
+        /** @var Collection $variants */
+        $variants = $product->variants()->statusActive()->get();
+
+        // Append attributes to each ProductVariant
+        /** @var ProductVariant $variant */
+        foreach ($variants as $variant) {
+            $variant->appendDisplayableFieldsForCustomer($this->store);
+        }
+        $product->variants = $variants;
+
+        return $product;
+    }
+
     private function getProductsInfoByAggregation(array $productIDs, ?string $storeID = null): Collection
     {
         $productIDs = array_values($productIDs);

@@ -32,6 +32,9 @@ use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
 use Starsnet\Project\Paraqon\App\Models\LiveBiddingEvent;
+
+// Controllers
+use App\Http\Controllers\Customer\ProductManagementController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\AuctionLotController as AdminAuctionLotController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionLotController as CustomerAuctionLotController;
 
@@ -916,5 +919,20 @@ class ServiceController extends Controller
             'message' => 'Approved order count: ' . count($orderIDs),
             'order_ids' => $orderIDs
         ];
+    }
+
+    public function synchronizeAllProductsWithAlgolia(Request $request)
+    {
+        $controller = new ProductManagementController($request);
+        $data = $controller->filterProductsByCategories($request);
+
+        $url = env('PARAQON_ALGOLIA_NODE_BASE_URL') . '/algolia/mass-update';
+
+        $payload = ['data' => $data];
+        if ($request->has('index_name') && !is_null($request->index_name)) {
+            $payload['index_name'] = $request->index_name;
+        }
+
+        return Http::post($url, $payload);
     }
 }

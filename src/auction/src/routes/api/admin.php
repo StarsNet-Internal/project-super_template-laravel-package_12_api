@@ -3,9 +3,10 @@
 // Default Imports
 use Illuminate\Support\Facades\Route;
 
-use Starsnet\Project\Auction\App\Http\Controllers\Admin\TestingController;
+use Starsnet\Project\Auction\App\Http\Controllers\Admin\ProductController;
+use Starsnet\Project\Auction\App\Http\Controllers\Admin\ReferralCodeController;
 use Starsnet\Project\Auction\App\Http\Controllers\Admin\ServiceController;
-use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\ProductController;
+use Starsnet\Project\Auction\App\Http\Controllers\Admin\TestingController;
 
 /*
 |--------------------------------------------------------------------------
@@ -43,5 +44,12 @@ Route::group(
     function () {
         Route::post('/payment/callback', [ServiceController::class, 'paymentCallback']);
         Route::post('/auction-orders/create', [ServiceController::class, 'createAuctionOrder']);
+    }
+);
+
+Route::group(
+    ['prefix' => 'referral-codes'],
+    function () {
+        Route::post('/mass-generate', [ReferralCodeController::class, 'massGenerateReferralCodes']);
     }
 );

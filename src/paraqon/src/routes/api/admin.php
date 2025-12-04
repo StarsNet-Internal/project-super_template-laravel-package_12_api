@@ -215,6 +215,8 @@ Route::group(
         Route::post('/deposits/return', [ServiceController::class, 'returnDeposit']);
         Route::post('/orders/paid', [ServiceController::class, 'confirmOrderPaid']);
 
+        Route::post('/algolia/stores/{store_id}/products', [ServiceController::class, 'synchronizeAllProductsWithAlgolia']);
+
         Route::get('/auctions/{store_id}/state', [ServiceController::class, 'getAuctionCurrentState']);
         Route::get('/orders/capture', [ServiceController::class, 'captureOrderPayment']);
     }
@@ -258,7 +260,8 @@ Route::group(
     ['prefix' => '/stores/{store_id}/shopping-cart'],
     function () {
         Route::group(['middleware' => 'auth:api'], function () {
-            Route::post('/add-to-cart', [ShoppingCartController::class, 'checkOut']);
+            Route::post('/all', [ShoppingCartController::class, 'getAll']);
+            Route::post('/checkout', [ShoppingCartController::class, 'checkOut']);
         });
     }
 );

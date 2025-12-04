@@ -10,7 +10,7 @@ use Carbon\Carbon;
 
 // Enums
 use App\Enums\Status;
-
+use COM;
 // Models
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Bid;
@@ -18,12 +18,21 @@ use Starsnet\Project\Paraqon\App\Models\BidHistory;
 
 class BidController extends Controller
 {
-    public function getAllBids(): Collection
+    public function getAllBids(Request $request): Collection
     {
-        return Bid::where('customer_id', $this->customer()->id)
+        $query = Bid::where('customer_id', $this->customer()->id)
             ->where('is_hidden', false)
-            ->with(['store', 'product', 'auctionLot'])
-            ->get();
+            ->with(['store', 'product', 'auctionLot']);
+
+        if ($request->has('start_datetime') && $request->start_datetime) {
+            $query->where('created_at', '>=', Carbon::parse($request->start_datetime));
+        }
+
+        if ($request->has('end_datetime') && $request->end_datetime) {
+            $query->where('created_at', '<=', Carbon::parse($request->end_datetime));
+        }
+
+        return $query->get();
     }
 
     public function cancelBid(Request $request): array

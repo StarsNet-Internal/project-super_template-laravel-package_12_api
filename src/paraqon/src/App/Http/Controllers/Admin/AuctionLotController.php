@@ -169,8 +169,6 @@ class AuctionLotController extends Controller
                     ->first()
             )
                 ->created_at;
-
-            unset($lot->bids);
         }
 
         return $auctionLots;

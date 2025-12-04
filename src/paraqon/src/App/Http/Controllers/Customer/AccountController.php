@@ -18,6 +18,15 @@ class AccountController extends Controller
 
     public function getAllCustomerGroups(): Collection
     {
-        return $this->customer()->groups()->statusActive()->get();
+        return $this->customer()
+            ->groups()
+            ->statusActive()
+            ->get()
+            ->makeHidden([
+                'model_type',
+                'model_type_id',
+                'item_type',
+                'item_ids'
+            ]);
     }
 }

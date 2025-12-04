@@ -24,6 +24,7 @@ class AuctionController extends Controller
     {
         // Extract attributes from $request
         $statuses = (array) $request->input('status', [Status::ACTIVE->value, Status::ARCHIVED->value]);
+
         $customer = $this->customer();
 
         /** @var Collection $auctions */
