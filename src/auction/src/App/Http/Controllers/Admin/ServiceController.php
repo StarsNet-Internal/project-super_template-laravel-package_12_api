@@ -385,7 +385,22 @@ class ServiceController extends Controller
 
         // Validate charge
         $totalPrice = $originalOrder['calculations']['price']['total'];
-        $stripeAmount = (int) $totalPrice * 100;
+
+        // Update for starting from 2025/09 Auction, partial capture
+        $chargeCalculator = function ($amount): int {
+            if ($amount <= 1000) return $amount; // For 0 - 1000
+            return $amount <= 10000
+                ? $amount % 1000 + (intval($amount / 1000)) * 1000 / 5 // remainder + thousands
+                : $amount % 1000 + (intval($amount / 1000)) * 1000 / 4; // remainder + thousands
+        };
+
+        $chargeAmount = $chargeCalculator((float) $totalPrice);
+        $stripeAmount = (int) $chargeAmount * 100;
+        $newTotalPrice = max(0, floor($totalPrice - $chargeAmount));
+        $customEventType = $newTotalPrice === 0
+            ? 'full_capture'
+            : 'partial_capture';
+
         if ($stripeAmount < 400) abort(400, "Given stripe amount is $stripeAmount (\$$totalPrice), which is lower than the min of 400 ($4.00)");
 
         // Create and force payment via Stripe
@@ -397,13 +412,17 @@ class ServiceController extends Controller
                 "payment_method_id" => $customer->stripe_payment_method_id,
                 "metadata" => [
                     "model_type" => 'checkout',
-                    "model_id" => $checkout->id
+                    "model_id" => $checkout->id,
+                    'custom_event_type' => $customEventType,
+                    'original_order_id' => $originalOrder->id,
+                    'deposit_amount' => number_format($chargeAmount, 2, '.', ''),
+                    'new_total' => number_format($newTotalPrice, 2, '.', '')
                 ]
             ];
 
             $url = env('TCG_BID_STRIPE_BASE_URL', 'http://192.168.0.83:8083') . '/bind-card/charge';
             $response = Http::post($url, $stripeData);
-            Log::info($response);
+
             if ($response->failed()) {
                 $error = $response->json()['error'] ?? 'Stripe API request failed';
                 throw new \Exception(json_encode($error));

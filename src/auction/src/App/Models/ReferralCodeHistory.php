@@ -12,22 +12,22 @@ use App\Models\Traits\ObjectIDTrait;
 
 // Models
 use App\Models\Customer;
-use Starsnet\Project\Auction\App\Models\ReferralCodeHistory;
 
-class ReferralCode extends Model
+class ReferralCodeHistory extends Model
 {
     use ObjectIDTrait;
 
     // Connection
     protected $connection = 'mongodb';
-    protected $collection = 'referral_codes';
+    protected $collection = 'referral_code_histories';
 
     // Attributes
     protected $attributes = [
         // Relationships
-        'customer_id' => null,
+        'owned_by_customer_id' => null,
+        'used_by_customer_id' => null,
+        'referral_code_id' => null,
         'code' => null,
-        'quota_left' => null,
 
         // Booleans
         'is_disabled' => false,
@@ -45,18 +45,26 @@ class ReferralCode extends Model
     // Relationship Begins
     // -----------------------------
 
-    public function customer(): BelongsTo
+    public function referralCode(): BelongsTo
     {
         return $this->belongsTo(
-            Customer::class,
+            ReferralCode::class,
         );
     }
 
-    public function referralCodeHistories(): HasMany
+    public function ownedByCustomer(): HasMany
     {
         return $this->hasMany(
-            ReferralCodeHistory::class,
-            'item_id'
+            Customer::class,
+            'owned_by_customer_id'
+        );
+    }
+
+    public function usedByCustomer(): HasMany
+    {
+        return $this->hasMany(
+            Customer::class,
+            'used_by_customer_id'
         );
     }
 

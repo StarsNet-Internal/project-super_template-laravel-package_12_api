@@ -8,8 +8,7 @@ use Illuminate\Http\Request;
 
 // Models
 use App\Models\User;
-use StarsNet\Project\Auction\App\Models\ReferralCode;
-use StarsNet\Project\Auction\App\Models\ReferralCodeHistory;
+use Starsnet\Project\Auction\App\Models\ReferralCode;
 
 class ReferralCodeController extends Controller
 {

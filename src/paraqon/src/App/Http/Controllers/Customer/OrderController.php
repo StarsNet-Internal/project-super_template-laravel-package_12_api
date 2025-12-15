@@ -134,6 +134,40 @@ class OrderController extends Controller
         return $orders;
     }
 
+    public function getAllOrdersByStoreType(Request $request): Collection
+    {
+        /** @var array $storeIDs */
+        $storeIDs = Store::where('type', $request->store_type)->pluck('id')->all();
+
+        if (count($storeIDs) === 0) {
+            abort(404, 'No stores found for the specified store type');
+        }
+
+        // Get Order(s)
+        /** @var Collection $orders */
+        $orders = Order::whereIn('store_id', $storeIDs)
+            ->where('customer_id', $this->customer()->id)
+            ->with(['store'])
+            ->get();
+
+        foreach ($orders as $order) {
+            $order->checkout = $order->checkout()->latest()->first();
+
+            // Handle image directly from cart_items
+            $order->image = null;
+            if (!empty($order->cart_items) && count($order->cart_items) > 0) {
+                foreach ($order->cart_items as $item) {
+                    if (!empty($item['image'])) {
+                        $order->image = $item['image'];
+                        break; // Stop after finding first image
+                    }
+                }
+            }
+        }
+
+        return $orders;
+    }
+
     public function updateOrderDetails(Request $request): array
     {
         /** @var ?Order $order */

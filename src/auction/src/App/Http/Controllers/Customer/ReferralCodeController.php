@@ -11,13 +11,15 @@ use Illuminate\Support\Collection;
 
 // Models
 use App\Models\Customer;
-use StarsNet\Project\Auction\App\Models\ReferralCode;
-use StarsNet\Project\Auction\App\Models\ReferralCodeHistory;
-use StarsNet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
-use StarsNet\Project\Paraqon\App\Models\Deposit;
+use Starsnet\Project\Auction\App\Models\ReferralCode;
+use Starsnet\Project\Auction\App\Models\ReferralCodeHistory;
+use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
+use Starsnet\Project\Paraqon\App\Models\Deposit;
 
 class ReferralCodeController extends Controller
 {
+    protected $storeID = '689578c16a72a5fd1f0ee7c6';
+
     private function getReferralCodeInfo($customerIDs, ?string $storeID = null): Collection
     {
         $customerIDs = (array) $customerIDs;

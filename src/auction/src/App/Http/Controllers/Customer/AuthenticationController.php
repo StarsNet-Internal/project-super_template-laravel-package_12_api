@@ -13,8 +13,8 @@ use App\Enums\LoginType;
 // Models 
 use App\Models\Account;
 use Illuminate\Support\Facades\Hash;
-use StarsNet\Project\Auction\App\Models\ReferralCode;
-use StarsNet\Project\Auction\App\Models\ReferralCodeHistory;
+use Starsnet\Project\Auction\App\Models\ReferralCode;
+use Starsnet\Project\Auction\App\Models\ReferralCodeHistory;
 
 class AuthenticationController extends Controller
 {
@@ -41,7 +41,7 @@ class AuthenticationController extends Controller
         }
 
         // Get User, then validate
-        if (!$user->isTypeTemp())  abort(401, 'This User does not have permission');
+        if ($user->type !== LoginType::TEMP->value)  abort(401, 'This User does not have permission');
 
         // Find if user exists
         $ifAccountExists = Account::where('email', $request->email)->exists();

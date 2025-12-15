@@ -181,6 +181,7 @@ Route::group(
             function () {
                 Route::get('/stores/{store_id}/all', [OrderController::class, 'getOrdersByStoreID'])->middleware(['pagination']);
                 Route::get('/all/offline', [OrderController::class, 'getAllOfflineOrders'])->middleware(['pagination']);
+                Route::get('/all/store-type', [OrderController::class, 'getAllOrdersByStoreType'])->middleware(['pagination']);
                 Route::put('/{order_id}/upload', [OrderController::class, 'uploadPaymentProofAsCustomer']);
                 Route::post('/{order_id}/payment', [OrderController::class, 'payPendingOrderByOnlineMethod']);
                 Route::put('/{order_id}/details', [OrderController::class, 'updateOrderDetails']);
