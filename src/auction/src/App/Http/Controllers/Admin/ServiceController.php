@@ -208,7 +208,7 @@ class ServiceController extends Controller
                                 $originalOrderID = $request->data['object']['metadata']['original_order_id'] ?? null;
                                 $originalOrder = Order::find($originalOrderID);
                                 if (!is_null($originalOrder)) {
-                                    $originalOrder->updateNestedAttributes($updateData);
+                                    Order::where('_id', $originalOrderID)->update($updateData);
                                 }
                             }
                         }
