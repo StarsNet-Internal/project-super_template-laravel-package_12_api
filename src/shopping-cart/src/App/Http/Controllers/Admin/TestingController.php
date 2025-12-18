@@ -1,6 +1,6 @@
 <?php
 
-namespace Starsnet\Project\ShoppingCart\App\Http\Controllers\Customer;
+namespace Starsnet\Project\ShoppingCart\App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;

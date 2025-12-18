@@ -21,6 +21,10 @@ class ProjectServiceProvider extends ServiceProvider
             ->namespace($this->namespace)
             ->prefix('api')
             ->group(function () {
+                // Admin routes
+                Route::prefix('admin/' . $this->routePrefix)
+                    ->namespace('Admin')
+                    ->group(__DIR__ . '/routes/api/admin.php');
                 // Customer routes
                 Route::prefix('customer/' . $this->routePrefix)
                     ->namespace('Customer')
