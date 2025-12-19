@@ -84,9 +84,9 @@ class CheckoutController extends Controller
         $successUrl = $request->success_url;
         $cancelUrl = $request->cancel_url;
 
-        $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY->value ?
-            $deliveryInfo['courier_id'] :
-            null;
+        $courierID = $deliveryInfo['method'] === OrderDeliveryMethod::DELIVERY->value
+            ? $deliveryInfo['courier_id']
+            : null;
 
         // Get ShoppingCartItem(s)
         $cartItems = $this->getCartItems($customer, $checkoutVariantIDs);
@@ -149,6 +149,14 @@ class CheckoutController extends Controller
         ];
         /** @var Order $order */
         $order = Order::create($orderAttributes);
+
+        foreach ($checkoutItems->values()->all() as $cartItem) {
+            $cartItem = $cartItem->toArray();
+            $order->orderCartItems()->create($cartItem);
+        }
+        foreach ($giftItems as $cartItem) {
+            $order->orderGiftItems()->create($cartItem);
+        }
 
         // Update Order
         $status = Str::slug(ShipmentDeliveryStatus::SUBMITTED->value);

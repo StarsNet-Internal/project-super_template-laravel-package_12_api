@@ -106,7 +106,6 @@ class OrderController extends Controller
         return ['message' => 'Reviewed Order successfully'];
     }
 
-
     public function uploadPaymentProofAsCustomer(Request $request): array
     {
         $order = Order::find($request->route('order_id'));
@@ -291,8 +290,10 @@ class OrderController extends Controller
             ];
         });
 
-        $total = (float) $document->calculations['price']['total'];
-        $totalPrice = is_nan($total) ? NAN : number_format($total, 2, '.', ',');
+        $subTotal = (float) $document->calculations['price']['total'];
+        $extraCharge = (float) $document->change;
+        $discount = (float) $document->discount;
+        $tableTotal = (float) $document->amount_received;
 
         // Construct entire data
         $invoiceId = "{$invoicePrefix}-" . substr($orderId, -6);
@@ -306,7 +307,10 @@ class OrderController extends Controller
             'shipTo' => "In-store pick up",
             'invoiceNum' => $invoiceId,
             'items' => $itemsData,
-            'tableTotal' => $totalPrice,
+            'subTotal' => $subTotal,
+            'extraCharge' => $extraCharge,
+            'discount' => $discount,
+            'tableTotal' => $tableTotal,
         ];
 
         return [

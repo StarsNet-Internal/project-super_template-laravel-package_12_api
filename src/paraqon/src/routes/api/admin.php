@@ -262,6 +262,8 @@ Route::group(
         Route::group(['middleware' => 'auth:api'], function () {
             Route::post('/all', [ShoppingCartController::class, 'getAll']);
             Route::post('/checkout', [ShoppingCartController::class, 'checkOut']);
+            Route::post('/private-sale/all', [ShoppingCartController::class, 'privateSaleGetAll']);
+            Route::post('/private-sale/checkout', [ShoppingCartController::class, 'privateSaleCheckOut']);
         });
     }
 );
