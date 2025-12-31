@@ -14,6 +14,7 @@
       "StarsNet\\Project\\Rmhc\\": "src/rmhc/src/",
       "StarsNet\\Project\\ShoppingCart\\": "src/shopping-cart/src/",
       "StarsNet\\Project\\Stripe\\": "src/stripe/src/",
+      "StarsNet\\Project\\TcgBidGame\\": "src/tcg-bid-game/src/",
       "StarsNet\\Project\\WhiskyWhiskers\\": "src/whisky-whiskers/src/",
       "StarsNet\\Project\\WhiskyWhiskersUpgrade\\": "src/whisky-whiskers-upgrade/src/"
     }
@@ -28,6 +29,7 @@
         "StarsNet\\Project\\Rmhc\\ProjectServiceProvider",
         "StarsNet\\Project\\ShoppingCart\\ProjectServiceProvider",
         "StarsNet\\Project\\Stripe\\ProjectServiceProvider",
+        "StarsNet\\Project\\TcgBidGame\\ProjectServiceProvider",
         "StarsNet\\Project\\WhiskyWhiskers\\ProjectServiceProvider",
         "StarsNet\\Project\\WhiskyWhiskersUpgrade\\ProjectServiceProvider"
       ]
