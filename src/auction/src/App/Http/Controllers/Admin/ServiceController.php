@@ -157,11 +157,14 @@ class ServiceController extends Controller
                         // Update Checkout
                         Checkout::where('id', $checkout->id)
                             ->update([
+                                'approval.status' => CheckoutApprovalStatus::APPROVED->value,
+                                'approval.reason' => 'Payment verified by Stripe',
                                 'online.api_response' => $request->all()
                             ]);
-                        $checkout->createApproval(CheckoutApprovalStatus::APPROVED->value,  'Payment verified by Stripe');
 
                         $customEventType = $request->data['object']['metadata']['custom_event_type'] ?? null;
+                        $storeID = $order->store_id;
+                        $store = Store::find($storeID);
 
                         if ($customEventType === null || $customEventType === 'full_capture') {
                             $order->update(['is_paid' => true]);
@@ -172,9 +175,6 @@ class ServiceController extends Controller
                             }
 
                             // Update Product and AuctionLot
-                            $storeID = $order->store_id;
-                            $store = Store::find($storeID);
-
                             if (!is_null($store) && in_array($store->auction_type, ['LIVE', 'ONLINE'])) {
                                 $productIDs = collect($order->cart_items)->pluck('product_id')->all();
 
@@ -189,7 +189,6 @@ class ServiceController extends Controller
                                 ]);
                             }
                         }
-
 
                         if ($customEventType === 'full_capture' || $customEventType === 'partial_capture') {
                             $updateData = [];
@@ -212,7 +211,6 @@ class ServiceController extends Controller
                                 }
                             }
                         }
-
 
                         if (in_array($store->auction_type, ['LIVE', 'ONLINE'])) {
                             $productIDs = collect($order->cart_items)->pluck('product_id')->all();

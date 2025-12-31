@@ -219,6 +219,8 @@ Route::group(
 
         Route::get('/auctions/{store_id}/state', [ServiceController::class, 'getAuctionCurrentState']);
         Route::get('/orders/capture', [ServiceController::class, 'captureOrderPayment']);
+
+        Route::post('/users/cleanup', [ServiceController::class, 'deleteAllTemporaryUsers']);
     }
 );
 
@@ -305,6 +307,7 @@ Route::group(
         Route::group(
             ['middleware' => 'auth:api'],
             function () {
+                Route::post('/', [NotificationController::class, 'createNotification']);
                 Route::get('/all', [NotificationController::class, 'getAllNotifications'])->middleware(['pagination']);
                 Route::put('/read', [NotificationController::class, 'markNotificationsAsRead']);
                 Route::put('/{id}/delete', [NotificationController::class, 'deleteNotification']);

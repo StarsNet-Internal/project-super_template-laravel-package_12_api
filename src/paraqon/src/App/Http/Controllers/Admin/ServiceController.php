@@ -35,6 +35,7 @@ use Starsnet\Project\Paraqon\App\Models\LiveBiddingEvent;
 
 // Controllers
 use App\Http\Controllers\Customer\ProductManagementController;
+use MongoDB\BSON\UTCDateTime;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\AuctionLotController as AdminAuctionLotController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionLotController as CustomerAuctionLotController;
 
@@ -194,8 +195,33 @@ class ServiceController extends Controller
                 $order = $checkout->order;
                 if (is_null($order)) abort(200, 'Order not found');
 
+                $customEventType = $request->data['object']['metadata']['custom_event_type'] ?? null;
+
+                if ($customEventType === 'one_day_delay') {
+                    $order->update([
+                        'scheduled_payment_at' => new UTCDateTime(now()->addDay(1))
+                    ]);
+
+                    // Clear ShoppingCartItem
+                    $productVariantIDs = collect($order->cart_items)
+                        ->pluck('product_variant_id')
+                        ->filter()
+                        ->unique()
+                        ->values()
+                        ->toArray();
+                    ShoppingCartItem::where('customer_id', $order->customer_id)
+                        ->where('store_id', $order->store_id)
+                        ->whereIn('product_variant_id', $productVariantIDs)
+                        ->delete();
+
+                    return [
+                        'message' => 'custom_event_type is one_day_delay, capture skipped',
+                        'order_id' => null
+                    ];
+                }
+
                 // Update Checkout and Order
-                if ($eventType == 'charge.succeeded') {
+                if ($eventType == 'charge.succeeded' && is_null($customEventType)) {
                     // Update Checkout
                     Checkout::where('id', $checkout->id)->update([
                         'online.api_response' => $request->all()
@@ -934,5 +960,35 @@ class ServiceController extends Controller
         }
 
         return Http::post($url, $payload);
+    }
+
+    public function deleteAllTemporaryUsers(Request $request): array
+    {
+        // Extract attributes from $request
+        $days = (int) $request->input('days', 2);
+        $cutOffDate = now()->subDays($days)->startOfDay()->toDateTimeString();
+
+        // Get current database configuration from the request context
+        $mysqlDatabase = config('database.connections.mysql.database');
+        $mongodbDatabase = config('database.connections.mongodb.database');
+
+        // Execute in background (the & at the end makes it run in background)
+        $artisanPath = base_path('artisan');
+        $command = "php {$artisanPath} paraqon:cleanup:temporary-users '{$cutOffDate}' '{$mysqlDatabase}' '{$mongodbDatabase}' > /dev/null 2>&1 &";
+
+        try {
+            exec($command);
+            return [
+                'command' => $command,
+                'message' => 'Cleanup process started in background'
+            ];
+        } catch (\Throwable $th) {
+            abort(404, 'Failed to execute command: ' . $command);
+
+            return [
+                'command' => $command,
+                'message' => 'Failed to execute command'
+            ];
+        }
     }
 }

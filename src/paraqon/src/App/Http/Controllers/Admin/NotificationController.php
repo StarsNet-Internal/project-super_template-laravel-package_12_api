@@ -16,6 +16,17 @@ use Starsnet\Project\Paraqon\App\Models\Notification;
 
 class NotificationController extends Controller
 {
+    public function createNotification(Request $request): array
+    {
+        // Exclude pagination/sorting params before filtering
+        $notification = Notification::create($request->all());
+
+        return [
+            'message' => 'Notification created successfully',
+            '_id' => $notification->id
+        ];
+    }
+
     public function getAllNotifications(Request $request): Collection
     {
         // Exclude pagination/sorting params before filtering

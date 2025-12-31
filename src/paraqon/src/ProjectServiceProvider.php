@@ -18,6 +18,12 @@ class ProjectServiceProvider extends ServiceProvider
     public function boot()
     {
         $this->loadViewsFrom(__DIR__ . '/resources/views', 'paraqon');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \Starsnet\Project\Paraqon\App\Console\Commands\CleanupTemporaryUsersCommand::class,
+            ]);
+        }
     }
 
     protected function loadRoutesFrom($path): void

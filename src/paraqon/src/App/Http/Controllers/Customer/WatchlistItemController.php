@@ -70,50 +70,71 @@ class WatchlistItemController extends Controller
             ->pluck('item_id')
             ->all();
 
-        $productIDs = AuctionLot::whereIn('_id', $watchingAuctionLotIDs)
-            ->get()
-            ->pluck('product_id')
-            ->all();
+        // Get auction_lots with their product_ids to create mapping
+        $auctionLots = AuctionLot::whereIn('_id', $watchingAuctionLotIDs)->get();
 
-        // Get Products
-        $products = $this->getProductsInfoByAggregation($productIDs);
-        $products = $products->filter(fn($item) =>  $item->auction_lot_id != '0')->values();
-
-        foreach ($products as $product) {
-            $auctionLotID = $product->auction_lot_id;
-            $auctionLot = AuctionLot::find($auctionLotID);
-
-            $product->current_bid = $auctionLot->getCurrentBidPrice();
-            $product->is_reserve_price_met = $product->current_bid >= $product->reserve_price;
-
-            $product->title = $auctionLot->title;
-            $product->short_description = $auctionLot->short_description;
-            $product->long_description = $auctionLot->long_description;
-            $product->bid_incremental_settings = $auctionLot->bid_incremental_settings;
-            $product->start_datetime = $auctionLot->start_datetime;
-            $product->end_datetime = $auctionLot->end_datetime;
-            $product->lot_number = $auctionLot->lot_number;
-            $product->status = $auctionLot->status;
-            $product->is_disabled = $auctionLot->is_disabled;
-            $product->is_closed = $auctionLot->is_closed;
-
-            $product->sold_price = $auctionLot->sold_price;
-            $product->commission = $auctionLot->commission;
-
-            $product->max_estimated_price = data_get($auctionLot, 'bid_incremental_settings.estimate_price.max') ?? 0;
-            $product->min_estimated_price = data_get($auctionLot, 'bid_incremental_settings.estimate_price.min') ?? 0;
-
-            // is_watching
-            $product->is_watching = true;
-
-            unset(
-                $product->bids,
-                $product->valid_bid_values,
-                $product->reserve_price
-            );
+        // Create mapping: auction_lot_id => product_id
+        $auctionLotToProductMap = [];
+        foreach ($auctionLots as $auctionLot) {
+            $auctionLotToProductMap[$auctionLot->_id] = $auctionLot->product_id;
         }
 
-        return $products;
+        // Get unique product IDs for aggregation
+        $productIDs = array_unique(array_values($auctionLotToProductMap));
+
+        // Get Products from aggregation (one product per product_id)
+        $productsMap = $this->getProductsInfoByAggregation($productIDs)
+            ->keyBy('id');
+
+        // Build results: one entry per watched auction_lot
+        $results = collect();
+        foreach ($watchingAuctionLotIDs as $auctionLotID) {
+            $productID = $auctionLotToProductMap[$auctionLotID] ?? null;
+            if (!$productID) continue;
+
+            $product = $productsMap->get($productID);
+            if (!$product) continue;
+
+            $auctionLot = $auctionLots->firstWhere('_id', $auctionLotID);
+            if (!$auctionLot) continue;
+
+            // Clone product data to avoid modifying the original (deep clone for MongoDB objects)
+            $watchedItem = json_decode(json_encode($product), false);
+
+            // Override with auction_lot specific data
+            $watchedItem->auction_lot_id = (string) $auctionLot->_id;
+            $watchedItem->current_bid = $auctionLot->getCurrentBidPrice();
+            $watchedItem->is_reserve_price_met = $watchedItem->current_bid >= data_get($product, 'reserve_price', 0);
+
+            $watchedItem->title = $auctionLot->title;
+            $watchedItem->short_description = $auctionLot->short_description;
+            $watchedItem->long_description = $auctionLot->long_description;
+            $watchedItem->bid_incremental_settings = $auctionLot->bid_incremental_settings;
+            $watchedItem->start_datetime = $auctionLot->start_datetime;
+            $watchedItem->end_datetime = $auctionLot->end_datetime;
+            $watchedItem->lot_number = $auctionLot->lot_number;
+            $watchedItem->status = $auctionLot->status;
+            $watchedItem->is_disabled = $auctionLot->is_disabled;
+            $watchedItem->is_closed = $auctionLot->is_closed;
+
+            $watchedItem->sold_price = $auctionLot->sold_price;
+            $watchedItem->commission = $auctionLot->commission;
+
+            $watchedItem->max_estimated_price = data_get($auctionLot, 'bid_incremental_settings.estimate_price.max') ?? 0;
+            $watchedItem->min_estimated_price = data_get($auctionLot, 'bid_incremental_settings.estimate_price.min') ?? 0;
+
+            $watchedItem->is_watching = true;
+
+            unset(
+                $watchedItem->bids,
+                $watchedItem->valid_bid_values,
+                $watchedItem->reserve_price
+            );
+
+            $results->push($watchedItem);
+        }
+
+        return $results;
     }
 
     public function getCompareItems(Request $request)
