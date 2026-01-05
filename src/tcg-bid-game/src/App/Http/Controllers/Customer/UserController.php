@@ -129,7 +129,11 @@ class UserController extends Controller
         $gameUser->completeOnboarding();
 
         return response()->json([
-            'message' => 'Onboarding completed',
+            'message' => [
+                'en' => 'Onboarding completed',
+                'zh' => '入門引導已完成',
+                'cn' => '入门引导已完成',
+            ],
         ], 200);
     }
 }

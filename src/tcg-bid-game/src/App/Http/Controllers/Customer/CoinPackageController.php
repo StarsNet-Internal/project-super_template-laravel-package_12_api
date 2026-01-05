@@ -43,7 +43,11 @@ class CoinPackageController extends Controller
         $mainCustomer = Customer::find($customer->id);
 
         if (!$mainCustomer) {
-            abort(404, 'Customer not found');
+            abort(404, json_encode([
+                'en' => 'Customer not found',
+                'zh' => '找不到客戶',
+                'cn' => '找不到客户',
+            ]));
         }
 
         // Validate Stripe payment info
@@ -52,7 +56,11 @@ class CoinPackageController extends Controller
             is_null($mainCustomer->stripe_payment_method_id) ||
             is_null($mainCustomer->stripe_card_data)
         ) {
-            abort(400, 'Customer stripe payment info not found. Please bind a card first.');
+            abort(400, json_encode([
+                'en' => 'Customer stripe payment info not found. Please bind a card first.',
+                'zh' => '找不到客戶的Stripe付款資訊。請先綁定卡片。',
+                'cn' => '找不到客户的Stripe付款信息。请先绑定卡片。',
+            ]));
         }
 
         // Validate card expiration
@@ -65,7 +73,11 @@ class CoinPackageController extends Controller
         if (!($expYear > $currentYear ||
             ($expYear === $currentYear && $expMonth >= $currentMonth)
         )) {
-            abort(400, 'Customer stripe payment info expired');
+            abort(400, json_encode([
+                'en' => 'Customer stripe payment info expired',
+                'zh' => '客戶的Stripe付款資訊已過期',
+                'cn' => '客户的Stripe付款信息已过期',
+            ]));
         }
 
         // Get or create GameUser
@@ -103,7 +115,11 @@ class CoinPackageController extends Controller
         $stripeAmount = (int) ($package->price_usd * 100);
 
         if ($stripeAmount < 50) { // Minimum $0.50
-            abort(400, "Amount too small. Minimum charge is $0.50");
+            abort(400, json_encode([
+                'en' => 'Amount too small. Minimum charge is $0.50',
+                'zh' => '金額太小。最低收費為$0.50',
+                'cn' => '金额太小。最低收费为$0.50',
+            ]));
         }
 
         // Create payment via Stripe
@@ -143,7 +159,11 @@ class CoinPackageController extends Controller
                 'client_secret' => $response['clientSecret'] ?? null,
                 'payment_intent_id' => $response['id'] ?? null,
                 'status' => 'pending',
-                'message' => 'Payment initiated. Awaiting confirmation.',
+                'message' => [
+                    'en' => 'Payment initiated. Awaiting confirmation.',
+                    'zh' => '付款已啟動。等待確認中。',
+                    'cn' => '付款已启动。等待确认中。',
+                ],
             ], 200);
         } catch (\Exception $e) {
             // Mark purchase as failed
@@ -157,7 +177,11 @@ class CoinPackageController extends Controller
             ]);
 
             return response()->json([
-                'message' => 'Payment processing failed',
+                'message' => [
+                    'en' => 'Payment processing failed',
+                    'zh' => '付款處理失敗',
+                    'cn' => '付款处理失败',
+                ],
                 'error' => json_decode($e->getMessage(), true) ?: $e->getMessage()
             ], 400);
         }
@@ -176,20 +200,36 @@ class CoinPackageController extends Controller
         $productId = $request->input('product_id'); // Store product ID
 
         if (!$packageId || !$platform || !$receipt || !$transactionId) {
-            abort(400, 'Missing required fields: package_id, platform, receipt, transaction_id');
+            abort(400, json_encode([
+                'en' => 'Missing required fields: package_id, platform, receipt, transaction_id',
+                'zh' => '缺少必填欄位：package_id, platform, receipt, transaction_id',
+                'cn' => '缺少必填字段：package_id, platform, receipt, transaction_id',
+            ]));
         }
 
         if (!in_array($platform, ['apple', 'google'])) {
-            abort(400, 'Platform must be "apple" or "google"');
+            abort(400, json_encode([
+                'en' => 'Platform must be "apple" or "google"',
+                'zh' => '平台必須是「apple」或「google」',
+                'cn' => '平台必须是「apple」或「google」',
+            ]));
         }
 
         $package = CoinPackage::find($packageId);
         if (!$package) {
-            abort(404, 'Package not found');
+            abort(404, json_encode([
+                'en' => 'Package not found',
+                'zh' => '找不到金幣包',
+                'cn' => '找不到金币包',
+            ]));
         }
 
         if (!$package->isAvailable()) {
-            abort(400, 'Package is not available');
+            abort(400, json_encode([
+                'en' => 'Package is not available',
+                'zh' => '金幣包不可用',
+                'cn' => '金币包不可用',
+            ]));
         }
 
         // Get or create GameUser
@@ -220,7 +260,11 @@ class CoinPackageController extends Controller
 
         if ($existingPurchase) {
             return response()->json([
-                'message' => 'Receipt already processed',
+                'message' => [
+                    'en' => 'Receipt already processed',
+                    'zh' => '收據已處理',
+                    'cn' => '收据已处理',
+                ],
                 'purchase_id' => $existingPurchase->_id,
                 'coins_added' => $existingPurchase->coins_amount,
                 'new_coin_balance' => $gameUser->getCoinsBalance(),
@@ -235,7 +279,11 @@ class CoinPackageController extends Controller
         $isValid = $this->verifyReceiptWithStore($platform, $receipt, $transactionId, $productId);
 
         if (!$isValid) {
-            abort(400, 'Invalid receipt or receipt verification failed');
+            abort(400, json_encode([
+                'en' => 'Invalid receipt or receipt verification failed',
+                'zh' => '無效的收據或收據驗證失敗',
+                'cn' => '无效的收据或收据验证失败',
+            ]));
         }
 
         // Create purchase record

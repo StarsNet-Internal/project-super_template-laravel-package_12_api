@@ -42,7 +42,11 @@ class OrderController extends Controller
         $order = Order::find($orderId);
 
         if (!$order) {
-            abort(404, 'Order not found');
+            abort(404, json_encode([
+                'en' => 'Order not found',
+                'zh' => '找不到訂單',
+                'cn' => '找不到订单',
+            ]));
         }
 
         // Verify ownership
@@ -50,7 +54,11 @@ class OrderController extends Controller
         $gameUser = GameUser::where('customer_id', $customer->id)->first();
 
         if (!$gameUser || $order->customer_id !== $gameUser->_id) {
-            abort(403, 'Order does not belong to this customer');
+            abort(403, json_encode([
+                'en' => 'Order does not belong to this customer',
+                'zh' => '訂單不屬於此客戶',
+                'cn' => '订单不属于此客户',
+            ]));
         }
 
         return $order;
@@ -61,20 +69,36 @@ class OrderController extends Controller
         $productId = $request->input('product_id');
 
         if (!$productId) {
-            abort(400, 'product_id is required');
+            abort(400, json_encode([
+                'en' => 'product_id is required',
+                'zh' => '需要產品ID',
+                'cn' => '需要产品ID',
+            ]));
         }
 
         $product = Product::find($productId);
         if (!$product) {
-            abort(404, 'Product not found');
+            abort(404, json_encode([
+                'en' => 'Product not found',
+                'zh' => '找不到產品',
+                'cn' => '找不到产品',
+            ]));
         }
 
         if (!$product->is_active) {
-            abort(400, 'Product is not active');
+            abort(400, json_encode([
+                'en' => 'Product is not active',
+                'zh' => '產品未啟用',
+                'cn' => '产品未启用',
+            ]));
         }
 
         if (!$product->isInStock()) {
-            abort(400, 'Product out of stock');
+            abort(400, json_encode([
+                'en' => 'Product out of stock',
+                'zh' => '產品缺貨',
+                'cn' => '产品缺货',
+            ]));
         }
 
         // Get or create GameUser
@@ -92,7 +116,11 @@ class OrderController extends Controller
 
         // Check if user has enough coins
         if (!$gameUser->hasEnoughCoins($product->price)) {
-            abort(400, 'Insufficient coins');
+            abort(400, json_encode([
+                'en' => 'Insufficient coins',
+                'zh' => '金幣不足',
+                'cn' => '金币不足',
+            ]));
         }
 
         // Create order
@@ -120,7 +148,11 @@ class OrderController extends Controller
         );
 
         if (!$transaction) {
-            abort(400, 'Failed to process payment');
+            abort(400, json_encode([
+                'en' => 'Failed to process payment',
+                'zh' => '處理付款失敗',
+                'cn' => '处理付款失败',
+            ]));
         }
 
         // Decrease stock
