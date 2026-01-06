@@ -68,8 +68,16 @@ class AdViewController extends Controller
         if ($todayViews >= self::DAILY_AD_LIMIT) {
             $nextAvailable = Carbon::tomorrow()->startOfDay();
             return response()->json([
-                'error' => 'Ad limit reached',
-                'message' => "You have reached the daily ad viewing limit. Next available at: {$nextAvailable->toIso8601String()}",
+                'error' => [
+                    'en' => 'Ad limit reached',
+                    'zh' => '已達到廣告觀看限制',
+                    'cn' => '已达到广告观看限制',
+                ],
+                'message' => [
+                    'en' => "You have reached the daily ad viewing limit. Next available at: {$nextAvailable->toIso8601String()}",
+                    'zh' => "您已達到每日廣告觀看限制。下次可用時間：{$nextAvailable->toIso8601String()}",
+                    'cn' => "您已达到每日广告观看限制。下次可用时间：{$nextAvailable->toIso8601String()}",
+                ],
                 'next_available' => $nextAvailable->toIso8601String(),
             ], 429);
         }

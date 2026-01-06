@@ -33,7 +33,11 @@ class ProductController extends Controller
         $product = Product::find($productId);
 
         if (!$product) {
-            abort(404, 'Product not found');
+            abort(404, json_encode([
+                'en' => 'Product not found',
+                'zh' => '找不到產品',
+                'cn' => '找不到产品',
+            ]));
         }
 
         return $product;

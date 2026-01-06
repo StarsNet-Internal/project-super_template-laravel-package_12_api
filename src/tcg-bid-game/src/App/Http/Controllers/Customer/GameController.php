@@ -28,11 +28,19 @@ class GameController extends Controller
         $game = Game::find($gameId);
 
         if (!$game) {
-            abort(404, 'Game not found');
+            abort(404, json_encode([
+                'en' => 'Game not found',
+                'zh' => '找不到遊戲',
+                'cn' => '找不到游戏',
+            ]));
         }
 
         if (!$game->is_active) {
-            abort(400, 'Game is not active');
+            abort(400, json_encode([
+                'en' => 'Game is not active',
+                'zh' => '遊戲未啟用',
+                'cn' => '游戏未启用',
+            ]));
         }
 
         // Get or create GameUser
@@ -61,7 +69,11 @@ class GameController extends Controller
         // Check if user has enough energy
         if (!$gameUser->hasEnoughEnergy($game->energy_cost)) {
             return response()->json([
-                'error' => 'Insufficient energy',
+                'error' => [
+                    'en' => 'Insufficient energy',
+                    'zh' => '能量不足',
+                    'cn' => '能量不足',
+                ],
                 'required' => $game->energy_cost,
                 'current' => $gameUser->getEnergyBalance(),
                 'game_id' => $game->_id,
@@ -112,37 +124,65 @@ class GameController extends Controller
         $outcome = $request->input('outcome');
 
         if (!$sessionId) {
-            abort(400, 'Session ID is required');
+            abort(400, json_encode([
+                'en' => 'Session ID is required',
+                'zh' => '需要會話ID',
+                'cn' => '需要会话ID',
+            ]));
         }
 
         if (!$outcome) {
-            abort(400, 'Outcome is required');
+            abort(400, json_encode([
+                'en' => 'Outcome is required',
+                'zh' => '需要遊戲結果',
+                'cn' => '需要游戏结果',
+            ]));
         }
 
         if (!in_array($outcome, ['win', 'lose'])) {
             return response()->json([
-                'error' => "Invalid outcome. Must be 'win' or 'lose'",
+                'error' => [
+                    'en' => "Invalid outcome. Must be 'win' or 'lose'",
+                    'zh' => '無效的結果。必須是「win」或「lose」',
+                    'cn' => '无效的结果。必须是「win」或「lose」',
+                ],
                 'provided' => $outcome,
             ], 400);
         }
 
         $game = Game::find($gameId);
         if (!$game) {
-            abort(404, 'Game not found');
+            abort(404, json_encode([
+                'en' => 'Game not found',
+                'zh' => '找不到遊戲',
+                'cn' => '找不到游戏',
+            ]));
         }
 
         $session = GameSession::find($sessionId);
         if (!$session) {
-            abort(404, 'Session not found');
+            abort(404, json_encode([
+                'en' => 'Session not found',
+                'zh' => '找不到會話',
+                'cn' => '找不到会话',
+            ]));
         }
 
         if ($session->game_id !== $game->_id) {
-            abort(400, 'Session does not belong to this game');
+            abort(400, json_encode([
+                'en' => 'Session does not belong to this game',
+                'zh' => '會話不屬於此遊戲',
+                'cn' => '会话不属于此游戏',
+            ]));
         }
 
         $gameUser = GameUser::find($session->customer_id);
         if (!$gameUser) {
-            abort(404, 'Game user not found');
+            abort(404, json_encode([
+                'en' => 'Game user not found',
+                'zh' => '找不到遊戲用戶',
+                'cn' => '找不到游戏用户',
+            ]));
         }
 
         // Calculate coins earned
