@@ -198,7 +198,6 @@ Route::group(
             ['middleware' => 'auth:api'],
             function () {
                 Route::get('/all', [ProductController::class, 'getAllOwnedProducts'])->middleware(['pagination']);
-                Route::get('/consignment/all', [ProductController::class, 'getAllConsignmentProducts']);
                 Route::get('/{product_id}/details', [ProductController::class, 'getProductDetails']);
                 Route::put('/listing-status', [ProductController::class, 'updateListingStatuses']);
             }
