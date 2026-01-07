@@ -21,6 +21,8 @@ use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
 class TemporaryUserCleanupService
 {
+    private const CHUNK_SIZE = 100;
+
     public function __construct(?Carbon $cutOffDate = null)
     {
         $this->cutoffDate = $cutOffDate ?? Carbon::now()->subDays(2);
@@ -54,7 +56,7 @@ class TemporaryUserCleanupService
         $keepAccountIDs = [];
         if (!empty($keepCustomerIDs)) {
             // MongoDB can handle large arrays, but chunking helps with performance
-            foreach (array_chunk($keepCustomerIDs, 5000) as $chunk) {
+            foreach (array_chunk($keepCustomerIDs, self::CHUNK_SIZE) as $chunk) {
                 $keepAccountIDs = array_merge(
                     $keepAccountIDs,
                     Customer::whereIn('id', $chunk)
@@ -71,7 +73,7 @@ class TemporaryUserCleanupService
         if (!empty($keepAccountIDs)) {
             // Account is MongoDB, but we're querying for user_id which will be used in MySQL
             // Chunking here helps when we later query User (MySQL)
-            foreach (array_chunk($keepAccountIDs, 5000) as $chunk) {
+            foreach (array_chunk($keepAccountIDs, self::CHUNK_SIZE) as $chunk) {
                 $userIDs = Account::whereIn('id', $chunk)
                     ->select('user_id')
                     ->get()
@@ -90,7 +92,7 @@ class TemporaryUserCleanupService
         // Category (MongoDB) - no placeholder limit, but chunking for performance
         $deletedCategoryCount = 0;
         if (!empty($tempCustomerIDs)) {
-            foreach (array_chunk($tempCustomerIDs, 5000) as $chunk) {
+            foreach (array_chunk($tempCustomerIDs, self::CHUNK_SIZE) as $chunk) {
                 $deletedCategoryCount += Category::where('slug', 'personal-customer-group')
                     ->whereIn('item_ids', $chunk)
                     ->delete();
@@ -100,7 +102,7 @@ class TemporaryUserCleanupService
         // User (MySQL) - MUST chunk to avoid placeholder limit
         $deletedUserCount = 0;
         if (!empty($tempUserIDs)) {
-            foreach (array_chunk($tempUserIDs, 1000) as $chunk) {
+            foreach (array_chunk($tempUserIDs, self::CHUNK_SIZE) as $chunk) {
                 $deletedUserCount += User::whereIn('id', $chunk)->delete();
             }
         }
@@ -108,7 +110,7 @@ class TemporaryUserCleanupService
         // Account (MongoDB) - no placeholder limit, but chunking for performance
         $deletedAccountCount = 0;
         if (!empty($tempAccountIDs)) {
-            foreach (array_chunk($tempAccountIDs, 5000) as $chunk) {
+            foreach (array_chunk($tempAccountIDs, self::CHUNK_SIZE) as $chunk) {
                 $deletedAccountCount += Account::whereIn('id', $chunk)->delete();
             }
         }
@@ -116,7 +118,7 @@ class TemporaryUserCleanupService
         // Customer (MongoDB) - no placeholder limit, but chunking for performance
         $deletedCustomerCount = 0;
         if (!empty($tempCustomerIDs)) {
-            foreach (array_chunk($tempCustomerIDs, 5000) as $chunk) {
+            foreach (array_chunk($tempCustomerIDs, self::CHUNK_SIZE) as $chunk) {
                 $deletedCustomerCount += Customer::whereIn('id', $chunk)->delete();
             }
         }
@@ -152,7 +154,7 @@ class TemporaryUserCleanupService
 
         // Account is MongoDB, but we're querying by user_id from MySQL
         // Chunking helps with performance, but not required for placeholder limit
-        foreach (array_chunk($tempUserIDs, 5000) as $chunk) {
+        foreach (array_chunk($tempUserIDs, self::CHUNK_SIZE) as $chunk) {
             $tempAccountIDs = array_merge(
                 $tempAccountIDs,
                 Account::whereIn('user_id', $chunk)
@@ -174,7 +176,7 @@ class TemporaryUserCleanupService
         }
 
         // Customer is MongoDB - no placeholder limit, but chunking for performance
-        foreach (array_chunk($tempAccountIDs, 5000) as $chunk) {
+        foreach (array_chunk($tempAccountIDs, self::CHUNK_SIZE) as $chunk) {
             $tempCustomerIDs = array_merge(
                 $tempCustomerIDs,
                 Customer::whereIn('account_id', $chunk)
