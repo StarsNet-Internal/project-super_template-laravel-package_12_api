@@ -388,8 +388,8 @@ class ServiceController extends Controller
         $chargeCalculator = function ($amount): int {
             if ($amount <= 1000) return $amount; // For 0 - 1000
             return $amount <= 10000
-                ? $amount % 1000 + (intval($amount / 1000)) * 1000 / 10 // remainder + thousands
-                : $amount % 1000 + (intval($amount / 1000)) * 1000 / 10; // remainder + thousands
+                ? $amount % 1000 + (intval($amount / 1000)) * 1000 / 5 // remainder + thousands
+                : $amount % 1000 + (intval($amount / 1000)) * 1000 / 4; // remainder + thousands
         };
 
         $chargeAmount = $chargeCalculator((float) $totalPrice);
