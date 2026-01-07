@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\Log;
 // Package Models
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Bid;
+use Starsnet\Project\Paraqon\App\Models\Deposit;
 use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
 class TemporaryUserCleanupService
@@ -32,17 +33,20 @@ class TemporaryUserCleanupService
         $tempAccountIDs = $this->getTemporaryAccounts($tempUserIDs);
         $tempCustomerIDs = $this->getTemporaryCustomers($tempAccountIDs);
 
-        // Get TEMP users who have items in shopping_cart_items, orders, auction_registration_requests, bids, or watchlist_items
+        // Get TEMP users who have items in shopping_cart_items, orders, auction_registration_requests, bids, deposits, or watchlist_items
         $shoppingCartItemCustomerIDs = $this->getCustomerIDsWhoHaveShoppingCartItems()->toArray();
         $orderCustomerIDs = $this->getCustomerIDsWhoHaveOrders()->toArray();
+
         $auctionRegistrationRequestCustomerIDs = $this->getCustomerIDsWhoHaveAuctionRegistrationRequests()->toArray();
         $bidCustomerIDs = $this->getCustomerIDsWhoHaveBids()->toArray();
+        $depositCustomerIDs = $this->getCustomerIDsWhoHaveDeposits()->toArray();
         $watchlistItemCustomerIDs = $this->getCustomerIDsWhoHaveWatchlistItems()->toArray();
         $keepCustomerIDs = array_unique(array_merge(
             $shoppingCartItemCustomerIDs,
             $orderCustomerIDs,
             $auctionRegistrationRequestCustomerIDs,
             $bidCustomerIDs,
+            $depositCustomerIDs,
             $watchlistItemCustomerIDs
         ));
 
@@ -207,5 +211,10 @@ class TemporaryUserCleanupService
     public function getCustomerIDsWhoHaveWatchlistItems()
     {
         return WatchlistItem::pluck('customer_id')->unique()->filter()->values();
+    }
+
+    public function getCustomerIDsWhoHaveDeposits()
+    {
+        return Deposit::pluck('requested_by_customer_id')->unique()->filter()->values();
     }
 }
