@@ -9,6 +9,8 @@ use App\Models\Category;
 use App\Models\Customer;
 use App\Models\ShoppingCartItem;
 use App\Models\Order;
+use App\Models\NotificationSetting;
+use App\Models\VerificationCode;
 use Carbon\Carbon;
 
 use Illuminate\Support\Facades\Log;
@@ -17,6 +19,7 @@ use Illuminate\Support\Facades\Log;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Bid;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
+use Starsnet\Project\Paraqon\App\Models\Notification;
 use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
 class TemporaryUserCleanupService
@@ -123,6 +126,30 @@ class TemporaryUserCleanupService
             }
         }
 
+        // Notification (MongoDB) - key is account_id
+        $deletedNotificationCount = 0;
+        if (!empty($tempAccountIDs)) {
+            foreach (array_chunk($tempAccountIDs, self::CHUNK_SIZE) as $chunk) {
+                $deletedNotificationCount += Notification::whereIn('account_id', $chunk)->delete();
+            }
+        }
+
+        // NotificationSetting (MongoDB) - key is account_id
+        $deletedNotificationSettingCount = 0;
+        if (!empty($tempAccountIDs)) {
+            foreach (array_chunk($tempAccountIDs, self::CHUNK_SIZE) as $chunk) {
+                $deletedNotificationSettingCount += NotificationSetting::whereIn('account_id', $chunk)->delete();
+            }
+        }
+
+        // VerificationCode (MongoDB) - key is user_id
+        $deletedVerificationCodeCount = 0;
+        if (!empty($tempUserIDs)) {
+            foreach (array_chunk($tempUserIDs, self::CHUNK_SIZE) as $chunk) {
+                $deletedVerificationCodeCount += VerificationCode::whereIn('user_id', $chunk)->delete();
+            }
+        }
+
         Log::info('Deleted User Count: ' . $deletedUserCount);
 
         return [
@@ -130,6 +157,9 @@ class TemporaryUserCleanupService
             'account_deleted_count' => $deletedAccountCount,
             'customer_deleted_count' => $deletedCustomerCount,
             'category_deleted_count' => $deletedCategoryCount,
+            'notification_deleted_count' => $deletedNotificationCount,
+            'notification_setting_deleted_count' => $deletedNotificationSettingCount,
+            'verification_code_deleted_count' => $deletedVerificationCodeCount,
         ];
     }
 
