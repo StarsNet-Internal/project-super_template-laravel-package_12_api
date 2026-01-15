@@ -174,6 +174,29 @@ class AuctionLotController extends Controller
         return $auctionLots;
     }
 
+    public function getAllAuctionLotsTrimmed(Request $request): Collection
+    {
+        // Reuse the original function to get all auction lots with statistics
+        $auctionLots = $this->getAllAuctionLots($request);
+
+        // Return only specified keys
+        return $auctionLots->map(function ($lot) {
+            return [
+                'store_id' => $lot->store_id,
+                'starting_price' => $lot->starting_price,
+                'reserve_price' => $lot->reserve_price,
+                'current_bid' => $lot->current_bid,
+                'start_datetime' => $lot->start_datetime,
+                'end_datetime' => $lot->end_datetime,
+                'title' => $lot->title,
+                'lot_number' => $lot->lot_number,
+                'bid_count' => $lot->bid_count,
+                'participated_user_count' => $lot->participated_user_count,
+                'last_bid_placed_at' => $lot->last_bid_placed_at,
+            ];
+        });
+    }
+
     public function getAuctionLotDetails(Request $request): AuctionLot
     {
         /** @var ?AuctionLot $auctionLot */

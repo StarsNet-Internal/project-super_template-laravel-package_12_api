@@ -108,6 +108,7 @@ Route::group(
             function () {
                 Route::post('/', [AuctionLotController::class, 'createAuctionLot']);
                 Route::get('/all', [AuctionLotController::class, 'getAllAuctionLots'])->middleware(['pagination']);
+                Route::get('/all/trimmed', [AuctionLotController::class, 'getAllAuctionLotsTrimmed'])->middleware(['pagination']);
                 Route::get('/{id}/details', [AuctionLotController::class, 'getAuctionLotDetails']);
                 Route::get('/{id}/bids/all', [AuctionLotController::class, 'getAllAuctionLotBids'])->middleware(['pagination']);
                 Route::put('/mass-update', [AuctionLotController::class, 'massUpdateAuctionLots']);
