@@ -250,6 +250,7 @@ class ServiceController extends Controller
 
                         Product::objectIDs($productIDs)->update([
                             'owned_by_customer_id' => $order->customer_id,
+                            'buyer_id' => $order->customer_id,
                             'status' => Status::ACTIVE->value,
                             'listing_status' => 'ALREADY_CHECKOUT'
                         ]);

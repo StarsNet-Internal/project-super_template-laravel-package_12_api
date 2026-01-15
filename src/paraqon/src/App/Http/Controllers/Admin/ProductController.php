@@ -21,7 +21,7 @@ class ProductController extends Controller
         // Extract attributes from $request
         $statuses = (array) $request->input('status', Status::defaultStatuses());
 
-        $getKeys = ['_id', 'title', 'images', 'status', 'updated_at', 'created_at', 'product_interface', 'prefix', 'stock_no', 'owned_by_customer_id', 'reserve_price', 'bid_incremental_settings'];
+        $getKeys = ['_id', 'title', 'images', 'status', 'updated_at', 'created_at', 'product_interface', 'prefix', 'stock_no', 'owned_by_customer_id', 'reserve_price', 'bid_incremental_settings', 'seller_id', 'buyer_id'];
         /** @var Collection $products */
         $products = Product::statusesAllowed(Status::defaultStatuses(), $statuses)
             ->with([
@@ -82,6 +82,8 @@ class ProductController extends Controller
             $product['prefix'] = $product->prefix;
             $product['stock_no'] = $product->stock_no;
             $product['owned_by_customer_id'] = $product->owned_by_customer_id;
+            $product['seller_id'] = $product->seller_id;
+            $product['buyer_id'] = $product->buyer_id;
             $product['reserve_price'] = $product->reserve_price;
             $product['bid_incremental_settings'] = $product->bid_incremental_settings;
 
