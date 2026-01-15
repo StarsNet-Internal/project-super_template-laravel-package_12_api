@@ -182,6 +182,8 @@ class AuctionLotController extends Controller
         // Return only specified keys
         return $auctionLots->map(function ($lot) {
             return [
+                '_id' => $lot->_id,
+                'product_id' => $lot->product_id,
                 'store_id' => $lot->store_id,
                 'starting_price' => $lot->starting_price,
                 'reserve_price' => $lot->reserve_price,
@@ -193,6 +195,7 @@ class AuctionLotController extends Controller
                 'bid_count' => $lot->bid_count,
                 'participated_user_count' => $lot->participated_user_count,
                 'last_bid_placed_at' => $lot->last_bid_placed_at,
+                'created_at' => $lot->created_at
             ];
         });
     }
