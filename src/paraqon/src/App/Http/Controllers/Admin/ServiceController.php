@@ -983,6 +983,7 @@ class ServiceController extends Controller
                 'message' => 'Cleanup process started in background'
             ];
         } catch (\Throwable $th) {
+            Log::error($th->getMessage());
             abort(404, 'Failed to execute command: ' . $command);
 
             return [

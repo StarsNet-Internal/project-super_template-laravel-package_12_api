@@ -34,17 +34,24 @@ class TemporaryUserCleanupService
     public function cleanup()
     {
         // Get TEMP user, account, customer
+        Log::info('Getting Temporary Users');
         $tempUserIDs = $this->getTemporaryUsers();
+        Log::info('Getting Temporary Accounts');
         $tempAccountIDs = $this->getTemporaryAccounts($tempUserIDs);
+        Log::info('Getting Temporary Customers');
         $tempCustomerIDs = $this->getTemporaryCustomers($tempAccountIDs);
 
         // Get TEMP users who have items in shopping_cart_items, orders, auction_registration_requests, bids, deposits, or watchlist_items
+        Log::info('Getting Shopping Cart Item Customer IDs');
         $shoppingCartItemCustomerIDs = $this->getCustomerIDsWhoHaveShoppingCartItems()->toArray();
+        Log::info('Getting Order Customer IDs');
         $orderCustomerIDs = $this->getCustomerIDsWhoHaveOrders()->toArray();
 
         $auctionRegistrationRequestCustomerIDs = $this->getCustomerIDsWhoHaveAuctionRegistrationRequests()->toArray();
+        Log::info('Getting Bid Customer IDs');
         $bidCustomerIDs = $this->getCustomerIDsWhoHaveBids()->toArray();
         $depositCustomerIDs = $this->getCustomerIDsWhoHaveDeposits()->toArray();
+        Log::info('Getting Watchlist Item Customer IDs');
         $watchlistItemCustomerIDs = $this->getCustomerIDsWhoHaveWatchlistItems()->toArray();
         $keepCustomerIDs = array_unique(array_merge(
             $shoppingCartItemCustomerIDs,
@@ -56,6 +63,7 @@ class TemporaryUserCleanupService
         ));
 
         // Get keepAccountIDs (MongoDB - no placeholder limit, but chunking for performance)
+        Log::info('Getting Keep Account IDs');
         $keepAccountIDs = [];
         if (!empty($keepCustomerIDs)) {
             // MongoDB can handle large arrays, but chunking helps with performance
@@ -72,6 +80,7 @@ class TemporaryUserCleanupService
         }
 
         // Get keepUserIDs - chunk for MySQL placeholder limit
+        Log::info('Getting Keep User IDs');
         $keepUserIDs = [];
         if (!empty($keepAccountIDs)) {
             // Account is MongoDB, but we're querying for user_id which will be used in MySQL
@@ -87,12 +96,16 @@ class TemporaryUserCleanupService
         }
 
         // Update ids need to be deleted
+        Log::info('Updating IDs to be deleted');
         $tempUserIDs = array_diff($tempUserIDs, $keepUserIDs);
+        Log::info('Getting Temporary Accounts');
         $tempAccountIDs = $this->getTemporaryAccounts($tempUserIDs);
+        Log::info('Getting Temporary Customers');
         $tempCustomerIDs = $this->getTemporaryCustomers($tempAccountIDs);
 
         // Delete Records
         // Category (MongoDB) - no placeholder limit, but chunking for performance
+        Log::info('Deleting Category');
         $deletedCategoryCount = 0;
         if (!empty($tempCustomerIDs)) {
             foreach (array_chunk($tempCustomerIDs, self::CHUNK_SIZE) as $chunk) {
@@ -101,56 +114,69 @@ class TemporaryUserCleanupService
                     ->delete();
             }
         }
+        Log::info('Deleted Category');
 
         // User (MySQL) - MUST chunk to avoid placeholder limit
         $deletedUserCount = 0;
+        Log::info('Deleting User');
         if (!empty($tempUserIDs)) {
             foreach (array_chunk($tempUserIDs, self::CHUNK_SIZE) as $chunk) {
                 $deletedUserCount += User::whereIn('id', $chunk)->delete();
             }
         }
-
+        Log::info('Deleted User');
         // Account (MongoDB) - no placeholder limit, but chunking for performance
         $deletedAccountCount = 0;
+        Log::info('Deleting Account');
         if (!empty($tempAccountIDs)) {
             foreach (array_chunk($tempAccountIDs, self::CHUNK_SIZE) as $chunk) {
                 $deletedAccountCount += Account::whereIn('id', $chunk)->delete();
             }
         }
-
+        Log::info('Deleted Account');
         // Customer (MongoDB) - no placeholder limit, but chunking for performance
         $deletedCustomerCount = 0;
+        Log::info('Deleting Customer');
         if (!empty($tempCustomerIDs)) {
             foreach (array_chunk($tempCustomerIDs, self::CHUNK_SIZE) as $chunk) {
                 $deletedCustomerCount += Customer::whereIn('id', $chunk)->delete();
             }
         }
-
+        Log::info('Deleted Customer');
         // Notification (MongoDB) - key is account_id
         $deletedNotificationCount = 0;
+        Log::info('Deleting Notification');
         if (!empty($tempAccountIDs)) {
             foreach (array_chunk($tempAccountIDs, self::CHUNK_SIZE) as $chunk) {
                 $deletedNotificationCount += Notification::whereIn('account_id', $chunk)->delete();
             }
         }
-
+        Log::info('Deleted Notification');
         // NotificationSetting (MongoDB) - key is account_id
         $deletedNotificationSettingCount = 0;
+        Log::info('Deleting NotificationSetting');
         if (!empty($tempAccountIDs)) {
             foreach (array_chunk($tempAccountIDs, self::CHUNK_SIZE) as $chunk) {
                 $deletedNotificationSettingCount += NotificationSetting::whereIn('account_id', $chunk)->delete();
             }
         }
-
+        Log::info('Deleted NotificationSetting');
         // VerificationCode (MongoDB) - key is user_id
         $deletedVerificationCodeCount = 0;
+        Log::info('Deleting VerificationCode');
         if (!empty($tempUserIDs)) {
             foreach (array_chunk($tempUserIDs, self::CHUNK_SIZE) as $chunk) {
                 $deletedVerificationCodeCount += VerificationCode::whereIn('user_id', $chunk)->delete();
             }
         }
+        Log::info('Deleted VerificationCode');
 
         Log::info('Deleted User Count: ' . $deletedUserCount);
+        Log::info('Deleted Account Count: ' . $deletedAccountCount);
+        Log::info('Deleted Customer Count: ' . $deletedCustomerCount);
+        Log::info('Deleted Notification Count: ' . $deletedNotificationCount);
+        Log::info('Deleted NotificationSetting Count: ' . $deletedNotificationSettingCount);
+        Log::info('Deleted VerificationCode Count: ' . $deletedVerificationCodeCount);
 
         return [
             'user_deleted_count' => $deletedUserCount,
