@@ -195,6 +195,7 @@ class AuctionLotController extends Controller
                 'bid_count' => $lot->bid_count,
                 'participated_user_count' => $lot->participated_user_count,
                 'last_bid_placed_at' => $lot->last_bid_placed_at,
+                'is_bid_placed' => $lot->is_bid_placed,
                 'created_at' => $lot->created_at
             ];
         });
