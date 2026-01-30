@@ -624,12 +624,24 @@ class ShoppingCartController extends Controller
                 'discounted_point_per_unit',
                 'original_subtotal_point',
                 'subtotal_point',
-            ])
-            ->each(function ($item) use ($checkoutVariantIDs) {
-                $item->is_checkout = in_array($item->product_variant_id, $checkoutVariantIDs);
-                $item->is_refundable = false;
-                $item->global_discount = null;
-            });
+            ]);
+
+        // Get product_id => owned_by_customer_id mapping without loading full products
+        $productIds = $cartItems->pluck('product_id')->unique()->filter()->values()->all();
+        $sellerIdMap = [];
+        if (!empty($productIds)) {
+            $sellerIdMap = Product::whereIn('id', $productIds)
+                ->get(['id', 'owned_by_customer_id'])
+                ->pluck('owned_by_customer_id', 'id')
+                ->toArray();
+        }
+
+        $cartItems->each(function ($item) use ($checkoutVariantIDs, $sellerIdMap) {
+            $item->is_checkout = in_array($item->product_variant_id, $checkoutVariantIDs);
+            $item->is_refundable = false;
+            $item->global_discount = null;
+            $item->seller_id = $sellerIdMap[$item->product_id] ?? null;
+        });
 
         // Extract attributes from $request
         $deliveryInfo = $request->delivery_info;
