@@ -1,0 +1,53 @@
+{
+  "info": {
+    "name": "Verify IAP Receipt",
+    "description": "POST request for customer coin-packages verify-iap endpoint",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Verify IAP Receipt",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text",
+            "description": "API auth token (auth:api)"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"package_id\": 1,\n  \"platform\": \"apple\",\n  \"receipt\": \"<base64_receipt_data_from_store>\",\n  \"transaction_id\": \"<store_transaction_id>\",\n  \"product_id\": \"com.yourapp.coins_100\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/coin-packages/verify-iap",
+          "host": ["{{base_url}}"],
+          "path": ["api", "coin-packages", "verify-iap"]
+        },
+        "description": "Verify in-app purchase receipt (Apple or Google). Requires auth:api. platform must be \"apple\" or \"google\". product_id is optional."
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost"
+    },
+    {
+      "key": "access_token",
+      "value": "your_api_token_here"
+    }
+  ]
+}

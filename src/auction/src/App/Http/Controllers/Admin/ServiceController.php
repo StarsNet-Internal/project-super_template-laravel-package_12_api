@@ -20,8 +20,9 @@ use App\Models\Order;
 
 // Models
 use App\Models\Product;
+use App\Models\ShoppingCartItem;
 use App\Models\Store;
-use Illuminate\Support\Facades\Log;
+use App\Models\WarehouseInventory;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
@@ -187,6 +188,47 @@ class ServiceController extends Controller
                                     'status' => 'ACTIVE',
                                     'listing_status' => 'ALREADY_CHECKOUT'
                                 ]);
+                            }
+
+                            // Deduct WarehouseInventory for default-main-store (cart_items + gift_items)
+                            if (!is_null($store) && $store->slug === 'default-main-store') {
+                                $allItems = collect($order->cart_items ?? [])
+                                    ->merge(collect($order->gift_items ?? []));
+                                foreach ($allItems as $item) {
+                                    $variantId = $item['product_variant_id'] ?? null;
+                                    $qtyToDeduct = (int) ($item['qty'] ?? 0);
+                                    if ($variantId === null || $qtyToDeduct <= 0) {
+                                        continue;
+                                    }
+                                    $inventories = WarehouseInventory::where('product_variant_id', $variantId)
+                                        ->where('qty', '>', 0)
+                                        ->orderByDesc('qty')
+                                        ->get();
+                                    $remainder = $qtyToDeduct;
+                                    foreach ($inventories as $inventory) {
+                                        if ($remainder <= 0) {
+                                            break;
+                                        }
+                                        $available = (int) $inventory->qty;
+                                        $deduct = min($remainder, $available);
+                                        if ($deduct > 0) {
+                                            $inventory->decrementQty($deduct);
+                                            $remainder -= $deduct;
+                                        }
+                                    }
+                                }
+
+                                // Clear ShoppingCartItem
+                                $productVariantIDs = collect($order->cart_items)
+                                    ->pluck('product_variant_id')
+                                    ->filter()
+                                    ->unique()
+                                    ->values()
+                                    ->toArray();
+                                ShoppingCartItem::where('customer_id', $order->customer_id)
+                                    ->where('store_id', $storeID)
+                                    ->whereIn('product_variant_id', $productVariantIDs)
+                                    ->delete();
                             }
                         }
 

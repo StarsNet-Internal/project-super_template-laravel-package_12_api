@@ -8,6 +8,7 @@ use Starsnet\Project\Auction\App\Http\Controllers\Customer\AuctionRegistrationRe
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\ConsignmentRequestController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\CreditCardController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\ReferralCodeController;
+use Starsnet\Project\Auction\App\Http\Controllers\Customer\ShoppingCartController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\SiteMapController;
 use Starsnet\Project\Auction\App\Http\Controllers\Customer\TestingController;
 
@@ -97,5 +98,26 @@ Route::group(
         Route::get('/auctions/all', [SiteMapController::class, 'getAllAuctions'])->middleware(['pagination']);
         Route::get('/auctions/{store_id}/products/all', [SiteMapController::class, 'filterAuctionProductsByCategories'])->middleware(['pagination']);
         Route::get('/auction-lots/{auction_lot_id}/details', [SiteMapController::class, 'getAuctionLotDetails']);
+    }
+);
+
+/*
+|--------------------------------------------------------------------------
+| Store-scoped (shopping cart, etc.)
+|--------------------------------------------------------------------------
+*/
+
+Route::group(
+    ['prefix' => '/stores/{store_id}/'],
+    function () {
+        Route::group(
+            ['prefix' => 'shopping-cart'],
+            function () {
+                Route::group(['middleware' => 'auth:api'], function () {
+                    Route::post('/all', [ShoppingCartController::class, 'getAll']);
+                    Route::post('/main-store/checkout', [ShoppingCartController::class, 'checkOutMainStore']);
+                });
+            }
+        );
     }
 );
