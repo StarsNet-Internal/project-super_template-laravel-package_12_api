@@ -22,6 +22,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\ShoppingCartItem;
 use App\Models\Store;
+use App\Models\Warehouse;
 use App\Models\WarehouseInventory;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
@@ -194,28 +195,26 @@ class ServiceController extends Controller
                             if (!is_null($store) && $store->slug === 'default-main-store') {
                                 $allItems = collect($order->cart_items ?? [])
                                     ->merge(collect($order->gift_items ?? []));
+
+                                // Get Warehouse
+                                $warehouse = Warehouse::where('slug', 'default-warehouse')->statusActive()->first();
+
                                 foreach ($allItems as $item) {
-                                    $variantId = $item['product_variant_id'] ?? null;
+                                    $variantID = $item['product_variant_id'];
                                     $qtyToDeduct = (int) ($item['qty'] ?? 0);
-                                    if ($variantId === null || $qtyToDeduct <= 0) {
+                                    if ($variantID === null || $qtyToDeduct <= 0) {
                                         continue;
                                     }
-                                    $inventories = WarehouseInventory::where('product_variant_id', $variantId)
-                                        ->where('qty', '>', 0)
-                                        ->orderByDesc('qty')
-                                        ->get();
-                                    $remainder = $qtyToDeduct;
-                                    foreach ($inventories as $inventory) {
-                                        if ($remainder <= 0) {
-                                            break;
-                                        }
-                                        $available = (int) $inventory->qty;
-                                        $deduct = min($remainder, $available);
-                                        if ($deduct > 0) {
-                                            $inventory->decrementQty($deduct);
-                                            $remainder -= $deduct;
-                                        }
-                                    }
+
+                                    $productID = $item['product_id'];
+                                    $qty = -abs($item['qty']);
+
+                                    WarehouseInventory::create([
+                                        'warehouse_id' => $warehouse->id,
+                                        'product_id' => $productID,
+                                        'product_variant_id' => $variantID,
+                                        'qty' => $qty
+                                    ]);
                                 }
 
                                 // Clear ShoppingCartItem

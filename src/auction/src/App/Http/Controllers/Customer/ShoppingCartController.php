@@ -104,7 +104,7 @@ class ShoppingCartController extends Controller
         $inventoryCounts = collect();
         if (!empty($variantIds)) {
             $inventoryCounts = WarehouseInventory::whereIn('product_variant_id', $variantIds)
-                ->whereHas('warehouse', fn($q) => $q->statusActive())
+                ->whereHas('warehouse', fn($q) => $q->where('slug', 'default-warehouse'))
                 ->get()
                 ->groupBy('product_variant_id')
                 ->map(fn($group) => $group->sum(fn($r) => (int) $r->qty));
@@ -318,18 +318,24 @@ class ShoppingCartController extends Controller
             $variants = ProductVariant::whereIn('_id', $request->checkout_product_variant_ids)->get();
             $customer->clearCartByStore($store, $variants);
 
+            // Get WarehouseID
+            $warehouse = Warehouse::where('slug', 'default-warehouse')->statusActive()->first();
+
             // Deduct WarehouseInventory(s)
-            foreach ($checkoutItems as $item) {
-                $attributes = $item->toArray();
-                $variantID = $attributes['product_variant_id'];
-                $qty = $attributes['qty'];
-                /** @var ProductVariant $variant */
-                $variant = ProductVariant::find($variantID);
-                $this->deductWarehouseInventoriesByStore(
-                    $store,
-                    $variant,
-                    $qty
-                );
+            if (!is_null($warehouse)) {
+                foreach ($checkoutItems as $item) {
+                    $attributes = $item->toArray();
+                    $productID = $attributes['product_id'];
+                    $variantID = $attributes['product_variant_id'];
+                    $qty = -abs($attributes['qty']);
+
+                    WarehouseInventory::create([
+                        'warehouse_id' => $warehouse->id,
+                        'product_id' => $productID,
+                        'product_variant_id' => $variantID,
+                        'qty' => $qty
+                    ]);
+                }
             }
         }
 
@@ -370,47 +376,6 @@ class ShoppingCartController extends Controller
         }
 
         return $rawInfo;
-    }
-
-    private function deductWarehouseInventoriesByStore(
-        Store $store,
-        ProductVariant $variant,
-        int $qtyChange
-    ) {
-        if ($qtyChange === 0) return false;
-
-        $inventories = $this->getActiveWarehouseInventoriesByStore($store, $variant);
-
-        $remainder = $qtyChange;
-
-        if ($inventories->count() > 0) {
-            foreach ($inventories as $inventory) {
-                if ($remainder <= 0) break;
-
-                $availableInventoryQty = $inventory->qty;
-                $deductableQty = $remainder > $availableInventoryQty ?
-                    $availableInventoryQty :
-                    $remainder;
-
-                $inventory->decrementQty($deductableQty);
-                $remainder -= $deductableQty;
-            }
-        }
-
-        return true;
-    }
-
-    private function getActiveWarehouseInventoriesByStore(Store $store, ProductVariant $variant)
-    {
-        $warehouseIDs = $store->warehouses()
-            ->statusActive()
-            ->pluck('id')
-            ->all();
-
-        return $variant->warehouseInventories()
-            ->whereIn('warehouse_id', $warehouseIDs)
-            ->orderByDesc('qty')
-            ->get();
     }
 
     private function createBasicCheckout(Order $order, string $paymentMethod = CheckoutType::ONLINE->value)
