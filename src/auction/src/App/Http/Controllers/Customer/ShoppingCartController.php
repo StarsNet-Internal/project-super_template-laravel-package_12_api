@@ -104,6 +104,7 @@ class ShoppingCartController extends Controller
         $inventoryCounts = collect();
         if (!empty($variantIds)) {
             $inventoryCounts = WarehouseInventory::whereIn('product_variant_id', $variantIds)
+                ->whereHas('warehouse', fn($q) => $q->statusActive())
                 ->get()
                 ->groupBy('product_variant_id')
                 ->map(fn($group) => $group->sum(fn($r) => (int) $r->qty));
@@ -187,7 +188,7 @@ class ShoppingCartController extends Controller
             null;
 
         // getShoppingCartDetails calculations
-        $subtotalPrice = $cartItems->sum('subtotal_price');
+        $subtotalPrice = $cartItems->where('is_checkout', true)->sum('subtotal_price');
         $localPriceDiscount = 0;
         $totalPrice = $subtotalPrice - $localPriceDiscount;
 
@@ -259,18 +260,6 @@ class ShoppingCartController extends Controller
         foreach ($checkoutItems as $item) {
             $attributes = $item->toArray();
             unset($attributes['_id'], $attributes['is_checkout']);
-
-            // Update WarehouseInventory(s)
-            $variantID = $attributes['product_variant_id'];
-            $qty = $attributes['qty'];
-            /** @var ProductVariant $variant */
-            $variant = ProductVariant::find($variantID);
-            $this->deductWarehouseInventoriesByStore(
-                $store,
-                $variant,
-                $qty
-            );
-
             $order->createCartItem($attributes);
         }
 
@@ -329,10 +318,18 @@ class ShoppingCartController extends Controller
             $variants = ProductVariant::whereIn('_id', $request->checkout_product_variant_ids)->get();
             $customer->clearCartByStore($store, $variants);
 
-            // Update product
-            foreach ($variants as $variant) {
-                $product = $variant->product;
-                $product->update(['listing_status' => 'ALREADY_CHECKOUT']);
+            // Deduct WarehouseInventory(s)
+            foreach ($checkoutItems as $item) {
+                $attributes = $item->toArray();
+                $variantID = $attributes['product_variant_id'];
+                $qty = $attributes['qty'];
+                /** @var ProductVariant $variant */
+                $variant = ProductVariant::find($variantID);
+                $this->deductWarehouseInventoriesByStore(
+                    $store,
+                    $variant,
+                    $qty
+                );
             }
         }
 
