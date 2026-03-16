@@ -4,9 +4,11 @@ namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 
 // Laravel built-in
 use App\Http\Controllers\Controller;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 // Enums
 use App\Enums\ProductVariantDiscountType;
@@ -198,6 +200,121 @@ class ProductManagementController extends Controller
         );
 
         return $products;
+    }
+
+    public function filterAuctionProductsByCategoriesV3(Request $request): Collection
+    {
+        // Define Redis Cache Key
+        $storeId = (string) $this->store->id;
+        $categoryIds = array_filter(array_unique((array) $request->category_ids));
+        sort($categoryIds);
+        $mongoDbName = config('database.connections.mongodb.database', 'default_database');
+        $cacheKey = $mongoDbName . ':filter_auction_products_v3:store_' . $storeId . ':categories_' . md5(json_encode($categoryIds));
+
+        // Validate if function shouldcache response or not
+        $storeEndDatetime = $this->store->end_datetime ?? null;
+        $storeEnded = $storeEndDatetime !== null && Carbon::parse($storeEndDatetime)->isPast();
+
+        $compute = function () use ($request) {
+            // Get all product_id from all AuctionLot in this Store
+            $productIDs = AuctionLot::where('store_id', $this->store->id)
+                ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
+                ->pluck('product_id')
+                ->all();
+
+            $categoryProductIDs = [];
+            $categoryIDs = array_filter(array_unique((array) $request->category_ids));
+            if (count($categoryIDs) > 0) {
+                $categoryProductIDs = Category::whereIn('_id', $categoryIDs)
+                    ->status(Status::ACTIVE->value)
+                    ->pluck('item_ids')
+                    ->flatten()
+                    ->filter(fn($id) => !is_null($id))
+                    ->unique()
+                    ->values()
+                    ->all();
+                $productIDs = array_intersect($productIDs, $categoryProductIDs);
+            }
+
+            /** @var Collection $products */
+            $products = Product::whereIn('_id', $productIDs)
+                ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
+                ->get();
+
+            /** @var Collection $auctionLots */
+            $auctionLots = AuctionLot::whereIn('product_id', $productIDs)
+                ->where('store_id', $this->store->id)
+                ->statuses([Status::ACTIVE->value, Status::ARCHIVED->value])
+                ->with(['watchlistItems'])
+                ->latest()
+                ->get()
+                ->unique('product_id')
+                ->map(function ($lot) {
+                    $lot->watchlist_item_count = $lot->watchlistItems->count();
+                    unset($lot->watchlistItems);
+                    return $lot;
+                })
+                ->keyBy('product_id');
+
+            $watchingAuctionIDs = WatchlistItem::where('customer_id', $this->customer()->id)
+                ->where('item_type', 'auction-lot')
+                ->pluck('item_id')
+                ->all();
+
+            $products = $products->map(
+                function ($product) use ($auctionLots, $watchingAuctionIDs) {
+                    $auctionLot = $auctionLots[$product->_id];
+                    $bidSettings = $auctionLot->bid_incremental_settings ?? [];
+                    $estimatePrice = $bidSettings['estimate_price'] ?? [];
+
+                    $product->fill([
+                        'auction_lot_id' => $auctionLot->_id,
+                        'current_bid' => $auctionLot->current_bid,
+                        'is_reserve_price_met' => $auctionLot->current_bid >= $auctionLot->reserve_price,
+                        'title' => $auctionLot->title,
+                        'short_description' => $auctionLot->short_description,
+                        'long_description' => $auctionLot->long_description,
+                        'bid_incremental_settings' => $bidSettings,
+                        'start_datetime' => $auctionLot->start_datetime,
+                        'end_datetime' => $auctionLot->end_datetime,
+                        'lot_number' => $auctionLot->lot_number,
+                        'sold_price' => $auctionLot->sold_price,
+                        'commission' => $auctionLot->commission,
+                        'max_estimated_price' => $estimatePrice['max'] ?? 0,
+                        'min_estimated_price' => $estimatePrice['min'] ?? 0,
+                        'auction_lots' => [$auctionLot],
+                        'starting_price' => $auctionLot->starting_price,
+                        'is_bid_placed' => $auctionLot->is_bid_placed,
+                        'watchlist_item_count' => $auctionLot->watchlist_item_count,
+                        'is_watching' => in_array($auctionLot->_id, $watchingAuctionIDs, true),
+                        'store' => $this->store
+                    ]);
+
+                    unset($product->reserve_price);
+
+                    return $product;
+                }
+            );
+
+            return $products;
+        };
+
+        // Cache response if store is ended
+        if ($storeEnded) {
+            $cached = Cache::store('redis')->rememberForever($cacheKey, $compute);
+            // Re-apply per-customer is_watching so cached result is not tied to the user who filled the cache
+            $watchingAuctionIDs = WatchlistItem::where('customer_id', $this->customer()->id)
+                ->where('item_type', 'auction-lot')
+                ->pluck('item_id')
+                ->all();
+            return $cached->map(function ($product) use ($watchingAuctionIDs) {
+                $product->is_watching = in_array($product->auction_lot_id ?? null, $watchingAuctionIDs, true);
+                return $product;
+            });
+        }
+
+        // Return original V2 response if store is not ended
+        return $compute();
     }
 
     public function getAllAuctionLotsAndNumber(Request $request)

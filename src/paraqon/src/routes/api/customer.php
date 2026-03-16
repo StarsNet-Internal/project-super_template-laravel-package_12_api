@@ -219,6 +219,7 @@ Route::group(
                 Route::group(['middleware' => 'auth:api'], function () {
                     Route::get('/products/filter', [ProductManagementController::class, 'filterAuctionProductsByCategories'])->middleware(['pagination']);
                     Route::get('/products/filter/v2', [ProductManagementController::class, 'filterAuctionProductsByCategoriesV2'])->middleware(['pagination']);
+                    Route::get('/products/filter/v3', [ProductManagementController::class, 'filterAuctionProductsByCategoriesV3'])->middleware(['pagination']);
                     Route::get('/related-products-urls', [ProductManagementController::class, 'getRelatedAuctionProductsUrls'])->middleware(['pagination']);
                     Route::get('/products/ids', [ProductManagementController::class, 'getAuctionProductsByIDs'])->name('paraqon.products.ids')->middleware(['pagination']);
                     Route::get('/products/{product_id}/details', [ProductManagementController::class, 'getProductDetails']);
