@@ -50,6 +50,11 @@ class Game extends Model
         'total_ratings' => 0,
         'is_new' => false,
         'is_active' => true,
+        'difficulty_params' => [], // object: game difficulty config (e.g. round_time_sec, max_rounds)
+    ];
+
+    protected $casts = [
+        'difficulty_params' => 'array',
     ];
 
     protected $guarded = [];

@@ -41,6 +41,7 @@ class GameSession extends Model
         'started_at' => null,
         'expire_at' => null,
         'ended_at' => null,
+        'game_state' => null, // string: serialized state for restore (e.g. JSON) when user exits mid-round
     ];
 
     protected $guarded = [];
@@ -158,6 +159,12 @@ class GameSession extends Model
         $this->ended_at = now();
         $this->outcome = $outcome;
         $this->coins_earned = $outcome === 'win' ? $coinsEarned : 0;
+        return $this->save();
+    }
+
+    public function saveGameState(string $gameState): bool
+    {
+        $this->game_state = $gameState;
         return $this->save();
     }
 
