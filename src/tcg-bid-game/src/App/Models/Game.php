@@ -53,10 +53,6 @@ class Game extends Model
         'difficulty_params' => [], // object: game difficulty config (e.g. round_time_sec, max_rounds)
     ];
 
-    protected $casts = [
-        'difficulty_params' => 'array',
-    ];
-
     protected $guarded = [];
     protected $appends = ['_id'];
     protected $hidden = ['id'];
