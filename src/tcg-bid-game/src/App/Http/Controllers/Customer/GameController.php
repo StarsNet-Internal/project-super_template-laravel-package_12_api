@@ -19,7 +19,13 @@ class GameController extends Controller
             ->orderBy('created_at', 'desc')
             ->get();
 
-        return $games;
+        return $games->map(function (Game $game) {
+            $item = $game->toArray();
+            $item['difficulty_params'] = $game->getResolvedDifficultyParams();
+            unset($item['levels_by_difficulty']);
+
+            return $item;
+        });
     }
 
     public function startGame(Request $request)
@@ -114,7 +120,7 @@ class GameController extends Controller
             'new_energy_balance' => $gameUser->getEnergyBalance(),
             'started_at' => $session->started_at,
             'expire_at' => $session->expire_at,
-            'difficulty_params' => $game->difficulty_params ?? [],
+            'difficulty_params' => $game->getResolvedDifficultyParams(),
             'game_state' => $session->game_state,
         ], 200);
     }

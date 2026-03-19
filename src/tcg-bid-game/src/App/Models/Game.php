@@ -100,6 +100,50 @@ class Game extends Model
     // Action Begins
     // -----------------------------
 
+    /**
+     * Get difficulty_params for API response.
+     * For games with levels_by_difficulty + difficulty: returns one random level (2D array).
+     * Otherwise returns the stored difficulty_params as-is.
+     */
+    public function getResolvedDifficultyParams(): array
+    {
+        $levelsByDifficulty = $this->getAttribute('levels_by_difficulty');
+        $difficulty = $this->getAttribute('difficulty');
+
+        if (
+            is_array($levelsByDifficulty)
+            && is_string($difficulty)
+            && isset($levelsByDifficulty[$difficulty])
+            && is_array($levelsByDifficulty[$difficulty])
+        ) {
+            $levels = $levelsByDifficulty[$difficulty];
+            if (count($levels) > 0) {
+                $index = array_rand($levels);
+
+                return $levels[$index];
+            }
+        }
+
+        $params = $this->getAttribute('difficulty_params');
+
+        return is_array($params) ? $params : [];
+    }
+
+    /**
+     * Whether this game uses level-based difficulty (levels_by_difficulty + difficulty).
+     */
+    public function hasLevelBasedDifficulty(): bool
+    {
+        $levelsByDifficulty = $this->getAttribute('levels_by_difficulty');
+        $difficulty = $this->getAttribute('difficulty');
+
+        return is_array($levelsByDifficulty)
+            && is_string($difficulty)
+            && isset($levelsByDifficulty[$difficulty])
+            && is_array($levelsByDifficulty[$difficulty])
+            && count($levelsByDifficulty[$difficulty]) > 0;
+    }
+
     // -----------------------------
     // Action Ends
     // -----------------------------
