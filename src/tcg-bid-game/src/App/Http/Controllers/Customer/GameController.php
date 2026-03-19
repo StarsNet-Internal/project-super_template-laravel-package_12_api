@@ -146,6 +146,7 @@ class GameController extends Controller
             'expire_at' => $session->expire_at,
             'difficulty_params' => $game->getResolvedDifficultyParams(),
             'game_state' => $session->game_state,
+            'has_active_session' => true,
         ], 200);
     }
 
