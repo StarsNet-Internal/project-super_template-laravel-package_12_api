@@ -40,7 +40,7 @@ class GameController extends Controller
             $session = $activeSessionsByGameId[(string) $game->_id] ?? null;
             if ($session) {
                 $item['game_state'] = $session->game_state;
-                $item['difficulty_params'] = null;
+                $item['difficulty_params'] = [];
                 $item['has_active_session'] = true;
             } else {
                 $item['game_state'] = null;
