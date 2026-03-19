@@ -120,7 +120,7 @@ class Game extends Model
             if (count($levels) > 0) {
                 $index = array_rand($levels);
 
-                return $levels[$index];
+                return ['level' => $levels[$index]];
             }
         }
 
