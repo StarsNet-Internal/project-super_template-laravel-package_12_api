@@ -41,11 +41,11 @@ class GameController extends Controller
             if ($session) {
                 $item['game_state'] = $session->game_state;
                 $item['difficulty_params'] = null;
-                $item['is_active'] = true;
+                $item['has_active_session'] = true;
             } else {
                 $item['game_state'] = null;
                 $item['difficulty_params'] = $game->getResolvedDifficultyParams();
-                $item['is_active'] = false;
+                $item['has_active_session'] = false;
             }
 
             return $item;
