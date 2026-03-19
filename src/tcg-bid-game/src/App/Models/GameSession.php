@@ -159,6 +159,7 @@ class GameSession extends Model
         $this->ended_at = now();
         $this->outcome = $outcome;
         $this->coins_earned = $outcome === 'win' ? $coinsEarned : 0;
+        $this->game_state = null;
         return $this->save();
     }
 

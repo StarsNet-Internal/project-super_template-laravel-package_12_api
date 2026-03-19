@@ -19,10 +19,34 @@ class GameController extends Controller
             ->orderBy('created_at', 'desc')
             ->get();
 
-        return $games->map(function (Game $game) {
+        $activeSessionsByGameId = [];
+        $customer = $this->customer();
+        $gameUser = GameUser::where('customer_id', $customer->id)->first();
+        if ($gameUser) {
+            $gameIds = $games->pluck('_id')->all();
+            $sessions = GameSession::whereIn('game_id', $gameIds)
+                ->byCustomer($gameUser->_id)
+                ->active()
+                ->get();
+            $activeSessionsByGameId = $sessions->keyBy(function ($s) {
+                return (string) $s->game_id;
+            })->all();
+        }
+
+        return $games->map(function (Game $game) use ($activeSessionsByGameId) {
             $item = $game->toArray();
-            $item['difficulty_params'] = $game->getResolvedDifficultyParams();
             unset($item['levels_by_difficulty'], $item['difficulty']);
+
+            $session = $activeSessionsByGameId[(string) $game->_id] ?? null;
+            if ($session) {
+                $item['game_state'] = $session->game_state;
+                $item['difficulty_params'] = null;
+                $item['is_active'] = true;
+            } else {
+                $item['game_state'] = null;
+                $item['difficulty_params'] = $game->getResolvedDifficultyParams();
+                $item['is_active'] = false;
+            }
 
             return $item;
         });
