@@ -22,7 +22,7 @@ class GameController extends Controller
         return $games->map(function (Game $game) {
             $item = $game->toArray();
             $item['difficulty_params'] = $game->getResolvedDifficultyParams();
-            unset($item['levels_by_difficulty']);
+            unset($item['levels_by_difficulty'], $item['difficulty']);
 
             return $item;
         });
