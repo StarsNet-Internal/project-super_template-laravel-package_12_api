@@ -19,7 +19,37 @@ class GameController extends Controller
             ->orderBy('created_at', 'desc')
             ->get();
 
-        return $games;
+        $activeSessionsByGameId = [];
+        $customer = $this->customer();
+        $gameUser = GameUser::where('customer_id', $customer->id)->first();
+        if ($gameUser) {
+            $gameIds = $games->pluck('_id')->all();
+            $sessions = GameSession::whereIn('game_id', $gameIds)
+                ->byCustomer($gameUser->_id)
+                ->active()
+                ->get();
+            $activeSessionsByGameId = $sessions->keyBy(function ($s) {
+                return (string) $s->game_id;
+            })->all();
+        }
+
+        return $games->map(function (Game $game) use ($activeSessionsByGameId) {
+            $item = $game->toArray();
+            unset($item['levels_by_difficulty'], $item['difficulty']);
+
+            $session = $activeSessionsByGameId[(string) $game->_id] ?? null;
+            if ($session) {
+                $item['game_state'] = $session->game_state;
+                $item['difficulty_params'] = [];
+                $item['has_active_session'] = true;
+            } else {
+                $item['game_state'] = null;
+                $item['difficulty_params'] = $game->getResolvedDifficultyParams();
+                $item['has_active_session'] = false;
+            }
+
+            return $item;
+        });
     }
 
     public function startGame(Request $request)
@@ -114,6 +144,123 @@ class GameController extends Controller
             'new_energy_balance' => $gameUser->getEnergyBalance(),
             'started_at' => $session->started_at,
             'expire_at' => $session->expire_at,
+            'difficulty_params' => $game->getResolvedDifficultyParams(),
+            'game_state' => $session->game_state,
+            'has_active_session' => true,
+        ], 200);
+    }
+
+    /**
+     * Get current user's active session (session with null outcome) for restoring state after app exit.
+     */
+    public function getActiveSession(Request $request)
+    {
+        $customer = $this->customer();
+        $gameUser = GameUser::where('customer_id', $customer->id)->first();
+        if (!$gameUser) {
+            return response()->json(['session' => null], 200);
+        }
+
+        $session = GameSession::byCustomer($gameUser->_id)
+            ->whereNull('outcome')
+            ->orderBy('started_at', 'desc')
+            ->first();
+
+        if (!$session) {
+            return response()->json(['session' => null], 200);
+        }
+
+        $session->load('game');
+        $game = $session->game;
+
+        return response()->json([
+            'session' => [
+                'session_id' => $session->_id,
+                'game_id' => $session->game_id,
+                'game_title' => $game ? $game->title : null,
+                'difficulty_params' => $game ? ($game->difficulty_params ?? []) : [],
+                'game_state' => $session->game_state,
+                'started_at' => $session->started_at,
+                'expire_at' => $session->expire_at,
+            ],
+        ], 200);
+    }
+
+    /**
+     * Save game state (e.g. when user exits mid-round) for later restore.
+     */
+    public function saveGameState(Request $request)
+    {
+        $gameId = $request->route('game_id');
+        $sessionId = $request->route('session_id');
+        $gameState = $request->input('game_state');
+
+        if ($gameState === null || $gameState === '') {
+            abort(400, json_encode([
+                'en' => 'game_state is required',
+                'zh' => '需要遊戲狀態',
+                'cn' => '需要游戏状态',
+            ]));
+        }
+
+        if (!is_string($gameState)) {
+            abort(400, json_encode([
+                'en' => 'game_state must be a string',
+                'zh' => '遊戲狀態必須為字串',
+                'cn' => '游戏状态必须为字符串',
+            ]));
+        }
+
+        $game = Game::find($gameId);
+        if (!$game) {
+            abort(404, json_encode([
+                'en' => 'Game not found',
+                'zh' => '找不到遊戲',
+                'cn' => '找不到游戏',
+            ]));
+        }
+
+        $session = GameSession::find($sessionId);
+        if (!$session) {
+            abort(404, json_encode([
+                'en' => 'Session not found',
+                'zh' => '找不到會話',
+                'cn' => '找不到会话',
+            ]));
+        }
+
+        if ($session->game_id !== $game->_id) {
+            abort(400, json_encode([
+                'en' => 'Session does not belong to this game',
+                'zh' => '會話不屬於此遊戲',
+                'cn' => '会话不属于此游戏',
+            ]));
+        }
+
+        $customer = $this->customer();
+        $gameUser = GameUser::where('customer_id', $customer->id)->first();
+        if (!$gameUser || $session->customer_id !== $gameUser->_id) {
+            abort(403, json_encode([
+                'en' => 'Not authorized to update this session',
+                'zh' => '無權更新此會話',
+                'cn' => '无权更新此会话',
+            ]));
+        }
+
+        if (!$session->isActive()) {
+            abort(400, json_encode([
+                'en' => 'Session is no longer active',
+                'zh' => '會話已結束或已過期',
+                'cn' => '会话已结束或已过期',
+            ]));
+        }
+
+        $session->saveGameState($gameState);
+
+        return response()->json([
+            'session_id' => $session->_id,
+            'game_id' => $game->_id,
+            'saved_at' => now()->toIso8601String(),
         ], 200);
     }
 

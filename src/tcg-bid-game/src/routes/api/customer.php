@@ -40,8 +40,10 @@ Route::get('/health', [TestingController::class, 'healthCheck']);
 Route::group(
     ['prefix' => 'games'],
     function () {
-        Route::get('/', [GameController::class, 'getAllGames'])->middleware(['pagination']);
+        Route::get('/', [GameController::class, 'getAllGames'])->middleware(['auth:api', 'pagination']);
+        Route::get('/active-session', [GameController::class, 'getActiveSession'])->middleware(['auth:api']);
         Route::post('/{game_id}/start', [GameController::class, 'startGame'])->middleware(['auth:api']);
+        Route::patch('/{game_id}/sessions/{session_id}/state', [GameController::class, 'saveGameState'])->middleware(['auth:api']);
         Route::post('/{game_id}/end', [GameController::class, 'endGame'])->middleware(['auth:api']);
     }
 );
