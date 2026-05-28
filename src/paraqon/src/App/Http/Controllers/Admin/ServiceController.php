@@ -35,6 +35,7 @@ use Starsnet\Project\Paraqon\App\Models\LiveBiddingEvent;
 
 // Controllers
 use App\Http\Controllers\Customer\ProductManagementController;
+use App\Models\CustomerGroup;
 use MongoDB\BSON\UTCDateTime;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\AuctionLotController as AdminAuctionLotController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionLotController as CustomerAuctionLotController;
@@ -52,13 +53,39 @@ class ServiceController extends Controller
             'charge.refunded',
             'charge.captured',
             'charge.expired',
-            'charge.failed'
+            'charge.failed',
+            'customer.subscription.created'
         ];
+
         if (!in_array($eventType, $acceptableEventTypes)) {
             return [
                 'message' => 'Callback success, but event type does not belong to any of the acceptable values',
                 'acceptable_values' => $acceptableEventTypes
             ];
+        }
+
+        // For subscription new events
+        if ($eventType == 'customer.subscription.created') {
+            // Validate metadata's model_type first
+            $modelType = $request->data['object']['metadata']['model_type'];
+            if (is_null($modelType)) abort(400, 'Callback success, but metadata contains null value for model_type');
+            if ($modelType != 'customer') abort(400, 'Callback success, but model_type value is not customer');
+
+            // Validate metadata's model_id, and find Customer
+            $customerID = $request->data['object']['metadata']['model_id'];
+            if (is_null($customerID)) abort(400, 'Callback success, but metadata contains null value for model_id');
+            $customer = Customer::find($customerID);
+            if (is_null($customer)) abort(400, 'Callback success, but customer not found. Given model_id: ' . $customerID);
+
+            // Validate Stripe's prod_id, and find CustomerGroup based on the prod_id
+            $stripeProductID = $request->data['object']['plan']['product'];
+            if (is_null($stripeProductID)) abort(400, 'Callback success, but plan.product value is null');
+            $customerGroup = CustomerGroup::where('stripe_product_id', $stripeProductID)->latest()->first();
+            if (is_null($customerGroup)) abort(400, 'Callback success, but category/customer_group not found. Given plan.product: ' . $stripeProductID);
+
+            // Assign Customer to CustomerGroup
+            $customer->attachGroups(collect([$customerGroup]));
+            return ['message' => 'Customer assigned to CustomerGroup successfully'];
         }
 
         // Extract attributes from $request
@@ -268,7 +295,7 @@ class ServiceController extends Controller
                 abort(400, 'Invalid model_type for metadata');
                 break;
         }
-        return ['message' => 'Payment was not processed properly due to invalie event_type'];
+        return ['message' => 'Payment was not processed properly due to invalid event_type'];
     }
 
     public function updateAuctionStatuses(): array
