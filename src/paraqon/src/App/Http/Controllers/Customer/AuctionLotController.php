@@ -6,6 +6,7 @@ namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Carbon\Carbon;
 
 // Enums
@@ -13,6 +14,7 @@ use App\Enums\Status;
 
 // Models
 use App\Models\Customer;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Bid;
 use Starsnet\Project\Paraqon\App\Models\BidHistory;
@@ -20,6 +22,8 @@ use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
 class AuctionLotController extends Controller
 {
+    use CachesEndedAuctionData;
+
     public function requestForBidPermissions(Request $request): array
     {
         $now = now();
@@ -55,26 +59,55 @@ class AuctionLotController extends Controller
 
     public function getAuctionLotDetails(Request $request): AuctionLot
     {
-        /** @var ?AuctionLot $auctionLot */
-        $auctionLot = AuctionLot::with(['product', 'productVariant', 'store', 'bids'])->find($request->route('auction_lot_id'));
-        if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
-        if (!in_array($auctionLot->status, [Status::ACTIVE->value, Status::ARCHIVED->value])) abort(404, 'Auction is not available for public');
+        $auctionLotId = (string) $request->route('auction_lot_id');
+        $cacheKey = $this->mongoCacheKey('customer_auction_lot_details:lot_' . $auctionLotId);
 
-        // Append keys
+        if ($this->isAuctionLotEndedById($auctionLotId)) {
+            /** @var ?AuctionLot $cached */
+            $cached = Cache::store('redis')->get($cacheKey);
+            if ($cached instanceof AuctionLot) {
+                $auctionLot = $cached;
+            } else {
+                $auctionLot = $this->buildAuctionLotDetails($auctionLotId);
+                Cache::store('redis')->forever($cacheKey, $auctionLot);
+            }
+        } else {
+            $auctionLot = $this->buildAuctionLotDetails($auctionLotId);
+        }
+
+        $watchingAuctionIDs = WatchlistItem::where('customer_id', $this->customer()->id)
+            ->where('item_type', 'auction-lot')
+            ->pluck('item_id')
+            ->all();
+        $auctionLot->is_watching = in_array($auctionLot->id, $watchingAuctionIDs, true);
+
+        return $auctionLot;
+    }
+
+    private function buildAuctionLotDetails(string $auctionLotId): AuctionLot
+    {
+        /** @var ?AuctionLot $auctionLot */
+        $auctionLot = AuctionLot::with(['product', 'productVariant', 'store', 'bids'])->find($auctionLotId);
+        if (is_null($auctionLot)) {
+            abort(404, 'AuctionLot not found');
+        }
+        if (!in_array($auctionLot->status, [Status::ACTIVE->value, Status::ARCHIVED->value])) {
+            abort(404, 'Auction is not available for public');
+        }
+
         $auctionLot->is_liked = false;
         $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
         $auctionLot->is_reserve_price_met = $auctionLot->current_bid >= $auctionLot->reserve_price;
 
-        // Get Watching Lots
-        $customer = $this->customer();
-        $watchingAuctionIDs = WatchlistItem::where('customer_id', $customer->id)
-            ->where('item_type', 'auction-lot')
-            ->get()
-            ->pluck('item_id')
-            ->all();
-        $auctionLot->is_watching = in_array($auctionLot->id, $watchingAuctionIDs);
-
         return $auctionLot;
+    }
+
+    private function isAuctionLotEndedById(string $auctionLotId): bool
+    {
+        /** @var ?AuctionLot $auctionLot */
+        $auctionLot = AuctionLot::with(['store'])->find($auctionLotId);
+
+        return $auctionLot instanceof AuctionLot && $this->isAuctionLotEnded($auctionLot);
     }
 
     public function getAllAuctionLotBids(Request $request): Collection

@@ -14,12 +14,16 @@ use App\Enums\ReplyStatus;
 // Models
 use App\Models\Store;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
 use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
 class AuctionController extends Controller
 {
+    use CachesEndedAuctionData;
+
     public function getAllAuctions(Request $request): Collection
     {
         // Extract attributes from $request
@@ -27,10 +31,21 @@ class AuctionController extends Controller
 
         $customer = $this->customer();
 
-        /** @var Collection $auctions */
-        $auctions = Store::where('type', StoreType::OFFLINE->value)
+        /** @var Collection $allAuctions */
+        $allAuctions = Store::where('type', StoreType::OFFLINE->value)
             ->statuses($statuses)
             ->get();
+
+        $endedFromDb = $allAuctions->filter(fn(Store $store) => $this->isStoreEnded($store))->values();
+        $activeAuctions = $allAuctions->reject(fn(Store $store) => $this->isStoreEnded($store))->values();
+
+        $statusCacheKey = $this->mongoCacheKey(
+            'customer_auctions:ended_stores:statuses_' . md5(json_encode($statuses))
+        );
+        $endedAuctions = $this->rememberEndedStores($statusCacheKey, $endedFromDb);
+
+        /** @var Collection $auctions */
+        $auctions = $endedAuctions->concat($activeAuctions);
 
         // Append keys
         $watchingAuctionIDs = WatchlistItem::where('customer_id', $customer->id)
@@ -77,11 +92,20 @@ class AuctionController extends Controller
 
     public function getAuctionDetails(Request $request): Store
     {
-        /** @var ?Store $store */
-        $auction = Store::find($request->route('auction_id'));
-        if (is_null($auction)) abort(404, 'Auction not found');
+        $auctionId = (string) $request->route('auction_id');
+        $cacheKey = $this->mongoCacheKey('customer_auction_details:store_' . $auctionId);
+
+        /** @var ?Store $auction */
+        $auction = Store::find($auctionId);
+        if (is_null($auction)) {
+            abort(404, 'Auction not found');
+        }
         if (!in_array($auction->status, [Status::ACTIVE->value, Status::ARCHIVED->value])) {
             abort(404, 'Auction is not available for public');
+        }
+
+        if ($this->isStoreEnded($auction)) {
+            $auction = $this->loadCachedStore($cacheKey, fn(): Store => $auction);
         }
 
         // get Registration Status
@@ -140,5 +164,22 @@ class AuctionController extends Controller
                     ];
                 }
             );
+    }
+
+  /**
+   * @param callable(): Store $compute
+   */
+    private function loadCachedStore(string $cacheKey, callable $compute): Store
+    {
+        /** @var ?Store $cached */
+        $cached = Cache::store('redis')->get($cacheKey);
+        if ($cached instanceof Store) {
+            return $cached;
+        }
+
+        $auction = $compute();
+        Cache::store('redis')->forever($cacheKey, $auction);
+
+        return $auction;
     }
 }
