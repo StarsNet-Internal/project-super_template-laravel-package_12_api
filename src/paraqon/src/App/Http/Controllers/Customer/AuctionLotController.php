@@ -269,12 +269,13 @@ class AuctionLotController extends Controller
             }
 
             // Check if this MAX or DIRECT bid place before end_datetime
-            if ($now > Carbon::parse($store->end_datetime)->subSeconds(1)) {
+            if ($now > Carbon::parse($auctionLot->end_datetime)->subSeconds(1)) {
                 return response()->json([
-                    'message' => 'The auction id: ' . $store->_id . ' has already ended.',
+                    'message' => 'The auction lot id: ' . $auctionLot->_id . ' has already ended.',
                     'error_status' => 3,
                     'system_time' => $now,
-                    'auction_end_datetime' => Carbon::parse($store->end_datetime)
+                    'auction_end_datetime' => Carbon::parse($store->end_datetime),
+                    'auction_lot_end_datetime' => Carbon::parse($auctionLot->end_datetime)
                 ], 400);
             }
 
