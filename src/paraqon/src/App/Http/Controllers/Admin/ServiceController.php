@@ -54,7 +54,7 @@ class ServiceController extends Controller
             'charge.captured',
             'charge.expired',
             'charge.failed',
-            'customer.subscription.created'
+            'invoice.payment_succeeded'
         ];
 
         if (!in_array($eventType, $acceptableEventTypes)) {
@@ -65,23 +65,72 @@ class ServiceController extends Controller
         }
 
         // For subscription new events
-        if ($eventType == 'customer.subscription.created') {
+        if ($eventType == 'invoice.payment_succeeded') {
+            $invoice = $request->data['object'];
+
+            // Metadata lives on subscription_details (invoice or parent), fallback to line item metadata
+            $metadata = data_get($invoice, 'subscription_details.metadata')
+                ?? data_get($invoice, 'parent.subscription_details.metadata')
+                ?? collect(data_get($invoice, 'lines.data', []))
+                ->pluck('metadata')
+                ->first(fn($meta) => !is_null(data_get($meta, 'model_type')));
+
             // Validate metadata's model_type first
-            $modelType = $request->data['object']['metadata']['model_type'];
+            $modelType = data_get($metadata, 'model_type');
             if (is_null($modelType)) abort(400, 'Callback success, but metadata contains null value for model_type');
-            if ($modelType != 'customer') abort(400, 'Callback success, but model_type value is not customer');
+            if ($modelType != 'customer') abort(400, 'Callback success, but model_type value is not customer. Given value: ' . $modelType);
 
             // Validate metadata's model_id, and find Customer
-            $customerID = $request->data['object']['metadata']['model_id'];
+            $customerID = data_get($metadata, 'model_id');
             if (is_null($customerID)) abort(400, 'Callback success, but metadata contains null value for model_id');
             $customer = Customer::find($customerID);
             if (is_null($customer)) abort(400, 'Callback success, but customer not found. Given model_id: ' . $customerID);
 
-            // Validate Stripe's prod_id, and find CustomerGroup based on the prod_id
-            $stripeProductID = $request->data['object']['plan']['product'];
+            // Validate Stripe's prod_id from invoice line items, and find CustomerGroup
+            $lineItems = collect(data_get($invoice, 'lines.data', []));
+            $stripeProductID = $lineItems
+                ->map(fn($line) => data_get($line, 'plan.product')
+                    ?? data_get($line, 'price.product')
+                    ?? data_get($line, 'pricing.price_details.product'))
+                ->filter()
+                ->first();
             if (is_null($stripeProductID)) abort(400, 'Callback success, but plan.product value is null');
             $customerGroup = CustomerGroup::where('stripe_product_id', $stripeProductID)->latest()->first();
             if (is_null($customerGroup)) abort(400, 'Callback success, but category/customer_group not found. Given plan.product: ' . $stripeProductID);
+
+            // Collect all subscription and subscription_item IDs from the invoice payload
+            $subscriptionIds = collect([
+                data_get($invoice, 'subscription'),
+                data_get($invoice, 'parent.subscription_details.subscription'),
+            ])
+                ->merge($lineItems->pluck('subscription'))
+                ->merge($lineItems->map(fn($line) => data_get($line, 'parent.subscription_item_details.subscription')))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            $subscriptionItemIds = $lineItems
+                ->flatMap(fn($line) => [
+                    data_get($line, 'subscription_item'),
+                    data_get($line, 'parent.subscription_item_details.subscription_item'),
+                ])
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            // Merge into Customer without removing existing IDs
+            $customer->update([
+                'subscription_ids' => array_values(array_unique(array_merge(
+                    (array) ($customer->subscription_ids ?? []),
+                    $subscriptionIds
+                ))),
+                'subscription_item_ids' => array_values(array_unique(array_merge(
+                    (array) ($customer->subscription_item_ids ?? []),
+                    $subscriptionItemIds
+                ))),
+            ]);
 
             // Assign Customer to CustomerGroup
             $customer->attachGroups(collect([$customerGroup]));
