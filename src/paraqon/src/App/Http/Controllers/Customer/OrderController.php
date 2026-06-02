@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Http;
 // Enums
 use App\Enums\CheckoutApprovalStatus;
 use App\Enums\CheckoutType;
+use App\Enums\OrderPaymentMethod;
 use App\Enums\ShipmentDeliveryStatus;
 use App\Enums\StoreType;
 
@@ -18,6 +19,7 @@ use App\Enums\StoreType;
 use App\Http\Starsnet\PinkiePay;
 
 // Models
+use App\Models\Checkout;
 use App\Models\Order;
 use App\Models\Store;
 
@@ -185,8 +187,17 @@ class OrderController extends Controller
         $order = Order::find($request->route('order_id'));
         if (is_null($order)) abort(404, 'Order not found');
         if ($order->customer_id !== $this->customer()->id) abort(403, 'Order does not belong to you');
-        if (is_null($order->scheduled_payment_at)) abort(400, 'Order does not have scheduled_payment_at');
-        if (now()->gt($order->scheduled_payment_at)) abort(403, 'The scheduled payment time has already passed');
+
+        if ($order->payment_method === OrderPaymentMethod::ONLINE->value) {
+            $storeID = $order->store_id;
+            $store = Store::find($storeID);
+            if (is_null($store)) abort(404, 'Store not found');
+
+            if ($store->slug === 'default-main-store') {
+                if (is_null($order->scheduled_payment_at)) abort(400, 'Order does not have scheduled_payment_at');
+                if (now()->gt($order->scheduled_payment_at)) abort(403, 'The scheduled payment time has already passed');
+            }
+        }
 
         /** @var ?Checkout $checkout */
         $checkout = $order->checkout()->latest()->first();
@@ -196,11 +207,19 @@ class OrderController extends Controller
         $response = Http::post($url);
 
         if ($response->status() === 200) {
-            $order->updateStatus(ShipmentDeliveryStatus::CANCELLED->values);
-            $checkout->updateApprovalStatus(CheckoutApprovalStatus::REJECTED->values);
+            $order->updateStatus(ShipmentDeliveryStatus::CANCELLED->value);
+            $checkout->update([
+                'approval.status' => CheckoutApprovalStatus::REJECTED->value,
+                'approval.reason' => 'Payment cancelled by customer',
+                'approval.user_id' => $this->user()->id,
+                'online.api_response' => $request->all()
+            ]);
             return ['message' => 'Update Order status as cancelled'];
         }
 
-        return response()->json(['message' => 'Unable to cancel payment from Stripe, paymentIntent might have been closed']);
+        return response()->json([
+            'message' => 'Unable to cancel payment from Stripe, paymentIntent might have been closed',
+            'error' => $response->body()
+        ]);
     }
 }

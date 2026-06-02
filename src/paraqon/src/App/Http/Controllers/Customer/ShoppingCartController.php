@@ -524,9 +524,7 @@ class ShoppingCartController extends Controller
             $this->deductWarehouseInventoriesByStore(
                 $store,
                 $variant,
-                $qty,
-                WarehouseInventoryHistoryType::SALES->value,
-                $customer->getUser()
+                $qty
             );
 
             $order->createCartItem($attributes);
@@ -636,12 +634,14 @@ class ShoppingCartController extends Controller
                 ->toArray();
         }
 
-        $cartItems->each(function ($item) use ($checkoutVariantIDs, $sellerIdMap) {
+        $cartItems = $cartItems->each(function ($item) use ($checkoutVariantIDs, $sellerIdMap) {
             $item->is_checkout = in_array($item->product_variant_id, $checkoutVariantIDs);
             $item->is_refundable = false;
             $item->global_discount = null;
             $item->seller_id = $sellerIdMap[$item->product_id] ?? null;
-        });
+        })->filter(function ($item) {
+            return $item->is_checkout;
+        })->values();
 
         // Extract attributes from $request
         $deliveryInfo = $request->delivery_info;
@@ -728,9 +728,7 @@ class ShoppingCartController extends Controller
             $this->deductWarehouseInventoriesByStore(
                 $store,
                 $variant,
-                $qty,
-                WarehouseInventoryHistoryType::SALES->value,
-                $customer->getUser()
+                $qty
             );
 
             $order->createCartItem($attributes);

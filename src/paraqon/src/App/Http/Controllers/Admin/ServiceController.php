@@ -273,7 +273,7 @@ class ServiceController extends Controller
 
                 $customEventType = $request->data['object']['metadata']['custom_event_type'] ?? null;
 
-                if ($customEventType === 'one_day_delay') {
+                if ($customEventType === 'one_day_delay' && $eventType == 'charge.succeeded') {
                     $order->update([
                         'scheduled_payment_at' => new UTCDateTime(now()->addDay(1))
                     ]);
@@ -291,7 +291,32 @@ class ServiceController extends Controller
                         ->delete();
 
                     return [
-                        'message' => 'custom_event_type is one_day_delay, capture skipped',
+                        'message' => 'custom_event_type is one_day_delay, capture authorized',
+                        'order_id' => null
+                    ];
+                }
+
+                if ($customEventType === 'one_day_delay' && $eventType == 'charge.captured') {
+                    $order->update([
+                        'scheduled_payment_received_at' => new UTCDateTime(now())
+                    ]);
+
+                    // Update Checkout
+                    Checkout::where('id', $checkout->id)->update([
+                        'online.api_response' => $request->all()
+                    ]);
+                    $checkout->createApproval(
+                        CheckoutApprovalStatus::APPROVED->value,
+                        'Payment verified by Stripe'
+                    );
+
+                    // Update Order
+                    if ($order->current_status !== ShipmentDeliveryStatus::PROCESSING->value) {
+                        $order->updateStatus(ShipmentDeliveryStatus::PROCESSING->value);
+                    }
+
+                    return [
+                        'message' => 'custom_event_type is one_day_delay, capture success',
                         'order_id' => null
                     ];
                 }
@@ -1000,6 +1025,7 @@ class ServiceController extends Controller
     {
         $orders = Order::where('scheduled_payment_at', '<=', now())
             ->whereNull('scheduled_payment_received_at')
+            ->where('current_status', '!=', ShipmentDeliveryStatus::CANCELLED->value)
             ->get();
 
         $orderIDs = [];
@@ -1009,10 +1035,6 @@ class ServiceController extends Controller
                 $paymentIntentID = $checkout->online['payment_intent_id'];
                 $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/capture';
                 $response = Http::post($url, ['amount' => null]);
-                if ($response->status() == 200) {
-                    $orderIDs[] = $order->_id;
-                    $order->update(['scheduled_payment_received_at' => now()]);
-                }
             } catch (\Throwable $th) {
                 Log::error('Failed to capture order, order_id: ' . $order->_id);
             }
