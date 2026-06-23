@@ -112,25 +112,33 @@ class AuctionLotController extends Controller
 
     public function getAllAuctionLotBids(Request $request): Collection
     {
-        $auctionLot = AuctionLot::find($request->route('auction_lot_id'));
+        $auctionLotId = (string) $request->route('auction_lot_id');
+
+        $auctionLot = AuctionLot::find($auctionLotId);
         if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
         if (!in_array($auctionLot->status, [Status::ACTIVE->value, Status::ARCHIVED->value])) abort(404, 'AuctionLot is not available for public');
 
-        $bids = Bid::where('auction_lot_id', $auctionLot->id)
-            ->where('is_hidden', false)
-            ->latest()
-            ->get();
+        // Bids are final once the lot has ended; cache only then.
+        $isEnded = $this->isAuctionLotEnded($auctionLot);
+        $cacheKey = $this->mongoCacheKey('customer_auction_lot_bids:lot_' . $auctionLotId);
 
-        // Attach customer and account information to each bid
-        foreach ($bids as $bid) {
-            $customerID = $bid->customer_id;
-            $customer = Customer::find($customerID);
-            $account = $customer->account;
-            $bid->username = optional($account)->username;
-            $bid->avatar = optional($account)->avatar;
-        }
+        return $this->rememberIfEnded($isEnded, $cacheKey, function () use ($auctionLot): Collection {
+            $bids = Bid::where('auction_lot_id', $auctionLot->id)
+                ->where('is_hidden', false)
+                ->latest()
+                ->get();
 
-        return $bids;
+            // Attach customer and account information to each bid
+            foreach ($bids as $bid) {
+                $customerID = $bid->customer_id;
+                $customer = Customer::find($customerID);
+                $account = $customer->account;
+                $bid->username = optional($account)->username;
+                $bid->avatar = optional($account)->avatar;
+            }
+
+            return $bids;
+        });
     }
 
     public function getAllOwnedAuctionLots(): Collection

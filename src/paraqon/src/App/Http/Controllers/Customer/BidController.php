@@ -10,29 +10,80 @@ use Carbon\Carbon;
 
 // Enums
 use App\Enums\Status;
+use App\Enums\StoreType;
 use COM;
 // Models
+use App\Models\Store;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Bid;
 use Starsnet\Project\Paraqon\App\Models\BidHistory;
 
 class BidController extends Controller
 {
+    use CachesEndedAuctionData;
+
     public function getAllBids(Request $request): Collection
     {
-        $query = Bid::where('customer_id', $this->customer()->id)
+        $customerId = (string) $this->customer()->id;
+
+        // Split auction Stores into ended vs active. Bids in an ended auction are
+        // immutable, so they can be cached; bids in active auctions stay live.
+        $endedStoreIds = Store::where('type', StoreType::OFFLINE->value)
+            ->get(['_id', 'end_datetime'])
+            ->filter(fn(Store $store) => $this->isStoreEnded($store))
+            ->pluck('_id')
+            ->map(fn($id) => (string) $id)
+            ->values();
+
+        // Cache the customer's ended-auction bids forever. Keying by the ended
+        // store set means the cache is reused until another auction ends, at
+        // which point it is recomputed once to absorb the newly-ended bids.
+        $endedKey = $this->mongoCacheKey(
+            'customer_bids:ended:customer_' . $customerId
+                . ':stores_' . md5($endedStoreIds->sort()->values()->toJson())
+        );
+        $cached = $this->getChunkedFromCache($endedKey);
+        if (!is_null($cached)) {
+            $endedBids = $cached['value'];
+        } else {
+            $endedBids = $this->buildBidsQuery($customerId)
+                ->whereIn('store_id', $endedStoreIds->all())
+                ->get();
+            $this->putChunkedToCache($endedKey, $endedBids);
+        }
+
+        // Active-auction bids (and any without an ended store) are always fresh.
+        $activeBids = $this->buildBidsQuery($customerId)
+            ->whereNotIn('store_id', $endedStoreIds->all())
+            ->get();
+
+        // Combine, apply the optional datetime filters, and order newest-first.
+        $bids = $this->applyBidFilters($endedBids->concat($activeBids), $request);
+
+        return $bids->sortByDesc('created_at')->values();
+    }
+
+    private function buildBidsQuery(string $customerId)
+    {
+        return Bid::where('customer_id', $customerId)
             ->where('is_hidden', false)
             ->with(['store', 'product', 'auctionLot']);
+    }
 
+    private function applyBidFilters(Collection $bids, Request $request): Collection
+    {
         if ($request->has('start_datetime') && $request->start_datetime) {
-            $query->where('created_at', '>=', Carbon::parse($request->start_datetime));
+            $start = Carbon::parse($request->start_datetime);
+            $bids = $bids->filter(fn($bid) => Carbon::parse($bid->created_at)->gte($start));
         }
 
         if ($request->has('end_datetime') && $request->end_datetime) {
-            $query->where('created_at', '<=', Carbon::parse($request->end_datetime));
+            $end = Carbon::parse($request->end_datetime);
+            $bids = $bids->filter(fn($bid) => Carbon::parse($bid->created_at)->lte($end));
         }
 
-        return $query->get();
+        return $bids->values();
     }
 
     public function cancelBid(Request $request): array

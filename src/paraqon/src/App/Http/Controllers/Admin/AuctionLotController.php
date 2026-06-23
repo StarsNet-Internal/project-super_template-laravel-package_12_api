@@ -10,12 +10,14 @@ use Carbon\Carbon;
 
 // Enums
 use App\Enums\Status;
+use App\Enums\StoreType;
 
 // Models
 use App\Models\Category;
 use App\Models\Customer;
 use App\Models\Product;
 use App\Models\Store;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Bid;
 use Starsnet\Project\Paraqon\App\Models\BidHistory;
@@ -23,6 +25,8 @@ use Starsnet\Project\Paraqon\App\Models\LiveBiddingEvent;
 
 class AuctionLotController extends Controller
 {
+    use CachesEndedAuctionData;
+
     public function createAuctionLot(Request $request): array
     {
         /** @var ?Customer $customer */
@@ -119,42 +123,78 @@ class AuctionLotController extends Controller
 
     public function getAllAuctionLots(Request $request): Collection
     {
+        // Split auction Stores into ended vs active. Lots (and their bid stats)
+        // in an ended auction are final, so they can be cached; lots in active
+        // auctions stay live.
+        $endedStoreIds = Store::where('type', StoreType::OFFLINE->value)
+            ->get(['_id', 'end_datetime'])
+            ->filter(fn(Store $store) => $this->isStoreEnded($store))
+            ->pluck('_id')
+            ->map(fn($id) => (string) $id)
+            ->values();
+
+        // Cache the ended-auction lots forever. Keying by the request filter plus
+        // the ended store set means the cache is reused until another auction
+        // ends, at which point it is recomputed once to absorb the new lots.
+        $scope = !is_null($request->store_id)
+            ? 'store_' . $request->store_id
+            : (!is_null($request->category_id) ? 'category_' . $request->category_id : 'all');
+        $endedKey = $this->mongoCacheKey(
+            'admin_auction_lots:ended:' . $scope
+                . ':stores_' . md5($endedStoreIds->sort()->values()->toJson())
+        );
+
+        $cached = $this->getChunkedFromCache($endedKey);
+        if (!is_null($cached)) {
+            $endedLots = $cached['value'];
+        } else {
+            $endedLots = $this->buildAuctionLotsQuery($request)
+                ->whereIn('store_id', $endedStoreIds->all())
+                ->get();
+            $this->decorateAuctionLotStats($endedLots);
+            $this->putChunkedToCache($endedKey, $endedLots);
+        }
+
+        // Active-auction lots (and any without an ended store) are always fresh.
+        $activeLots = $this->buildAuctionLotsQuery($request)
+            ->whereNotIn('store_id', $endedStoreIds->all())
+            ->get();
+        $this->decorateAuctionLotStats($activeLots);
+
+        // Combine and order by lot number for a stable display order.
+        return $endedLots->concat($activeLots)
+            ->sortBy('lot_number')
+            ->values();
+    }
+
+    private function buildAuctionLotsQuery(Request $request)
+    {
         // Extract attributes from $request
         $categoryID = $request->category_id;
         $storeID = $request->store_id;
 
-        // Get AuctionLots
-        $auctionLots = new Collection();
+        $query = AuctionLot::with(['bids'])
+            ->where('status', '!=', Status::DELETED->value)
+            ->whereNotNull('lot_number');
 
         if (!is_null($storeID)) {
-            /** @var Collection $auctionLots */
-            $auctionLots = AuctionLot::with(['bids'])
-                ->where('store_id', $storeID)
-                ->where('status', '!=', Status::DELETED->value)
-                ->whereNotNull('lot_number')
-                ->get();
+            $query->where('store_id', $storeID);
         } else if (!is_null($categoryID)) {
-            $storeID = Category::find($categoryID)->model_type_id;
+            $derivedStoreID = optional(Category::find($categoryID))->model_type_id;
 
-            /** @var Collection $auctionLots */
-            $auctionLots = AuctionLot::with(['bids'])
-                ->whereHas('product', function ($query) use ($categoryID) {
-                    $query->whereHas('categories', function ($query2) use ($categoryID) {
-                        $query2->where('_id', $categoryID);
-                    });
-                })
-                ->where('store_id', $storeID)
-                ->where('status', '!=', Status::DELETED->value)
-                ->whereNotNull('lot_number')
-                ->get();
-        } else {
-            /** @var Collection $auctionLots */
-            $auctionLots = AuctionLot::with(['bids'])
-                ->where('status', '!=', Status::DELETED->value)
-                ->whereNotNull('lot_number')
-                ->get();
+            $query->whereHas('product', function ($query) use ($categoryID) {
+                $query->whereHas('categories', function ($query2) use ($categoryID) {
+                    $query2->where('_id', $categoryID);
+                });
+            })
+                ->where('store_id', $derivedStoreID);
         }
 
+        return $query;
+    }
+
+    private function decorateAuctionLotStats(Collection $auctionLots): void
+    {
         // Get Bids statistics
         foreach ($auctionLots as $lot) {
             $lot->bid_count = $lot->bids->count();
@@ -170,8 +210,6 @@ class AuctionLotController extends Controller
             )
                 ->created_at;
         }
-
-        return $auctionLots;
     }
 
     public function getAllAuctionLotsTrimmed(Request $request): Collection

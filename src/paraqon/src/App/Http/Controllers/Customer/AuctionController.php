@@ -152,18 +152,26 @@ class AuctionController extends Controller
 
     public function getAllPaddles(Request $request): Collection
     {
-        return AuctionRegistrationRequest::where('store_id', $request->route('auction_id'))
-            ->whereNotNull('paddle_id')
-            ->where('status', '!=', Status::DELETED->value)
-            ->get()
-            ->map(
-                function ($item) {
-                    return [
-                        'customer_id' => $item['requested_by_customer_id'],
-                        'paddle_id' => $item['paddle_id']
-                    ];
-                }
-            );
+        $auctionId = (string) $request->route('auction_id');
+
+        // Paddles are final once the auction (Store) has ended; cache only then.
+        $isEnded = $this->isStoreEnded(Store::find($auctionId));
+        $cacheKey = $this->mongoCacheKey('customer_auction_paddles:store_' . $auctionId);
+
+        return $this->rememberIfEnded($isEnded, $cacheKey, function () use ($auctionId): Collection {
+            return AuctionRegistrationRequest::where('store_id', $auctionId)
+                ->whereNotNull('paddle_id')
+                ->where('status', '!=', Status::DELETED->value)
+                ->get()
+                ->map(
+                    function ($item) {
+                        return [
+                            'customer_id' => $item['requested_by_customer_id'],
+                            'paddle_id' => $item['paddle_id']
+                        ];
+                    }
+                );
+        });
     }
 
   /**
