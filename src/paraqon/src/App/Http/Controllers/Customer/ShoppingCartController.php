@@ -159,6 +159,21 @@ class ShoppingCartController extends Controller
         // Update total price
         $totalPrice -= $systemOrderDeposit;
 
+        // Apply promotion / voucher code (global price discount only)
+        $purchasedProductQty = (int) collect($cartItems)
+            ->filter(function ($item) {
+                return $item->is_checkout;
+            })
+            ->sum('qty');
+        [$globalPriceDiscount, $mappedDiscounts] = $this->getAuctionVoucherDiscount(
+            $request->voucher_code,
+            $store,
+            $customer,
+            $subtotalPrice,
+            $purchasedProductQty
+        );
+        $totalPrice = max(0, $totalPrice - $globalPriceDiscount);
+
         // credit_card_charge_percentage
         $creditCardChargePercentage = (float) $request->input('credit_card_charge_percentage', 0);
         $creditCardChargeFee = floor(($totalPrice * $creditCardChargePercentage) / 100);
@@ -173,7 +188,7 @@ class ShoppingCartController extends Controller
             ],
             'price_discount' => [
                 'local' => '0.00',
-                'global' => '0.00',
+                'global' => number_format($globalPriceDiscount, 2, '.', ''),
             ],
             'point' => [
                 'subtotal' => '0.00',
@@ -189,9 +204,9 @@ class ShoppingCartController extends Controller
         return [
             'cart_items' => $cartItems,
             'gift_items' => [],
-            'discounts' => [],
+            'discounts' => $mappedDiscounts,
             'calculations' => $rawCalculation,
-            'is_voucher_applied' => false,
+            'is_voucher_applied' => $globalPriceDiscount > 0,
             'is_enough_membership_points' => true
         ];
     }
@@ -442,6 +457,21 @@ class ShoppingCartController extends Controller
         // Update total price
         $totalPrice -= $systemOrderDeposit;
 
+        // Apply promotion / voucher code (global price discount only)
+        $purchasedProductQty = (int) collect($cartItems)
+            ->filter(function ($item) {
+                return $item->is_checkout;
+            })
+            ->sum('qty');
+        [$globalPriceDiscount, $mappedDiscounts] = $this->getAuctionVoucherDiscount(
+            $request->voucher_code,
+            $store,
+            $customer,
+            $subtotalPrice,
+            $purchasedProductQty
+        );
+        $totalPrice = max(0, $totalPrice - $globalPriceDiscount);
+
         // credit_card_charge_percentage
         $creditCardChargePercentage = (float) $request->input('credit_card_charge_percentage', 0);
         $creditCardChargeFee = floor(($totalPrice * $creditCardChargePercentage) / 100);
@@ -456,7 +486,7 @@ class ShoppingCartController extends Controller
             ],
             'price_discount' => [
                 'local' => '0.00',
-                'global' => '0.00',
+                'global' => number_format($globalPriceDiscount, 2, '.', ''),
             ],
             'point' => [
                 'subtotal' => '0.00',
@@ -473,9 +503,9 @@ class ShoppingCartController extends Controller
         $checkoutDetails = [
             'cart_items' => $cartItems,
             'gift_items' => [],
-            'discounts' => [],
+            'discounts' => $mappedDiscounts,
             'calculations' => $rawCalculation,
-            'is_voucher_applied' => false,
+            'is_voucher_applied' => $globalPriceDiscount > 0,
             'is_enough_membership_points' => true
         ];
 
@@ -502,6 +532,18 @@ class ShoppingCartController extends Controller
             ]
         ];
         $order = $customer->createOrder($orderAttributes, $store);
+
+        // Mark the voucher code as used by this order, if one was applied
+        if (!is_null($request->voucher_code)) {
+            /** @var DiscountCode $voucher */
+            $voucher = DiscountCode::where('full_code', $request->voucher_code)
+                ->where('is_used', false)
+                ->where('is_disabled', false)
+                ->first();
+            if (!is_null($voucher)) {
+                $voucher->usedByOrder($order);
+            }
+        }
 
         // Create OrderCartItem(s)
         $checkoutItems = collect($checkoutDetails['cart_items'])
@@ -1405,6 +1447,41 @@ class ShoppingCartController extends Controller
         $discount = $discounts->first();
 
         return collect([$discount]);
+    }
+
+    /**
+     * Resolve a promotion / voucher code into a global price discount for the
+     * auction checkout. Reuses the same discount helpers as the main store, but
+     * only applies PRICE / PERCENTAGE discounts (no gift items or free shipping).
+     *
+     * @return array{0: float, 1: \Illuminate\Support\Collection} [discountAmount, mappedDiscounts]
+     */
+    private function getAuctionVoucherDiscount(
+        ?string $voucherCode,
+        Store $store,
+        Customer $customer,
+        float $subtotalPrice,
+        int $productQty
+    ): array {
+        if (is_null($voucherCode)) return [0.0, collect()];
+
+        $voucherDiscounts = $this->getVoucherDiscount($voucherCode, $store, $customer, $subtotalPrice, $productQty);
+        if (is_null($voucherDiscounts)) return [0.0, collect()];
+
+        $voucherDiscounts = $this->filterValidGlobalDiscountsByCustomer($voucherDiscounts, $customer);
+        if ($voucherDiscounts->count() === 0) return [0.0, collect()];
+
+        $globalPriceDiscount = (float) $this->getGlobalPriceDiscount($subtotalPrice, $voucherDiscounts);
+
+        $mappedDiscounts = $voucherDiscounts->map(function ($item) {
+            return [
+                'code' => $item['prefix'],
+                'title' => $item['title'],
+                'description' => $item['description'],
+            ];
+        })->values();
+
+        return [$globalPriceDiscount, $mappedDiscounts];
     }
 
     private function getVoucherDiscount(

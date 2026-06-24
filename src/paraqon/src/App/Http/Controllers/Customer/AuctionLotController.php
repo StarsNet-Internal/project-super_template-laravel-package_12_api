@@ -310,6 +310,46 @@ class AuctionLotController extends Controller
                 ], 400);
             }
 
+            // Validate that the bid amount aligns with the lot's bidding increment.
+            // Mirrors the customer site's isValidIncrement(): the base price is the
+            // starting price for the first bid, otherwise current_bid + increment,
+            // and the bid must land exactly on an increment step from that base.
+            if (!empty($incrementRules)) {
+                $matchedInterval = null;
+                foreach ($incrementRules as $interval) {
+                    $to = $interval['to'] ?? null;
+                    if ($request->bid >= $interval['from'] && (is_null($to) || $request->bid < $to)) {
+                        $matchedInterval = $interval;
+                        break;
+                    }
+                }
+                if (is_null($matchedInterval)) {
+                    $matchedInterval = $incrementRules[count($incrementRules) - 1];
+                }
+
+                $incrementValue = (float) $matchedInterval['increment'];
+                if ($incrementValue > 0) {
+                    $basePrice = $isBidPlaced
+                        ? max($currentBid + $incrementValue, (float) $matchedInterval['from'])
+                        : max((float) $auctionLot->starting_price, (float) $matchedInterval['from']);
+
+                    $diff = $request->bid - $basePrice;
+                    $remainder = fmod($diff, $incrementValue);
+                    $isAligned = $diff >= 0
+                        && (abs($remainder) < 0.01 || abs($remainder - $incrementValue) < 0.01);
+
+                    if (!$isAligned) {
+                        $steps = $diff < 0 ? 0 : floor(($diff / $incrementValue) + 0.0001);
+                        $suggestedBid = $basePrice + (($steps + 1) * $incrementValue);
+                        return response()->json([
+                            'message' => 'Your bid must align with the bidding increment of ' . $incrementValue . '. Try ' . $suggestedBid . '.',
+                            'error_status' => 5,
+                            'bid' => $suggestedBid
+                        ], 400);
+                    }
+                }
+            }
+
             // Get user's current largest bid
             $userExistingMaximumBid = Bid::where('auction_lot_id', $auctionLotId)
                 ->where('customer_id', $customer->_id)
@@ -569,6 +609,46 @@ class AuctionLotController extends Controller
                     'error_status' => 0,
                     'bid' => $minimumBid
                 ], 400);
+            }
+
+            // Validate that the bid amount aligns with the lot's bidding increment.
+            // Mirrors the customer site's isValidIncrement(): the base price is the
+            // starting price for the first bid, otherwise current_bid + increment,
+            // and the bid must land exactly on an increment step from that base.
+            if (!empty($incrementRules)) {
+                $matchedInterval = null;
+                foreach ($incrementRules as $interval) {
+                    $to = $interval['to'] ?? null;
+                    if ($request->bid >= $interval['from'] && (is_null($to) || $request->bid < $to)) {
+                        $matchedInterval = $interval;
+                        break;
+                    }
+                }
+                if (is_null($matchedInterval)) {
+                    $matchedInterval = $incrementRules[count($incrementRules) - 1];
+                }
+
+                $incrementValue = (float) $matchedInterval['increment'];
+                if ($incrementValue > 0) {
+                    $basePrice = $isBidPlaced
+                        ? max($currentBid + $incrementValue, (float) $matchedInterval['from'])
+                        : max((float) $auctionLot->starting_price, (float) $matchedInterval['from']);
+
+                    $diff = $request->bid - $basePrice;
+                    $remainder = fmod($diff, $incrementValue);
+                    $isAligned = $diff >= 0
+                        && (abs($remainder) < 0.01 || abs($remainder - $incrementValue) < 0.01);
+
+                    if (!$isAligned) {
+                        $steps = $diff < 0 ? 0 : floor(($diff / $incrementValue) + 0.0001);
+                        $suggestedBid = $basePrice + (($steps + 1) * $incrementValue);
+                        return response()->json([
+                            'message' => 'Your bid must align with the bidding increment of ' . $incrementValue . '. Try ' . $suggestedBid . '.',
+                            'error_status' => 5,
+                            'bid' => $suggestedBid
+                        ], 400);
+                    }
+                }
             }
 
             // Get user's current largest bid
