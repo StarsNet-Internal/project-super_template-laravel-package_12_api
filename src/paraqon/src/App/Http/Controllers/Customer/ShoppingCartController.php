@@ -159,18 +159,11 @@ class ShoppingCartController extends Controller
         // Update total price
         $totalPrice -= $systemOrderDeposit;
 
-        // Apply promotion / voucher code (global price discount only)
-        $purchasedProductQty = (int) collect($cartItems)
-            ->filter(function ($item) {
-                return $item->is_checkout;
-            })
-            ->sum('qty');
-        [$globalPriceDiscount, $mappedDiscounts] = $this->getAuctionVoucherDiscount(
+        // Apply discount code — validated by the Express backend, which owns
+        // discount codes for BOTH the marketplace and auction sides.
+        [$globalPriceDiscount, $mappedDiscounts] = $this->checkExpressDiscountCode(
             $request->voucher_code,
-            $store,
-            $customer,
-            $subtotalPrice,
-            $purchasedProductQty
+            $request
         );
         $totalPrice = max(0, $totalPrice - $globalPriceDiscount);
 
@@ -457,18 +450,11 @@ class ShoppingCartController extends Controller
         // Update total price
         $totalPrice -= $systemOrderDeposit;
 
-        // Apply promotion / voucher code (global price discount only)
-        $purchasedProductQty = (int) collect($cartItems)
-            ->filter(function ($item) {
-                return $item->is_checkout;
-            })
-            ->sum('qty');
-        [$globalPriceDiscount, $mappedDiscounts] = $this->getAuctionVoucherDiscount(
+        // Apply discount code — validated by the Express backend, which owns
+        // discount codes for BOTH the marketplace and auction sides.
+        [$globalPriceDiscount, $mappedDiscounts] = $this->checkExpressDiscountCode(
             $request->voucher_code,
-            $store,
-            $customer,
-            $subtotalPrice,
-            $purchasedProductQty
+            $request
         );
         $totalPrice = max(0, $totalPrice - $globalPriceDiscount);
 
@@ -533,17 +519,8 @@ class ShoppingCartController extends Controller
         ];
         $order = $customer->createOrder($orderAttributes, $store);
 
-        // Mark the voucher code as used by this order, if one was applied
-        if (!is_null($request->voucher_code)) {
-            /** @var DiscountCode $voucher */
-            $voucher = DiscountCode::where('full_code', $request->voucher_code)
-                ->where('is_used', false)
-                ->where('is_disabled', false)
-                ->first();
-            if (!is_null($voucher)) {
-                $voucher->usedByOrder($order);
-            }
-        }
+        // Redeem the discount code via the Express backend (owns codes for both sides).
+        $this->redeemExpressDiscountCode($request->voucher_code, $request, $order);
 
         // Create OrderCartItem(s)
         $checkoutItems = collect($checkoutDetails['cart_items'])
@@ -1450,38 +1427,52 @@ class ShoppingCartController extends Controller
     }
 
     /**
-     * Resolve a promotion / voucher code into a global price discount for the
-     * auction checkout. Reuses the same discount helpers as the main store, but
-     * only applies PRICE / PERCENTAGE discounts (no gift items or free shipping).
+     * Validate a discount code against the Express marketplace backend (the single
+     * source of truth for discount codes, shared across marketplace + auction).
+     * Returns [discountAmount, discounts[]] WITHOUT consuming the code.
      *
-     * @return array{0: float, 1: \Illuminate\Support\Collection} [discountAmount, mappedDiscounts]
+     * @return array{0: float, 1: array}
      */
-    private function getAuctionVoucherDiscount(
-        ?string $voucherCode,
-        Store $store,
-        Customer $customer,
-        float $subtotalPrice,
-        int $productQty
-    ): array {
-        if (is_null($voucherCode)) return [0.0, collect()];
+    private function checkExpressDiscountCode(?string $fullCode, Request $request): array
+    {
+        if (empty($fullCode)) return [0.0, []];
 
-        $voucherDiscounts = $this->getVoucherDiscount($voucherCode, $store, $customer, $subtotalPrice, $productQty);
-        if (is_null($voucherDiscounts)) return [0.0, collect()];
+        $baseUrl = env('MARKETPLACE_API_BASE_URL', 'http://192.168.0.101:8084');
+        try {
+            $res = Http::withToken($request->bearerToken())
+                ->acceptJson()
+                ->post($baseUrl . '/api/customer/discount-codes/check', ['full_code' => $fullCode]);
 
-        $voucherDiscounts = $this->filterValidGlobalDiscountsByCustomer($voucherDiscounts, $customer);
-        if ($voucherDiscounts->count() === 0) return [0.0, collect()];
+            $data = $res->successful() ? $res->json('data') : null;
+            if (!is_array($data) || !($data['can_use'] ?? false)) return [0.0, []];
 
-        $globalPriceDiscount = (float) $this->getGlobalPriceDiscount($subtotalPrice, $voucherDiscounts);
+            $amount = (float) ($data['amount'] ?? 0);
+            return [$amount, [['full_code' => $fullCode, 'amount' => $amount]]];
+        } catch (\Throwable $e) {
+            return [0.0, []];
+        }
+    }
 
-        $mappedDiscounts = $voucherDiscounts->map(function ($item) {
-            return [
-                'code' => $item['prefix'],
-                'title' => $item['title'],
-                'description' => $item['description'],
-            ];
-        })->values();
+    /**
+     * Consume a discount code on the Express backend after the auction order is
+     * created. Best-effort — does not block checkout if the call fails.
+     */
+    private function redeemExpressDiscountCode(?string $fullCode, Request $request, $order): void
+    {
+        if (empty($fullCode)) return;
 
-        return [$globalPriceDiscount, $mappedDiscounts];
+        $baseUrl = env('MARKETPLACE_API_BASE_URL', 'http://192.168.0.101:8084');
+        try {
+            Http::withToken($request->bearerToken())
+                ->acceptJson()
+                ->post($baseUrl . '/api/customer/discount-codes/redeem', [
+                    'full_code' => $fullCode,
+                    'used_for' => 'auction',
+                    'order_id' => $order->_id,
+                ]);
+        } catch (\Throwable $e) {
+            // best-effort
+        }
     }
 
     private function getVoucherDiscount(
