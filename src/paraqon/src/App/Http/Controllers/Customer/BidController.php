@@ -11,7 +11,7 @@ use Carbon\Carbon;
 // Enums
 use App\Enums\Status;
 use App\Enums\StoreType;
-use COM;
+
 // Models
 use App\Models\Store;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
@@ -28,40 +28,54 @@ class BidController extends Controller
         $customerId = (string) $this->customer()->id;
 
         // Split auction Stores into ended vs active. Bids in an ended auction are
-        // immutable, so they can be cached; bids in active auctions stay live.
-        $endedStoreIds = Store::where('type', StoreType::OFFLINE->value)
+        // final, so each (customer, store) is cached under a stable per-store key
+        // — no changing hash, an immutable value that can't be corrupted by
+        // concurrent writers. Active-auction bids stay live.
+        [$endedStores, $activeStores] = Store::where('type', StoreType::OFFLINE->value)
             ->get(['_id', 'end_datetime'])
-            ->filter(fn(Store $store) => $this->isStoreEnded($store))
-            ->pluck('_id')
-            ->map(fn($id) => (string) $id)
-            ->values();
+            ->partition(fn(Store $store) => $this->isStoreEnded($store));
 
-        // Cache the customer's ended-auction bids forever. Keying by the ended
-        // store set means the cache is reused until another auction ends, at
-        // which point it is recomputed once to absorb the newly-ended bids.
-        $endedKey = $this->mongoCacheKey(
-            'customer_bids:ended:customer_' . $customerId
-                . ':stores_' . md5($endedStoreIds->sort()->values()->toJson())
+        $endedBids = $endedStores
+            ->flatMap(fn(Store $store) => $this->endedBidsForStore($customerId, (string) $store->_id));
+
+        $activeBids = $this->activeBidsForStores(
+            $customerId,
+            $activeStores->map(fn(Store $store) => (string) $store->_id)->all()
         );
-        $cached = $this->getChunkedFromCache($endedKey);
-        if (!is_null($cached)) {
-            $endedBids = $cached['value'];
-        } else {
-            $endedBids = $this->buildBidsQuery($customerId)
-                ->whereIn('store_id', $endedStoreIds->all())
-                ->get();
-            $this->putChunkedToCache($endedKey, $endedBids);
-        }
-
-        // Active-auction bids (and any without an ended store) are always fresh.
-        $activeBids = $this->buildBidsQuery($customerId)
-            ->whereNotIn('store_id', $endedStoreIds->all())
-            ->get();
 
         // Combine, apply the optional datetime filters, and order newest-first.
         $bids = $this->applyBidFilters($endedBids->concat($activeBids), $request);
 
         return $bids->sortByDesc('created_at')->values();
+    }
+
+    /**
+     * A customer's bids in one ended auction store: final data, cached forever
+     * under a stable per-store key. Reused across requests.
+     */
+    private function endedBidsForStore(string $customerId, string $storeId): Collection
+    {
+        $key = $this->mongoCacheKey(
+            'customer_bids:ended:customer_' . $customerId . ':store:' . $storeId
+        );
+
+        return $this->rememberChunkedForever($key, function () use ($customerId, $storeId) {
+            return $this->buildBidsQuery($customerId)
+                ->where('store_id', $storeId)
+                ->get();
+        });
+    }
+
+    /** Live (uncached) bids for the customer across the given stores. */
+    private function activeBidsForStores(string $customerId, array $storeIds): Collection
+    {
+        if (empty($storeIds)) {
+            return new Collection();
+        }
+
+        return $this->buildBidsQuery($customerId)
+            ->whereIn('store_id', $storeIds)
+            ->get();
     }
 
     private function buildBidsQuery(string $customerId)

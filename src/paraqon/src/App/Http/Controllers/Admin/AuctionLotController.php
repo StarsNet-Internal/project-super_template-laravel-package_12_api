@@ -123,48 +123,80 @@ class AuctionLotController extends Controller
 
     public function getAllAuctionLots(Request $request): Collection
     {
-        // Split auction Stores into ended vs active. Lots (and their bid stats)
-        // in an ended auction are final, so they can be cached; lots in active
-        // auctions stay live.
-        $endedStoreIds = Store::where('type', StoreType::OFFLINE->value)
-            ->get(['_id', 'end_datetime'])
-            ->filter(fn(Store $store) => $this->isStoreEnded($store))
-            ->pluck('_id')
-            ->map(fn($id) => (string) $id)
-            ->values();
-
-        // Cache the ended-auction lots forever. Keying by the request filter plus
-        // the ended store set means the cache is reused until another auction
-        // ends, at which point it is recomputed once to absorb the new lots.
-        $scope = !is_null($request->store_id)
-            ? 'store_' . $request->store_id
-            : (!is_null($request->category_id) ? 'category_' . $request->category_id : 'all');
-        $endedKey = $this->mongoCacheKey(
-            'admin_auction_lots:ended:' . $scope
-                . ':stores_' . md5($endedStoreIds->sort()->values()->toJson())
-        );
-
-        $cached = $this->getChunkedFromCache($endedKey);
-        if (!is_null($cached)) {
-            $endedLots = $cached['value'];
-        } else {
-            $endedLots = $this->buildAuctionLotsQuery($request)
-                ->whereIn('store_id', $endedStoreIds->all())
-                ->get();
-            $this->decorateAuctionLotStats($endedLots);
-            $this->putChunkedToCache($endedKey, $endedLots);
+        // (b) Category-filtered requests resolve to a single derived store and are
+        // further narrowed by product category — narrow and infrequent, so query
+        // Mongo directly instead of going through the per-store ended cache.
+        if (is_null($request->store_id) && !is_null($request->category_id)) {
+            $lots = $this->buildAuctionLotsQuery($request)->get();
+            $this->decorateAuctionLotStats($lots);
+            return $lots->sortBy('lot_number')->values();
         }
 
-        // Active-auction lots (and any without an ended store) are always fresh.
-        $activeLots = $this->buildAuctionLotsQuery($request)
-            ->whereNotIn('store_id', $endedStoreIds->all())
-            ->get();
-        $this->decorateAuctionLotStats($activeLots);
+        // A single store: serve from the per-store ended cache when its auction
+        // has ended (final data), otherwise read it live.
+        if (!is_null($request->store_id)) {
+            $storeId = (string) $request->store_id;
+            $store = Store::find($storeId);
+            $lots = $this->isStoreEnded($store)
+                ? $this->endedLotsForStore($storeId)
+                : $this->activeLotsForStores([$storeId]);
+            return $lots->sortBy('lot_number')->values();
+        }
+
+        // Unfiltered: split every auction store into ended vs active. Ended-auction
+        // lots (and their bid stats) are final, so each store is cached under a
+        // stable, per-store key — no changing hash, and an immutable value that
+        // can't be corrupted by concurrent writers. Active stores stay live.
+        [$endedStores, $activeStores] = Store::where('type', StoreType::OFFLINE->value)
+            ->get(['_id', 'end_datetime'])
+            ->partition(fn(Store $store) => $this->isStoreEnded($store));
+
+        $endedLots = $endedStores
+            ->flatMap(fn(Store $store) => $this->endedLotsForStore((string) $store->_id));
+
+        $activeLots = $this->activeLotsForStores(
+            $activeStores->map(fn(Store $store) => (string) $store->_id)->all()
+        );
 
         // Combine and order by lot number for a stable display order.
         return $endedLots->concat($activeLots)
             ->sortBy('lot_number')
             ->values();
+    }
+
+    /**
+     * Ended-auction lots for one store: final data, cached forever under a stable
+     * per-store key. Reused across the unfiltered and single-store requests.
+     */
+    private function endedLotsForStore(string $storeId): Collection
+    {
+        $key = $this->mongoCacheKey('admin_auction_lots:ended:store:' . $storeId);
+
+        return $this->rememberChunkedForever($key, function () use ($storeId) {
+            $lots = AuctionLot::with(['bids'])
+                ->where('status', '!=', Status::DELETED->value)
+                ->whereNotNull('lot_number')
+                ->where('store_id', $storeId)
+                ->get();
+            $this->decorateAuctionLotStats($lots);
+            return $lots;
+        });
+    }
+
+    /** Live (uncached) auction lots for the given stores, with bid stats. */
+    private function activeLotsForStores(array $storeIds): Collection
+    {
+        if (empty($storeIds)) {
+            return new Collection();
+        }
+
+        $lots = AuctionLot::with(['bids'])
+            ->where('status', '!=', Status::DELETED->value)
+            ->whereNotNull('lot_number')
+            ->whereIn('store_id', $storeIds)
+            ->get();
+        $this->decorateAuctionLotStats($lots);
+        return $lots;
     }
 
     private function buildAuctionLotsQuery(Request $request)

@@ -74,6 +74,10 @@ trait CachesEndedAuctionData
      * Read back a chunked value. Returns null on a cache miss, or
      * ['value' => mixed] on a hit (so a cached null is distinguishable).
      *
+     * Self-heals: a missing chunk or a corrupt/unserializable payload (e.g. an
+     * interrupted write) deletes the entry and is reported as a miss, so a bad
+     * cache state never surfaces as a fatal error to the caller.
+     *
      * @return array{value: mixed}|null
      */
     protected function getChunkedFromCache(string $key): ?array
@@ -86,20 +90,101 @@ trait CachesEndedAuctionData
         }
 
         if ($manifest['chunked'] === false) {
-            return ['value' => unserialize($manifest['data'])];
+            return $this->safeUnserialize($manifest['data'], $key);
         }
 
         $serialized = '';
         for ($index = 0; $index < $manifest['count']; $index++) {
             $chunk = $store->get($key . ':chunk:' . $index);
-            // A missing/expired chunk means the payload is incomplete; treat as a miss.
+            // A missing/expired chunk means the payload can't be rebuilt: drop the
+            // whole entry so the next caller recomputes, and treat this as a miss.
             if (is_null($chunk)) {
+                $this->forgetChunked($key);
                 return null;
             }
             $serialized .= $chunk;
         }
 
-        return ['value' => unserialize($serialized)];
+        return $this->safeUnserialize($serialized, $key);
+    }
+
+    /**
+     * Unserialize a cached payload, self-healing on corruption. A malformed blob
+     * (e.g. interleaved/truncated chunks from an interrupted write) is deleted
+     * and reported as a miss rather than raising "unserialize(): Error at offset".
+     *
+     * @return array{value: mixed}|null
+     */
+    protected function safeUnserialize(string $serialized, string $key): ?array
+    {
+        try {
+            $value = @unserialize($serialized);
+        } catch (\Throwable $e) {
+            $value = false;
+        }
+
+        // serialize(false) === 'b:0;' is the only legitimate way to get false back.
+        if ($value === false && $serialized !== 'b:0;') {
+            $this->forgetChunked($key);
+            return null;
+        }
+
+        return ['value' => $value];
+    }
+
+    /** Delete a chunked entry (manifest + every chunk) so it can be rebuilt cleanly. */
+    protected function forgetChunked(string $key): void
+    {
+        $store = Cache::store('redis');
+
+        $manifest = $store->get($key . ':manifest');
+        if (is_array($manifest) && ($manifest['chunked'] ?? false) === true) {
+            for ($index = 0; $index < (int) ($manifest['count'] ?? 0); $index++) {
+                $store->forget($key . ':chunk:' . $index);
+            }
+        }
+        $store->forget($key . ':manifest');
+    }
+
+    /**
+     * Read a value from the chunked cache, or compute and store it forever. Cold
+     * computes are guarded by a short lock so a concurrent cache miss runs the
+     * (potentially heavy) compute once, not once per request.
+     *
+     * For immutable data only — the cached value is never invalidated, so two
+     * writers racing on a cold key produce byte-identical chunks anyway.
+     *
+     * @template T
+     * @param  callable(): T  $compute
+     * @return T
+     */
+    protected function rememberChunkedForever(string $key, callable $compute)
+    {
+        $cached = $this->getChunkedFromCache($key);
+        if (!is_null($cached)) {
+            return $cached['value'];
+        }
+
+        $lock = Cache::store('redis')->lock($key . ':lock', 30);
+        if ($lock->get()) {
+            try {
+                // Another worker may have populated it while we waited for the lock.
+                $cached = $this->getChunkedFromCache($key);
+                if (!is_null($cached)) {
+                    return $cached['value'];
+                }
+
+                $value = $compute();
+                $this->putChunkedToCache($key, $value);
+                return $value;
+            } finally {
+                $lock->release();
+            }
+        }
+
+        // Couldn't grab the lock: another request is already computing this key.
+        // Compute directly (without caching) so we don't pile on a second writer.
+        return $compute();
     }
 
     protected function isStoreEnded(?Store $store): bool
