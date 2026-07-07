@@ -519,8 +519,8 @@ class ShoppingCartController extends Controller
         ];
         $order = $customer->createOrder($orderAttributes, $store);
 
-        // Redeem the discount code via the Express backend (owns codes for both sides).
-        $this->redeemExpressDiscountCode($request->voucher_code, $request, $order);
+        // Discount redemption is deferred to payment success (Stripe callback for
+        // online, offline-proof approval) via RedeemsExpressDiscount — not here.
 
         // Create OrderCartItem(s)
         $checkoutItems = collect($checkoutDetails['cart_items'])
@@ -1450,28 +1450,6 @@ class ShoppingCartController extends Controller
             return [$amount, [['full_code' => $fullCode, 'amount' => $amount]]];
         } catch (\Throwable $e) {
             return [0.0, []];
-        }
-    }
-
-    /**
-     * Consume a discount code on the Express backend after the auction order is
-     * created. Best-effort — does not block checkout if the call fails.
-     */
-    private function redeemExpressDiscountCode(?string $fullCode, Request $request, $order): void
-    {
-        if (empty($fullCode)) return;
-
-        $baseUrl = env('MARKETPLACE_API_BASE_URL', 'http://192.168.0.101:8084');
-        try {
-            Http::withToken($request->bearerToken())
-                ->acceptJson()
-                ->post($baseUrl . '/api/customer/discount-codes/redeem', [
-                    'full_code' => $fullCode,
-                    'used_for' => 'auction',
-                    'order_id' => $order->_id,
-                ]);
-        } catch (\Throwable $e) {
-            // best-effort
         }
     }
 

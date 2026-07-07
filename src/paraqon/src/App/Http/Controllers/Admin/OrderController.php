@@ -24,8 +24,12 @@ use Illuminate\Support\Collection;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\RedeemsExpressDiscount;
+
 class OrderController extends Controller
 {
+    use RedeemsExpressDiscount;
+
     public function getAllAuctionOrders(Request $request): Collection
     {
         // Extract attributes from $request
@@ -104,6 +108,9 @@ class OrderController extends Controller
                 'status' => Status::ACTIVE->value,
                 'listing_status' => 'ALREADY_CHECKOUT'
             ]);
+
+            // Redeem the discount code now that the auction order's offline payment is approved.
+            $this->redeemExpressDiscountForOrder($order);
         }
 
         return ['message' => 'Reviewed Order successfully'];

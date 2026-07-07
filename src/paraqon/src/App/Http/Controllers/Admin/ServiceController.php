@@ -40,8 +40,12 @@ use MongoDB\BSON\UTCDateTime;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\AuctionLotController as AdminAuctionLotController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionLotController as CustomerAuctionLotController;
 
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\RedeemsExpressDiscount;
+
 class ServiceController extends Controller
 {
+    use RedeemsExpressDiscount;
+
     public function paymentCallback(Request $request): array
     {
         // Extract attributes from $request
@@ -355,6 +359,9 @@ class ServiceController extends Controller
                             'status' => Status::ACTIVE->value,
                             'listing_status' => 'ALREADY_CHECKOUT'
                         ]);
+
+                        // Redeem the discount code now that the auction order is paid.
+                        $this->redeemExpressDiscountForOrder($order);
                     }
 
                     return [
