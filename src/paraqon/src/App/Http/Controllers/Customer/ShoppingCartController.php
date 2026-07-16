@@ -38,13 +38,29 @@ use App\Models\Store;
 use App\Models\Warehouse;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 
+// Concerns
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\ReadsParaqonConfiguration;
+
 class ShoppingCartController extends Controller
 {
     use DistributePointTrait;
+    use ReadsParaqonConfiguration;
 
     private function getStore(string $storeID): ?Store
     {
         return Store::find($storeID) ?? Store::find(Alias::getValue($storeID));
+    }
+
+    private function getCreditCardCharge(float $totalPrice, ?string $paymentMethod): array
+    {
+        if ($paymentMethod !== CheckoutType::ONLINE->value) {
+            return [0.0, 0.0];
+        }
+
+        $percentage = $this->getCreditCardChargePercentage();
+        $fee = floor((max(0, $totalPrice) * $percentage) / 100);
+
+        return [$percentage, $fee];
     }
 
     public function getAllAuctionCartItems(Request $request): array
@@ -167,9 +183,10 @@ class ShoppingCartController extends Controller
         );
         $totalPrice = max(0, $totalPrice - $globalPriceDiscount);
 
-        // credit_card_charge_percentage
-        $creditCardChargePercentage = (float) $request->input('credit_card_charge_percentage', 0);
-        $creditCardChargeFee = floor(($totalPrice * $creditCardChargePercentage) / 100);
+        // Cart preview defaults to ONLINE for backward compatibility.
+        $paymentMethod = $request->input('payment_method', CheckoutType::ONLINE->value);
+        [$creditCardChargePercentage, $creditCardChargeFee] =
+            $this->getCreditCardCharge((float) $totalPrice, $paymentMethod);
         $totalPrice = $totalPrice + $creditCardChargeFee;
 
         // form calculation data object
@@ -188,6 +205,7 @@ class ShoppingCartController extends Controller
                 'total' => '0.00',
             ],
             'service_charge' => number_format($totalServiceCharge, 2, '.', ''),
+            'credit_card_charge_percentage' => number_format($creditCardChargePercentage, 2, '.', ''),
             'credit_card_charge_fee' => number_format($creditCardChargeFee, 2, '.', ''),
             'deposit' => number_format($systemOrderDeposit, 2, '.', ''),
             'storage_fee' => '0.00',
@@ -298,6 +316,12 @@ class ShoppingCartController extends Controller
             0;
         $totalPrice += $shippingFee;
 
+        // Cart preview defaults to ONLINE for backward compatibility.
+        $paymentMethod = $request->input('payment_method', CheckoutType::ONLINE->value);
+        [$creditCardChargePercentage, $creditCardChargeFee] =
+            $this->getCreditCardCharge((float) $totalPrice, $paymentMethod);
+        $totalPrice += $creditCardChargeFee;
+
         // form calculation data object
         $rawCalculation = [
             'currency' => 'HKD',
@@ -314,6 +338,8 @@ class ShoppingCartController extends Controller
                 'total' => '0.00',
             ],
             'service_charge' => '0.00',
+            'credit_card_charge_percentage' => number_format($creditCardChargePercentage, 2, '.', ''),
+            'credit_card_charge_fee' => number_format($creditCardChargeFee, 2, '.', ''),
             'storage_fee' => number_format($storageFee, 2, '.', ''),
             'shipping_fee' => number_format($shippingFee, 2, '.', '')
         ];
@@ -458,9 +484,9 @@ class ShoppingCartController extends Controller
         );
         $totalPrice = max(0, $totalPrice - $globalPriceDiscount);
 
-        // credit_card_charge_percentage
-        $creditCardChargePercentage = (float) $request->input('credit_card_charge_percentage', 0);
-        $creditCardChargeFee = floor(($totalPrice * $creditCardChargePercentage) / 100);
+        // Credit-card charge applies only to ONLINE checkout; Deposit never uses this.
+        [$creditCardChargePercentage, $creditCardChargeFee] =
+            $this->getCreditCardCharge((float) $totalPrice, $paymentMethod);
         $totalPrice = $totalPrice + $creditCardChargeFee;
 
         // form calculation data object
@@ -479,6 +505,7 @@ class ShoppingCartController extends Controller
                 'total' => '0.00',
             ],
             'service_charge' => number_format($totalServiceCharge, 2, '.', ''),
+            'credit_card_charge_percentage' => number_format($creditCardChargePercentage, 2, '.', ''),
             'credit_card_charge_fee' => number_format($creditCardChargeFee, 2, '.', ''),
             'deposit' => number_format($systemOrderDeposit, 2, '.', ''),
             'storage_fee' => '0.00',
@@ -685,6 +712,11 @@ class ShoppingCartController extends Controller
         }
         $totalPrice += $shippingFee;
 
+        // Vault / main-store fee is included in both Order calculations and Stripe authorization.
+        [$creditCardChargePercentage, $creditCardChargeFee] =
+            $this->getCreditCardCharge((float) $totalPrice, $paymentMethod);
+        $totalPrice += $creditCardChargeFee;
+
         $rawCalculation = [
             'currency' => 'HKD',
             'price' => [
@@ -699,6 +731,8 @@ class ShoppingCartController extends Controller
                 'subtotal' => '0.00',
                 'total' => '0.00',
             ],
+            'credit_card_charge_percentage' => number_format($creditCardChargePercentage, 2, '.', ''),
+            'credit_card_charge_fee' => number_format($creditCardChargeFee, 2, '.', ''),
             'shipping_fee' => $shippingFee
         ];
 
@@ -765,6 +799,11 @@ class ShoppingCartController extends Controller
                 case CheckoutType::ONLINE->value:
                     $stripeAmount = (int) $totalPrice * 100;
 
+                    // Vault / default-main-store: authorize now, capture after 5 days
+                    $delayEventType = ($store->slug === 'default-main-store')
+                        ? 'five_day_delay'
+                        : 'one_day_delay';
+
                     $data = [
                         'amount' => $stripeAmount,
                         'currency' => 'HKD',
@@ -772,7 +811,7 @@ class ShoppingCartController extends Controller
                         'metadata' => [
                             'model_type' => 'checkout',
                             'model_id' => $checkout->_id,
-                            'custom_event_type' => 'one_day_delay'
+                            'custom_event_type' => $delayEventType
                         ]
                     ];
 

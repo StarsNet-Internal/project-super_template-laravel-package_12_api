@@ -41,10 +41,12 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\AuctionLotController as 
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionLotController as CustomerAuctionLotController;
 
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\RedeemsExpressDiscount;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\ReadsParaqonConfiguration;
 
 class ServiceController extends Controller
 {
     use RedeemsExpressDiscount;
+    use ReadsParaqonConfiguration;
 
     public function paymentCallback(Request $request): array
     {
@@ -276,10 +278,12 @@ class ServiceController extends Controller
                 if (is_null($order)) abort(200, 'Order not found');
 
                 $customEventType = $request->data['object']['metadata']['custom_event_type'] ?? null;
+                $isDelayedCapture = in_array($customEventType, ['one_day_delay', 'five_day_delay'], true);
 
-                if ($customEventType === 'one_day_delay' && $eventType == 'charge.succeeded') {
+                if ($isDelayedCapture && $eventType == 'charge.succeeded') {
+                    $delayDays = $customEventType === 'five_day_delay' ? 5 : 1;
                     $order->update([
-                        'scheduled_payment_at' => new UTCDateTime(now()->addDay(1))
+                        'scheduled_payment_at' => new UTCDateTime(now()->addDays($delayDays))
                     ]);
 
                     // Clear ShoppingCartItem
@@ -295,12 +299,12 @@ class ServiceController extends Controller
                         ->delete();
 
                     return [
-                        'message' => 'custom_event_type is one_day_delay, capture authorized',
+                        'message' => "custom_event_type is {$customEventType}, capture authorized",
                         'order_id' => null
                     ];
                 }
 
-                if ($customEventType === 'one_day_delay' && $eventType == 'charge.captured') {
+                if ($isDelayedCapture && $eventType == 'charge.captured') {
                     $order->update([
                         'scheduled_payment_received_at' => new UTCDateTime(now())
                     ]);
@@ -320,7 +324,7 @@ class ServiceController extends Controller
                     }
 
                     return [
-                        'message' => 'custom_event_type is one_day_delay, capture success',
+                        'message' => "custom_event_type is {$customEventType}, capture success",
                         'order_id' => null
                     ];
                 }
@@ -576,8 +580,38 @@ class ServiceController extends Controller
         Collection $winningLots,
         Collection $deposits
     ): Order {
+        // Buyer commission discount by hammer (current_bid) order total from Configuration
+        $orderTotalHammer = (float) $winningLots->sum(function ($lot) {
+            return (float) ($lot->current_bid ?? 0);
+        });
+        $discountPercent = $this->getBuyerCommissionDiscountPercent($orderTotalHammer);
+        $totalCommissionBefore = 0;
+        $totalCommissionDiscount = 0;
+        $totalCommissionAfter = 0;
+
         // Create ShoppingCartItem(s) from each AuctionLot
         foreach ($winningLots as $lot) {
+            $commission0 = (float) ($lot->commission ?? 0);
+            if ($discountPercent > 0 && isset($lot->commission_rate) && (float) $lot->commission_rate > 0) {
+                $commission0 = (float) floor(((float) $lot->current_bid) * ((float) $lot->commission_rate) / 100);
+            }
+
+            $discounted = $this->applyBuyerCommissionDiscount($commission0, $discountPercent);
+            $commission = $discounted['commission'];
+            $soldPrice = (float) ($lot->current_bid ?? 0) + $commission;
+
+            $lot->update([
+                'commission' => $commission,
+                'sold_price' => $soldPrice,
+                'commission_before_discount' => $discounted['commission_before_discount'],
+                'commission_discount_percent' => $discounted['commission_discount_percent'],
+                'commission_discount_amount' => $discounted['commission_discount_amount'],
+            ]);
+
+            $totalCommissionBefore += $discounted['commission_before_discount'];
+            $totalCommissionDiscount += $discounted['commission_discount_amount'];
+            $totalCommissionAfter += $commission;
+
             $attributes = [
                 'store_id' => $store->_id,
                 'product_id' => $lot->product_id,
@@ -585,8 +619,11 @@ class ServiceController extends Controller
                 'qty' => 1,
                 'lot_number' => $lot->lot_number,
                 'winning_bid' => $lot->current_bid,
-                'sold_price' => $lot->sold_price ?? $lot->current_bid,
-                'commission' => $lot->commission ?? 0
+                'sold_price' => $soldPrice,
+                'commission' => $commission,
+                'commission_before_discount' => $discounted['commission_before_discount'],
+                'commission_discount_percent' => $discounted['commission_discount_percent'],
+                'commission_discount_amount' => $discounted['commission_discount_amount'],
             ];
             $customer->shoppingCartItems()->create($attributes);
         }
@@ -669,7 +706,11 @@ class ServiceController extends Controller
             'service_charge' => 0,
             'deposit' => number_format($totalCapturableDeposit, 2, '.', ''),
             'storage_fee' => 0,
-            'shipping_fee' => 0
+            'shipping_fee' => 0,
+            'commission_before_discount' => number_format($totalCommissionBefore, 2, '.', ''),
+            'commission_discount_percent' => number_format($discountPercent, 2, '.', ''),
+            'commission_discount_amount' => number_format($totalCommissionDiscount, 2, '.', ''),
+            'commission' => number_format($totalCommissionAfter, 2, '.', ''),
         ];
 
         // Create Order
@@ -1042,6 +1083,7 @@ class ServiceController extends Controller
                 $paymentIntentID = $checkout->online['payment_intent_id'];
                 $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/capture';
                 $response = Http::post($url, ['amount' => null]);
+                $orderIDs[] = $order->_id;
             } catch (\Throwable $th) {
                 Log::error('Failed to capture order, order_id: ' . $order->_id);
             }
@@ -1050,6 +1092,51 @@ class ServiceController extends Controller
         return [
             'message' => 'Approved order count: ' . count($orderIDs),
             'order_ids' => $orderIDs
+        ];
+    }
+
+    /**
+     * Admin: immediately capture a delayed payment, ignoring scheduled_payment_at.
+     */
+    public function captureOrderPaymentImmediately(Request $request): array
+    {
+        /** @var ?Order $order */
+        $order = Order::find($request->route('order_id'));
+        if (is_null($order)) {
+            abort(404, 'Order not found');
+        }
+        if ($order->current_status === ShipmentDeliveryStatus::CANCELLED->value) {
+            abort(400, 'Order is cancelled');
+        }
+        if (!is_null($order->scheduled_payment_received_at)) {
+            abort(400, 'Order payment has already been captured');
+        }
+
+        $checkout = $order->checkout()->latest()->first();
+        if (is_null($checkout)) {
+            abort(404, 'Checkout not found');
+        }
+
+        $paymentIntentID = data_get($checkout, 'online.payment_intent_id');
+        if (empty($paymentIntentID)) {
+            abort(400, 'Order does not have an online payment_intent_id');
+        }
+
+        $url = env('PARAQON_STRIPE_BASE_URL', 'https://payment.paraqon.starsnet.hk') . '/payment-intents/' . $paymentIntentID . '/capture';
+        $response = Http::post($url, ['amount' => null]);
+
+        if ($response->failed()) {
+            Log::error('Failed to immediately capture order, order_id: ' . $order->_id, [
+                'body' => $response->body(),
+            ]);
+            abort(502, 'Failed to capture payment intent');
+        }
+
+        return [
+            'message' => 'Capture requested successfully',
+            'order_id' => $order->_id,
+            'payment_intent_id' => $paymentIntentID,
+            'stripe_response' => $response->json(),
         ];
     }
 

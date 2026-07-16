@@ -23,6 +23,7 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\ShoppingCartControlle
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\TestingController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\WatchlistItemController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\NotificationController;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\PostController;
 
 /*
 |--------------------------------------------------------------------------
@@ -296,6 +297,7 @@ Route::group(
                 Route::post('/register', [AuctionRegistrationRequestController::class, 'registerAuction']);
                 Route::get('/all', [AuctionRegistrationRequestController::class, 'getAllRegisteredAuctions'])->middleware(['pagination']);
                 Route::post('/{auction_registration_request_id}/register', [AuctionRegistrationRequestController::class, 'registerAuctionAgain']);
+                Route::get('/{id}/deposit-quote', [AuctionRegistrationRequestController::class, 'getDepositQuote']);
                 Route::post('/{id}/deposit', [AuctionRegistrationRequestController::class, 'createDeposit']);
                 Route::put('/{auction_registration_request_id}/archive', [AuctionRegistrationRequestController::class, 'archiveAuctionRegistrationRequest']);
                 Route::get('/details', [AuctionRegistrationRequestController::class, 'getRegisteredAuctionDetails']);
@@ -354,5 +356,33 @@ Route::group(
     function () {
         Route::get('/time/now', [ServiceController::class, 'checkCurrentTime']);
         Route::get('/timezone/now', [ServiceController::class, 'checkOtherTimeZone']);
+    }
+);
+
+// POST (Paraqon-only: Vault subscriber gate for requires_subscription)
+Route::group(
+    ['prefix' => 'posts'],
+    function () {
+        Route::get('/category/all', [PostController::class, 'getAllCategories'])->middleware(['pagination']);
+
+        Route::get('/{id}/details', [PostController::class, 'getPostDetails']);
+        Route::get('/{id}/reviews', [PostController::class, 'getPostReviews'])->middleware(['pagination']);
+        Route::get('/slug/post-sorting', [PostController::class, 'getPostSorting']);
+
+        Route::get('/filter', [PostController::class, 'filterPostsByCategories'])->middleware(['pagination']);
+
+        Route::get('/related-posts-urls', [PostController::class, 'getRelatedPostsUrls'])->middleware(['pagination']);
+        Route::get('/ids', [PostController::class, 'getPostsByIDs'])->name('paraqon.posts.ids')->middleware(['pagination']);
+
+        Route::post('/review', [PostController::class, 'createReview'])->middleware(['auth:api']);
+        Route::get('/review/all', [PostController::class, 'getAllReviewsByModelID']);
+
+        Route::group(
+            ['middleware' => 'auth:api'],
+            function () {
+                Route::put('/{id}/like', [PostController::class, 'likeAndUnlikePost']);
+                Route::get('/liked/all', [PostController::class, 'getAllLikedPosts'])->middleware(['pagination']);
+            }
+        );
     }
 );

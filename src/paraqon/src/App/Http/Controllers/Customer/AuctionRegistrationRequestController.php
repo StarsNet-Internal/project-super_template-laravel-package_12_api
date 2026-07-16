@@ -17,9 +17,11 @@ use Illuminate\Support\Collection;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\ReadsParaqonConfiguration;
 
 class AuctionRegistrationRequestController extends Controller
 {
+    use ReadsParaqonConfiguration;
     public function registerAuction(Request $request)
     {
         // Check User
@@ -122,6 +124,30 @@ class AuctionRegistrationRequestController extends Controller
         ];
     }
 
+    public function getDepositQuote(Request $request): array
+    {
+        [
+            'form' => $form,
+            'lot' => $auctionLot,
+            'amount' => $amount,
+        ] = $this->resolveLotDepositContext(
+            $request->route('id'),
+            $request->query('auction_lot_id')
+        );
+
+        $existingDeposit = $this->findValidLotDeposit($form->id, $auctionLot->id);
+
+        return [
+            'auction_registration_request_id' => $form->id,
+            'auction_lot_id' => $auctionLot->id,
+            'permission_type' => $auctionLot->permission_type,
+            'amount' => $amount,
+            'currency' => 'HKD',
+            'has_valid_deposit' => !is_null($existingDeposit),
+            'existing_deposit_id' => $existingDeposit?->id,
+        ];
+    }
+
     public function createDeposit(Request $request)
     {
         $user = $this->user();
@@ -143,34 +169,23 @@ class AuctionRegistrationRequestController extends Controller
         // Get authenticated User information
         $customer = $this->customer();
 
-        /** @var AuctionRegistrationRequest $form */
-        $form = AuctionRegistrationRequest::find($request->route('id'));
-        if (is_null($form)) abort(404, 'Auction Registration Request not found');
-        if ($form->requested_by_customer_id != $customer->_id) abort(404, 'You do not have the permission to create Deposit');
-
-        // If auction_lot_id is provided, find the correct deposit amount written in Store deposit_permissions
         $lotPermissionType = null;
         if (!is_null($auctionLotID)) {
-            $auctionLot = AuctionLot::find($auctionLotID);
-            if (is_null($auctionLot)) abort(404, 'Invalid auction_lot_id');
-            if ($auctionLot->status == Status::DELETED->value) abort(404, 'Auction Lot not found');
-
+            [
+                'form' => $form,
+                'lot' => $auctionLot,
+                'amount' => $amount,
+            ] = $this->resolveLotDepositContext($request->route('id'), $auctionLotID);
             $lotPermissionType = $auctionLot->permission_type;
-            if (!is_null($lotPermissionType)) {
-                $store = Store::find($form->store_id);
-                if (is_null($store)) abort(404, 'Invalid Store');
-                if ($store->status == Status::DELETED->value) abort(404, 'Store not found');
 
-                $depositPermissions = $store->deposit_permissions;
-                if (!empty($depositPermissions)) {
-                    foreach ($depositPermissions as $permission) {
-                        if ($permission['permission_type'] === $lotPermissionType) {
-                            $amount = $permission['amount'];
-                            break;
-                        }
-                    }
-                }
+            if (!is_null($this->findValidLotDeposit($form->id, $auctionLot->id))) {
+                abort(409, 'A valid Deposit already exists for this Auction Lot');
             }
+        } else {
+            /** @var AuctionRegistrationRequest $form */
+            $form = AuctionRegistrationRequest::find($request->route('id'));
+            if (is_null($form)) abort(404, 'Auction Registration Request not found');
+            if ($form->requested_by_customer_id != $customer->_id) abort(404, 'You do not have the permission to create Deposit');
         }
 
         switch ($paymentMethod) {
@@ -186,7 +201,8 @@ class AuctionRegistrationRequestController extends Controller
                         'currency' => $currency,
                         'conversion_rate' => $conversionRate
                     ],
-                    'permission_type' => $lotPermissionType
+                    'permission_type' => $lotPermissionType,
+                    'auction_lot_id' => $auctionLotID,
                 ];
                 $deposit = Deposit::create($depositAttributes);
                 $deposit->updateStatus('submitted');
@@ -237,7 +253,8 @@ class AuctionRegistrationRequestController extends Controller
                         'currency' => $currency,
                         'conversion_rate' => $conversionRate
                     ],
-                    'permission_type' => $lotPermissionType
+                    'permission_type' => $lotPermissionType,
+                    'auction_lot_id' => $auctionLotID,
                 ];
                 $deposit = Deposit::create($depositAttributes);
                 $deposit->updateStatus('submitted');
@@ -249,6 +266,71 @@ class AuctionRegistrationRequestController extends Controller
             default:
                 return ['message' => 'payment_method ' . $paymentMethod . ' is not supported.'];
         }
+    }
+
+    private function resolveLotDepositContext($registrationRequestID, $auctionLotID): array
+    {
+        if (is_null($auctionLotID) || $auctionLotID === '') {
+            abort(422, 'auction_lot_id is required');
+        }
+
+        $customer = $this->customer();
+
+        /** @var ?AuctionRegistrationRequest $form */
+        $form = AuctionRegistrationRequest::find($registrationRequestID);
+        if (is_null($form)) abort(404, 'Auction Registration Request not found');
+        if ($form->requested_by_customer_id != $customer->_id) {
+            abort(404, 'You do not have the permission to create Deposit');
+        }
+
+        /** @var ?AuctionLot $auctionLot */
+        $auctionLot = AuctionLot::find($auctionLotID);
+        if (is_null($auctionLot) || $auctionLot->status == Status::DELETED->value) {
+            abort(404, 'Auction Lot not found');
+        }
+        if ((string) $auctionLot->store_id !== (string) $form->store_id) {
+            abort(422, 'Auction Lot does not belong to this Auction Registration Request');
+        }
+        if (is_null($auctionLot->permission_type) || $auctionLot->permission_type === '') {
+            abort(422, 'Auction Lot does not require a high-value Deposit');
+        }
+
+        /** @var ?Store $store */
+        $store = Store::find($form->store_id);
+        if (is_null($store) || $store->status == Status::DELETED->value) {
+            abort(404, 'Store not found');
+        }
+
+        $amount = $this->resolveHighValueDepositAmount($store, $auctionLot);
+        if (is_null($amount)) {
+            abort(422, 'High-value Deposit amount is not configured for this Auction Lot');
+        }
+
+        return [
+            'form' => $form,
+            'lot' => $auctionLot,
+            'store' => $store,
+            'amount' => $amount,
+        ];
+    }
+
+    private function findValidLotDeposit($registrationRequestID, $auctionLotID): ?Deposit
+    {
+        return Deposit::where('auction_registration_request_id', $registrationRequestID)
+            ->where('auction_lot_id', $auctionLotID)
+            ->where('status', Status::ACTIVE->value)
+            ->whereIn('reply_status', [
+                ReplyStatus::PENDING->value,
+                ReplyStatus::APPROVED->value,
+            ])
+            ->get()
+            ->first(function (Deposit $deposit) {
+                if ($deposit->payment_method === 'ONLINE') {
+                    return $deposit->current_deposit_status === 'on-hold';
+                }
+
+                return in_array($deposit->current_deposit_status, ['submitted', 'on-hold'], true);
+            });
     }
 
     public function registerAuctionAgain(Request $request): array

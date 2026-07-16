@@ -25,10 +25,12 @@ use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\RedeemsExpressDiscount;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\ReadsParaqonConfiguration;
 
 class OrderController extends Controller
 {
     use RedeemsExpressDiscount;
+    use ReadsParaqonConfiguration;
 
     public function getAllAuctionOrders(Request $request): Collection
     {
@@ -226,12 +228,25 @@ class OrderController extends Controller
         $total = (float) $document->calculations['price']['total'];
         $deposit = (float) $document->calculations['deposit'];
         $totalPrice = is_nan($total) || is_nan($deposit) ? NAN : number_format($total + $deposit, 2, '.', ',');
-        $totalPriceText = ($document->payment_method == "ONLINE" && $invoicePrefix == 'OA1')
-            ? "{$totalPrice} (includes credit card charge of 3.5%)"
+        $creditCardFee = (float) ($document->calculations['credit_card_charge_fee'] ?? 0);
+        $creditCardPct = $document->calculations['credit_card_charge_percentage']
+            ?? $this->getCreditCardChargePercentage();
+        $totalPriceText = ($document->payment_method == "ONLINE" && $invoicePrefix == 'OA1' && $creditCardFee > 0)
+            ? "{$totalPrice} (includes credit card charge of {$creditCardPct}%)"
             : $totalPrice;
         $depositText = number_format($deposit, 2, '.', ',');
         $formattedDepositText = $deposit > 0 ? "($depositText)" : $depositText;
         $amountPayableText = number_format($total, 2, '.', ',');
+
+        $commissionDiscountAmount = (float) ($document->calculations['commission_discount_amount'] ?? 0);
+        $commissionDiscountPercent = $document->calculations['commission_discount_percent'] ?? null;
+        $commissionDiscountText = null;
+        if ($commissionDiscountAmount > 0) {
+            $amountFormatted = number_format($commissionDiscountAmount, 2, '.', ',');
+            $commissionDiscountText = $commissionDiscountPercent !== null
+                ? "{$amountFormatted} ({$commissionDiscountPercent}%)"
+                : $amountFormatted;
+        }
 
         // Construct entire data
         $newCustomerId = substr($customerId, -6);
@@ -250,6 +265,7 @@ class OrderController extends Controller
             'tableTotal' => $totalPriceText,
             'tableDeposit' => $formattedDepositText,
             'tableAmountPayable' => $amountPayableText,
+            'commissionDiscount' => $commissionDiscountText,
         ];
 
         return [

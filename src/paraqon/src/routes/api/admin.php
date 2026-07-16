@@ -22,6 +22,7 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\NotificationController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\WatchlistItemController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\VerificationCodeController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\TestingController;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\RoleController;
 
 /*
 |--------------------------------------------------------------------------
@@ -220,6 +221,7 @@ Route::group(
 
         Route::get('/auctions/{store_id}/state', [ServiceController::class, 'getAuctionCurrentState']);
         Route::get('/orders/capture', [ServiceController::class, 'captureOrderPayment']);
+        Route::post('/orders/{order_id}/capture', [ServiceController::class, 'captureOrderPaymentImmediately']);
 
         Route::post('/users/cleanup', [ServiceController::class, 'deleteAllTemporaryUsers']);
     }
@@ -353,6 +355,18 @@ Route::group(
                 Route::get('/all', [LocationHistoryController::class, 'getAllLocationHistories'])->middleware(['pagination']);
                 Route::post('/products/{product_id}', [LocationHistoryController::class, 'createHistory']);
                 Route::put('/mass-update', [LocationHistoryController::class, 'massUpdateLocationHistories']);
+            }
+        );
+    }
+);
+
+Route::group(
+    ['prefix' => 'roles'],
+    function () {
+        Route::group(
+            ['middleware' => 'auth:api'],
+            function () {
+                Route::put('/{id}/field-masking', [RoleController::class, 'updateRoleFieldMasking']);
             }
         );
     }

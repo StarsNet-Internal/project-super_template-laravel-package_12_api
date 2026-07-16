@@ -35,6 +35,7 @@ class Deposit extends Model
         // Relationships
         'requested_by_customer_id' => null,
         'auction_registration_request_id' => null,
+        'auction_lot_id' => null,
         'approved_by_account_id' => null,
 
         // Default
