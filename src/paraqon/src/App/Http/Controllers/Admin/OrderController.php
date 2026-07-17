@@ -229,11 +229,16 @@ class OrderController extends Controller
         $deposit = (float) $document->calculations['deposit'];
         $totalPrice = is_nan($total) || is_nan($deposit) ? NAN : number_format($total + $deposit, 2, '.', ',');
         $creditCardFee = (float) ($document->calculations['credit_card_charge_fee'] ?? 0);
-        $creditCardPct = $document->calculations['credit_card_charge_percentage']
-            ?? $this->getCreditCardChargePercentage();
-        $totalPriceText = ($document->payment_method == "ONLINE" && $invoicePrefix == 'OA1' && $creditCardFee > 0)
-            ? "{$totalPrice} (includes credit card charge of {$creditCardPct}%)"
-            : $totalPrice;
+        $creditCardPct = $document->calculations['credit_card_charge_percentage'] ?? null;
+        $hasCreditCardCharge =
+            $document->payment_method == "ONLINE" &&
+            $creditCardFee > 0;
+        $creditCardChargeText = $hasCreditCardCharge
+            ? number_format($creditCardFee, 2, '.', ',') .
+                ($creditCardPct !== null && $creditCardPct !== ''
+                    ? ' (' . number_format((float) $creditCardPct, 2, '.', '') . '%)'
+                    : '')
+            : null;
         $depositText = number_format($deposit, 2, '.', ',');
         $formattedDepositText = $deposit > 0 ? "($depositText)" : $depositText;
         $amountPayableText = number_format($total, 2, '.', ',');
@@ -262,7 +267,8 @@ class OrderController extends Controller
             'shipTo' => "In-store pick up",
             'invoiceNum' => $invoiceId,
             'items' => $itemsData,
-            'tableTotal' => $totalPriceText,
+            'tableTotal' => $totalPrice,
+            'creditCardCharge' => $creditCardChargeText,
             'tableDeposit' => $formattedDepositText,
             'tableAmountPayable' => $amountPayableText,
             'commissionDiscount' => $commissionDiscountText,
@@ -348,6 +354,15 @@ class OrderController extends Controller
         $extraCharge = (float) $document->change;
         $discount = (float) $document->discount;
         $tableTotal = (float) $document->amount_received;
+        $creditCardFee = (float) ($document->calculations['credit_card_charge_fee'] ?? 0);
+        $creditCardPct = $document->calculations['credit_card_charge_percentage'] ?? null;
+        $creditCardChargeText =
+            $document->payment_method == "ONLINE" && $creditCardFee > 0
+                ? number_format($creditCardFee, 2, '.', ',') .
+                    ($creditCardPct !== null && $creditCardPct !== ''
+                        ? ' (' . number_format((float) $creditCardPct, 2, '.', '') . '%)'
+                        : '')
+                : null;
 
         // Construct entire data
         $invoiceId = "{$invoicePrefix}-" . substr($orderId, -6);
@@ -365,6 +380,7 @@ class OrderController extends Controller
             'extraCharge' => $extraCharge,
             'discount' => $discount,
             'tableTotal' => $tableTotal,
+            'creditCardCharge' => $creditCardChargeText,
         ];
 
         return [

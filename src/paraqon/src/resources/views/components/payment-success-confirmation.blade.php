@@ -86,6 +86,20 @@
               <td style="text-align: right">{{ $data['shippingText'] }}</td>
               <td style="text-align: right; width: 40%">{{ $data['shippingValue'] }}</td>
             </tr>
+            @if(!empty($data['creditCardChargeValue']))
+            <tr>
+              <td style="padding: 24px"></td>
+              <td style="text-align: right">{{ $data['creditCardChargeText'] ?? 'Credit Card Charge' }}</td>
+              <td style="text-align: right; width: 40%">{{ $data['creditCardChargeValue'] }}</td>
+            </tr>
+            @endif
+            @if(!empty($data['commissionDiscountValue']))
+            <tr>
+              <td style="padding: 24px"></td>
+              <td style="text-align: right">{{ $data['commissionDiscountText'] ?? 'Buyer Commission Discount' }}</td>
+              <td style="text-align: right; width: 40%">{{ $data['commissionDiscountValue'] }}</td>
+            </tr>
+            @endif
             <tr>
               <td style="padding: 24px"></td>
               <td style="text-align: right; font-weight: bold">{{ $data['totalText'] }}</td>
