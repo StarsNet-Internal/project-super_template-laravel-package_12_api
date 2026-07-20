@@ -580,11 +580,13 @@ class ServiceController extends Controller
         Collection $winningLots,
         Collection $deposits
     ): Order {
-        // Buyer commission discount by hammer (current_bid) order total from Configuration
+        // Vault members only: THE VAULT VIP discount by hammer order total from Configuration.
         $orderTotalHammer = (float) $winningLots->sum(function ($lot) {
             return (float) ($lot->current_bid ?? 0);
         });
-        $discountPercent = $this->getBuyerCommissionDiscountPercent($orderTotalHammer);
+        $discountPercent = $this->customerHasVaultSubscription($customer)
+            ? $this->getBuyerCommissionDiscountPercent($orderTotalHammer)
+            : 0;
         $totalCommissionBefore = 0;
         $totalCommissionDiscount = 0;
         $totalCommissionAfter = 0;

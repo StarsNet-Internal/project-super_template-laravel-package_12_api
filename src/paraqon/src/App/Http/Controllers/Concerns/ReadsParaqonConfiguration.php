@@ -154,7 +154,9 @@ trait ReadsParaqonConfiguration
             return false;
         }
 
-        $groups = $customer->groups()->statusActive()->get(['slug']);
+        $groups = $customer->relationLoaded('groups')
+            ? $customer->getRelation('groups')
+            : $customer->groups()->statusActive()->get(['slug']);
         foreach ($groups as $group) {
             $slug = strtolower((string) ($group->slug ?? ''));
             if ($slug !== '' && str_contains($slug, 'the-vault')) {

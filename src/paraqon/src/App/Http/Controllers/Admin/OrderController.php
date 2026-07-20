@@ -243,8 +243,20 @@ class OrderController extends Controller
         $formattedDepositText = $deposit > 0 ? "($depositText)" : $depositText;
         $amountPayableText = number_format($total, 2, '.', ',');
 
-        $commissionDiscountAmount = (float) ($document->calculations['commission_discount_amount'] ?? 0);
-        $commissionDiscountPercent = $document->calculations['commission_discount_percent'] ?? null;
+        $calculations = $document->calculations ?? [];
+        $hasCommissionDiscountAmount = array_key_exists('commission_discount_amount', $calculations);
+        $hasCommissionDiscountPercent = array_key_exists('commission_discount_percent', $calculations);
+        $commissionDiscountAmount = $hasCommissionDiscountAmount
+            ? (float) ($calculations['commission_discount_amount'] ?? 0)
+            : (float) collect($document->cart_items)->sum(
+                fn($item) => (float) data_get($item, 'commission_discount_amount', 0)
+            );
+        $discountedItem = collect($document->cart_items)->first(
+            fn($item) => (float) data_get($item, 'commission_discount_percent', 0) > 0
+        );
+        $commissionDiscountPercent = $hasCommissionDiscountPercent
+            ? ($calculations['commission_discount_percent'] ?? null)
+            : data_get($discountedItem, 'commission_discount_percent');
         $commissionDiscountText = null;
         if ($commissionDiscountAmount > 0) {
             $amountFormatted = number_format($commissionDiscountAmount, 2, '.', ',');
@@ -350,10 +362,10 @@ class OrderController extends Controller
             ];
         });
 
-        $subTotal = (float) $document->calculations['price']['total'];
+        $subTotal = (float) $document->calculations['price']['subtotal'];
         $extraCharge = (float) $document->change;
         $discount = (float) $document->discount;
-        $tableTotal = (float) $document->amount_received;
+        $tableTotal = (float) $document->calculations['price']['total'];
         $creditCardFee = (float) ($document->calculations['credit_card_charge_fee'] ?? 0);
         $creditCardPct = $document->calculations['credit_card_charge_percentage'] ?? null;
         $creditCardChargeText =

@@ -27,9 +27,12 @@ use App\Models\ShoppingCartItem;
 use App\Models\Store;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\ReadsParaqonConfiguration;
 
 class AuctionController extends Controller
 {
+    use ReadsParaqonConfiguration;
+
     public function syncCategoriesToProduct(Request $request): array
     {
         /** @var ?Product $product */
@@ -83,10 +86,15 @@ class AuctionController extends Controller
             ->keyBy('requested_by_customer_id');
 
         return Customer::whereIn('_id', $registeredCustomers->keys())
-            ->with(['account.user'])
+            ->with([
+                'account.user',
+                'groups' => fn($query) => $query->statusActive(),
+            ])
             ->get()
             ->each(function ($customer) use ($registeredCustomers) {
                 $customer->paddle_id = $registeredCustomers[$customer->id]->paddle_id ?? '';
+                $customer->has_vault_subscription = $this->customerHasVaultSubscription($customer);
+                $customer->unsetRelation('groups');
             });
     }
 

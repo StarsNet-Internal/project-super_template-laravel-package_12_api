@@ -96,7 +96,7 @@
             @if(!empty($data['commissionDiscountValue']))
             <tr>
               <td style="padding: 24px"></td>
-              <td style="text-align: right">{{ $data['commissionDiscountText'] ?? 'Buyer Commission Discount' }}</td>
+              <td style="text-align: right">{{ $data['commissionDiscountText'] ?? 'THE VAULT VIP Discount' }}</td>
               <td style="text-align: right; width: 40%">{{ $data['commissionDiscountValue'] }}</td>
             </tr>
             @endif
