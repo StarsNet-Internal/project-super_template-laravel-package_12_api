@@ -1,0 +1,602 @@
+<?php
+
+namespace Starsnet\Project\Paraqon\App\Services;
+
+use App\Enums\Status;
+use App\Models\Alias;
+use App\Models\Checkout;
+use App\Models\Order;
+use App\Models\Product;
+use App\Models\ProductCategory;
+use App\Models\ProductVariant;
+use App\Models\Store;
+use Illuminate\Support\Collection;
+use Starsnet\Project\Paraqon\App\Models\AuctionLot;
+use Starsnet\Project\Paraqon\App\Models\Document;
+use StarsNet\Project\Paraqon\App\Models\LocationHistory;
+
+class AccountItemService
+{
+    public const SCOPES = ['selling', 'sold', 'purchased'];
+    public const PURPOSES = ['AUCTION', 'PRIVATE_SALE', 'THE_VAULT'];
+
+    private const SELLER_DOCUMENT_TYPES = [
+        'CONSIGNMENT_AGREEMENT_FOR_AUCTION',
+        'PRIVATE_SALE_AGREEMENT',
+        'CONSIGNOR_SETTLEMENT',
+    ];
+
+    public function getAll(
+        string $customerID,
+        string $scope,
+        ?string $purpose = null
+    ): Collection {
+        $stores = $this->getStoreContext();
+        $documents = $scope === 'purchased'
+            ? collect()
+            : $this->getSellerDocuments($customerID);
+
+        if ($scope === 'purchased') {
+            $orders = $this->getCustomerOrders($customerID, $stores['relevant_ids']);
+            $productIDs = $this->getProductIDsFromOrders($orders);
+            $products = $this->getProducts($productIDs);
+        } else {
+            $productIDs = $this->getSellerProductIDs($customerID, $documents);
+            $products = $this->getProducts($productIDs);
+            $orders = $this->getOrdersForProducts($productIDs, $stores['relevant_ids']);
+        }
+
+        $context = $this->buildContext(
+            $products,
+            $productIDs,
+            $orders,
+            $documents,
+            $stores
+        );
+
+        $items = match ($scope) {
+            'purchased' => $this->buildPurchasedItems($orders, $context),
+            'sold' => $this->buildSoldItems($products, $context),
+            default => $this->buildSellingItems($products, $context),
+        };
+
+        if (!is_null($purpose)) {
+            $items = $items->where('purpose', $purpose);
+        }
+
+        return $items->values();
+    }
+
+    private function getStoreContext(): array
+    {
+        $mainStore = $this->getStoreByAliasOrSlug('default-main-store');
+        $privateSaleStore = $this->getStoreByAliasOrSlug('private-sale-store');
+        $auctionStores = Store::whereNotNull('auction_type')->get();
+
+        $relevantStores = $auctionStores
+            ->when($mainStore, fn(Collection $items) => $items->push($mainStore))
+            ->when($privateSaleStore, fn(Collection $items) => $items->push($privateSaleStore))
+            ->unique(fn(Store $store) => (string) $store->_id)
+            ->values();
+
+        $vaultCategoryIDs = is_null($mainStore)
+            ? collect()
+            : ProductCategory::where('model_type_id', $mainStore->id)
+                ->statusActive()
+                ->pluck('id')
+                ->map(fn($id) => (string) $id)
+                ->values();
+
+        return [
+            'main_id' => is_null($mainStore) ? null : (string) $mainStore->_id,
+            'vault_category_ids' => $vaultCategoryIDs,
+            'relevant_ids' => $relevantStores
+                ->map(fn(Store $store) => (string) $store->_id)
+                ->all(),
+            'by_id' => $relevantStores->keyBy(fn(Store $store) => (string) $store->_id),
+        ];
+    }
+
+    private function getStoreByAliasOrSlug(string $alias): ?Store
+    {
+        $storeID = Alias::getValue($alias);
+
+        return (!is_null($storeID) ? Store::find($storeID) : null)
+            ?? Store::where('slug', $alias)->latest()->first();
+    }
+
+    private function getSellerDocuments(string $customerID): Collection
+    {
+        return Document::where('customer_id', $customerID)
+            ->whereIn('type', self::SELLER_DOCUMENT_TYPES)
+            ->where('status', '!=', Status::DELETED->value)
+            ->get();
+    }
+
+    private function getSellerProductIDs(
+        string $customerID,
+        Collection $documents
+    ): array {
+        $productIDs = Product::where('status', '!=', Status::DELETED->value)
+            ->where(function ($query) use ($customerID) {
+                $query->where('seller_id', $customerID)
+                    ->orWhere(function ($legacyQuery) use ($customerID) {
+                        $legacyQuery->whereNull('seller_id')
+                            ->where('owned_by_customer_id', $customerID)
+                            ->whereIn('listing_status', ['AVAILABLE', 'PENDING_FOR_AUCTION']);
+                    });
+            })
+            ->pluck('id');
+
+        $auctionProductIDs = AuctionLot::where('owned_by_customer_id', $customerID)
+            ->where('status', '!=', Status::DELETED->value)
+            ->pluck('product_id');
+
+        $documentProductIDs = $documents->flatMap(
+            fn(Document $document) => collect($document->items ?? [])->pluck('product_id')
+        );
+
+        return $productIDs
+            ->concat($auctionProductIDs)
+            ->concat($documentProductIDs)
+            ->filter()
+            ->map(fn($id) => (string) $id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function getProducts(array $productIDs): Collection
+    {
+        if (count($productIDs) === 0) return collect();
+
+        return Product::whereIn('_id', $productIDs)
+            ->where('status', '!=', Status::DELETED->value)
+            ->get();
+    }
+
+    private function getCustomerOrders(
+        string $customerID,
+        array $relevantStoreIDs
+    ): Collection {
+        if (count($relevantStoreIDs) === 0) return collect();
+
+        return Order::where('customer_id', $customerID)
+            ->whereIn('store_id', $relevantStoreIDs)
+            ->get();
+    }
+
+    private function getOrdersForProducts(
+        array $productIDs,
+        array $relevantStoreIDs
+    ): Collection {
+        if (count($productIDs) === 0 || count($relevantStoreIDs) === 0) {
+            return collect();
+        }
+
+        return Order::whereIn('store_id', $relevantStoreIDs)
+            ->whereIn('cart_items.product_id', $productIDs)
+            ->get();
+    }
+
+    private function getProductIDsFromOrders(Collection $orders): array
+    {
+        return $orders
+            ->flatMap(fn(Order $order) => collect($order->cart_items)->pluck('product_id'))
+            ->filter()
+            ->map(fn($id) => (string) $id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function buildContext(
+        Collection $products,
+        array $productIDs,
+        Collection $orders,
+        Collection $documents,
+        array $stores
+    ): array {
+        $orderIDs = $orders
+            ->map(fn(Order $order) => (string) $order->_id)
+            ->all();
+
+        $variants = count($productIDs) === 0
+            ? collect()
+            : ProductVariant::whereIn('product_id', $productIDs)->get();
+        $lots = count($productIDs) === 0
+            ? collect()
+            : AuctionLot::whereIn('product_id', $productIDs)
+                ->where('status', '!=', Status::DELETED->value)
+                ->get();
+        $histories = count($productIDs) === 0
+            ? collect()
+            : LocationHistory::whereIn('product_id', $productIDs)->get();
+        $checkouts = count($orderIDs) === 0
+            ? collect()
+            : Checkout::whereIn('order_id', $orderIDs)->get();
+
+        return [
+            'products_by_id' => $products->keyBy(fn(Product $product) => (string) $product->_id),
+            'variants_by_product' => $variants
+                ->groupBy(fn(ProductVariant $variant) => (string) $variant->product_id)
+                ->map(fn(Collection $items) => $this->latest($items)),
+            'lots_by_product' => $lots
+                ->groupBy(fn(AuctionLot $lot) => (string) $lot->product_id)
+                ->map(fn(Collection $items) => $this->latestFirst($items)),
+            'histories_by_product' => $histories
+                ->groupBy(fn(LocationHistory $history) => (string) $history->product_id),
+            'orders_by_product' => $this->groupOrdersByProduct($orders),
+            'documents_by_product' => $this->groupDocumentsByProduct($documents),
+            'checkouts_by_order' => $checkouts
+                ->groupBy(fn(Checkout $checkout) => (string) $checkout->order_id)
+                ->map(fn(Collection $items) => $this->latest($items)),
+            'stores' => $stores,
+        ];
+    }
+
+    private function buildSellingItems(
+        Collection $products,
+        array $context
+    ): Collection {
+        return $products->map(function (Product $product) use ($context) {
+            $productID = (string) $product->_id;
+            $orderEntry = $context['orders_by_product']->get($productID)?->first();
+
+            return $this->buildItem(
+                $product,
+                $orderEntry['order'] ?? null,
+                $orderEntry['item'] ?? null,
+                'sold',
+                $context
+            );
+        });
+    }
+
+    private function buildSoldItems(
+        Collection $products,
+        array $context
+    ): Collection {
+        return $products
+            ->filter(function (Product $product) use ($context) {
+                $productID = (string) $product->_id;
+                $hasOrder = $context['orders_by_product']->has($productID);
+                $hasSettlement = $context['documents_by_product']
+                    ->get($productID, collect())
+                    ->contains(fn(array $entry) => $entry['document']->type === 'CONSIGNOR_SETTLEMENT');
+
+                return $hasOrder || $hasSettlement;
+            })
+            ->map(function (Product $product) use ($context) {
+                $productID = (string) $product->_id;
+                $orderEntry = $context['orders_by_product']->get($productID)?->first();
+
+                return $this->buildItem(
+                    $product,
+                    $orderEntry['order'] ?? null,
+                    $orderEntry['item'] ?? null,
+                    'sold',
+                    $context,
+                    true
+                );
+            });
+    }
+
+    private function buildPurchasedItems(
+        Collection $orders,
+        array $context
+    ): Collection {
+        return $orders->flatMap(function (Order $order) use ($context) {
+            return collect($order->cart_items)
+                ->filter(fn($orderItem) => !empty(data_get($orderItem, 'product_id')))
+                ->map(function ($orderItem) use ($order, $context) {
+                    $productID = (string) data_get($orderItem, 'product_id');
+                    $product = $context['products_by_id']->get($productID);
+
+                    return $this->buildItem(
+                        $product,
+                        $order,
+                        $orderItem,
+                        'buy',
+                        $context
+                    );
+                });
+        });
+    }
+
+    private function buildItem(
+        ?Product $product,
+        ?Order $order,
+        $orderItem,
+        string $channel,
+        array $context,
+        bool $includeSettlement = false
+    ): array {
+        $productID = (string) ($product?->_id ?? data_get($orderItem, 'product_id', ''));
+        $lots = $context['lots_by_product']->get($productID, collect());
+        $lot = $this->getMatchingLot($lots, $order);
+        $store = is_null($order)
+            ? $context['stores']['by_id']->get((string) ($lot?->store_id ?? ''))
+            : $context['stores']['by_id']->get((string) $order->store_id);
+        $purpose = $this->getPurpose($product, $order, $lot, $store, $context['stores']);
+        $variant = $context['variants_by_product']->get($productID);
+        $histories = $context['histories_by_product']->get($productID, collect());
+        $documents = $context['documents_by_product']->get($productID, collect());
+        $agreement = $this->getAgreement($documents, $purpose);
+        $settlement = $includeSettlement
+            ? $this->getDocumentEntry($documents, 'CONSIGNOR_SETTLEMENT')
+            : null;
+        $checkout = is_null($order)
+            ? null
+            : $context['checkouts_by_order']->get((string) $order->_id);
+
+        $price = $purpose === 'AUCTION'
+            ? $this->number($lot?->reserve_price)
+            : ($this->number($variant?->price)
+                ?? $this->number(
+                    data_get($orderItem, 'original_price_per_unit')
+                        ?? data_get($orderItem, 'discounted_price_per_unit')
+                ));
+        $hammerPrice = $this->getHammerPrice($orderItem, $purpose);
+        $commission = $this->number(data_get($orderItem, 'commission')) ?? 0.0;
+        $total = $this->getPurchasedTotal($orderItem, $hammerPrice, $commission);
+        $otherFees = !is_null($total) && !is_null($hammerPrice)
+            ? max(0, $total - $hammerPrice - $commission)
+            : null;
+
+        $settlementItem = $settlement['item'] ?? null;
+        $settlementDocument = $settlement['document'] ?? null;
+        $hasSettlement = !is_null($settlementItem);
+        $paymentStatus = $includeSettlement && $hasSettlement
+            ? $this->getSettlementPaymentStatus($settlementItem)
+            : $this->getOrderPaymentStatus($order, $checkout);
+        $paymentTimestampSource = $includeSettlement && $hasSettlement
+            ? $settlementDocument
+            : $checkout;
+        $agreementReference = data_get($agreement, 'document.statement_no');
+        $settlementReference = $settlementDocument?->reference_no;
+        if (empty($settlementReference)) {
+            $settlementReference = $settlementDocument?->statement_no;
+        }
+
+        return [
+            '_id' => $productID,
+            'order_id' => is_null($order) ? null : (string) $order->_id,
+            'stock_no' => $this->getStockNumber($product, $orderItem),
+            'auction_no' => $purpose === 'AUCTION'
+                ? data_get($store, 'invoice_prefix')
+                : null,
+            'lot_number' => $purpose === 'AUCTION'
+                ? data_get($orderItem, 'lot_number', $lot?->lot_number)
+                : null,
+            'created_at' => $product?->created_at ?? $order?->created_at,
+            'purpose' => $purpose,
+            'images' => $this->getImages($product, $orderItem),
+            'title' => $product?->title
+                ?? data_get($orderItem, 'product_title')
+                ?? data_get($orderItem, 'title'),
+            'history' => $histories->values()->map(
+                fn(LocationHistory $history) => $history->toArray()
+            )->all(),
+            'price' => $price,
+            'reserve_price' => $price,
+            'contract_reference' => $includeSettlement
+                ? ($settlementReference ?: $agreementReference)
+                : $agreementReference,
+            'channel' => $channel,
+            'sold_price' => $includeSettlement
+                ? ($this->number(data_get($settlementItem, 'price')) ?? $hammerPrice)
+                : null,
+            'expected_settlement' => $includeSettlement
+                ? $this->number(data_get($settlementItem, 'total'))
+                : null,
+            'hammer_price' => $channel === 'buy' ? $hammerPrice : null,
+            'commission' => $channel === 'buy' ? $commission : null,
+            'other_fees' => $channel === 'buy' ? $otherFees : null,
+            'total' => $channel === 'buy' ? $total : null,
+            'payment_status' => $paymentStatus,
+            'paid_at' => $this->getPaidAt(
+                $paymentStatus,
+                $paymentTimestampSource
+            ),
+            'remark' => $includeSettlement
+                ? (data_get($settlementItem, 'remarks')
+                    ?? $settlementDocument?->remarks
+                    ?? data_get($checkout, 'approval.reason'))
+                : null,
+        ];
+    }
+
+    private function getPurpose(
+        ?Product $product,
+        ?Order $order,
+        ?AuctionLot $lot,
+        ?Store $store,
+        array $stores
+    ): string {
+        $isAuction = !empty($store?->auction_type)
+            || (is_null($order) && !is_null($lot));
+
+        if ($isAuction) return 'AUCTION';
+
+        $categoryIDs = collect($product?->category_ids ?? [])
+            ->map(fn($id) => (string) $id);
+        $isVault = (!is_null($stores['main_id'])
+                && (string) ($order?->store_id ?? '') === $stores['main_id'])
+            || $categoryIDs->intersect($stores['vault_category_ids'])->isNotEmpty();
+
+        return $isVault ? 'THE_VAULT' : 'PRIVATE_SALE';
+    }
+
+    private function groupOrdersByProduct(Collection $orders): Collection
+    {
+        $grouped = collect();
+
+        foreach ($orders as $order) {
+            foreach ($order->cart_items as $item) {
+                $productID = (string) data_get($item, 'product_id', '');
+                if ($productID === '') continue;
+
+                $entries = $grouped->get($productID, collect());
+                $entries->push(['order' => $order, 'item' => $item]);
+                $grouped->put($productID, $entries);
+            }
+        }
+
+        return $grouped->map(
+            fn(Collection $items) => $items
+                ->sortByDesc(fn(array $entry) => $entry['order']->created_at)
+                ->values()
+        );
+    }
+
+    private function groupDocumentsByProduct(Collection $documents): Collection
+    {
+        $grouped = collect();
+
+        foreach ($documents as $document) {
+            foreach (collect($document->items ?? []) as $item) {
+                $productID = (string) data_get($item, 'product_id', '');
+                if ($productID === '') continue;
+
+                $entries = $grouped->get($productID, collect());
+                $entries->push(['document' => $document, 'item' => $item]);
+                $grouped->put($productID, $entries);
+            }
+        }
+
+        return $grouped->map(
+            fn(Collection $items) => $items
+                ->sortByDesc(fn(array $entry) => $entry['document']->created_at)
+                ->values()
+        );
+    }
+
+    private function getMatchingLot(
+        Collection $lots,
+        ?Order $order
+    ): ?AuctionLot {
+        if (is_null($order)) return $lots->first();
+
+        return $lots->first(
+            fn(AuctionLot $lot) => (string) $lot->store_id === (string) $order->store_id
+        ) ?? $lots->first();
+    }
+
+    private function getAgreement(
+        Collection $documents,
+        string $purpose
+    ): ?array {
+        $preferredType = $purpose === 'AUCTION'
+            ? 'CONSIGNMENT_AGREEMENT_FOR_AUCTION'
+            : 'PRIVATE_SALE_AGREEMENT';
+
+        return $this->getDocumentEntry($documents, $preferredType);
+    }
+
+    private function getDocumentEntry(
+        Collection $documents,
+        string $type
+    ): ?array {
+        return $documents->first(
+            fn(array $entry) => $entry['document']->type === $type
+        );
+    }
+
+    private function getHammerPrice($orderItem, string $purpose): ?float
+    {
+        if ($purpose === 'AUCTION') {
+            return $this->number(
+                data_get($orderItem, 'winning_bid')
+                    ?? data_get($orderItem, 'current_bid')
+            );
+        }
+
+        return $this->number(
+            data_get($orderItem, 'subtotal_price')
+                ?? data_get($orderItem, 'original_subtotal_price')
+                ?? data_get($orderItem, 'discounted_price_per_unit')
+                ?? data_get($orderItem, 'original_price_per_unit')
+        );
+    }
+
+    private function getPurchasedTotal(
+        $orderItem,
+        ?float $hammerPrice,
+        float $commission
+    ): ?float {
+        $storedTotal = $this->number(data_get($orderItem, 'sold_price'));
+        if (!is_null($storedTotal)) return $storedTotal;
+
+        return is_null($hammerPrice) ? null : $hammerPrice + $commission;
+    }
+
+    private function getSettlementPaymentStatus($settlementItem): ?string
+    {
+        $status = data_get($settlementItem, 'product_consignor_status');
+        return is_null($status) ? null : strtoupper((string) $status);
+    }
+
+    private function getOrderPaymentStatus(
+        ?Order $order,
+        ?Checkout $checkout
+    ): ?string {
+        if (is_null($order)) return null;
+        if ($order->is_paid) return 'PAID';
+
+        $currentStatus = strtoupper(str_replace('-', '_', (string) $order->current_status));
+        $approvalStatus = strtoupper((string) data_get($checkout, 'approval.status', ''));
+
+        if ($currentStatus === 'CANCELLED'
+            || in_array($approvalStatus, ['CANCELLED', 'REJECTED'], true)) {
+            return 'CANCELLED';
+        }
+
+        if ($currentStatus !== '') return $currentStatus;
+        return $approvalStatus !== '' ? $approvalStatus : 'PENDING';
+    }
+
+    private function getPaidAt(?string $paymentStatus, $source)
+    {
+        if ($paymentStatus !== 'PAID' || is_null($source)) return null;
+
+        return data_get($source, 'approval.updated_at')
+            ?? data_get($source, 'approval.created_at')
+            ?? data_get($source, 'updated_at');
+    }
+
+    private function getStockNumber(?Product $product, $orderItem): ?string
+    {
+        if (is_null($product)) {
+            $stockNumber = data_get($orderItem, 'stock_no');
+            return empty($stockNumber) ? null : (string) $stockNumber;
+        }
+
+        $stockNumber = trim((string) ($product->prefix ?? '') . (string) ($product->stock_no ?? ''));
+        return $stockNumber === '' ? null : $stockNumber;
+    }
+
+    private function getImages(?Product $product, $orderItem): array
+    {
+        $images = $product?->images ?? [];
+        if (is_array($images) && count($images) > 0) return $images;
+
+        $image = data_get($orderItem, 'image');
+        return empty($image) ? [] : [$image];
+    }
+
+    private function number($value): ?float
+    {
+        return is_null($value) || $value === '' ? null : (float) $value;
+    }
+
+    private function latest(Collection $items)
+    {
+        return $items->sortByDesc('created_at')->first();
+    }
+
+    private function latestFirst(Collection $items): Collection
+    {
+        return $items->sortByDesc('created_at')->values();
+    }
+}

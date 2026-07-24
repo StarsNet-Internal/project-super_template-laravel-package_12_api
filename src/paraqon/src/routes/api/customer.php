@@ -2,6 +2,7 @@
 
 // Default Imports
 use Illuminate\Support\Facades\Route;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AccountItemController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AccountController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionLotController;
@@ -128,6 +129,18 @@ Route::group(
                 Route::get('/change-phone-request', [AuthenticationController::class, 'changePhoneRequest']);
 
                 Route::get('/user', [AuthenticationController::class, 'getAuthUserInfo']);
+            }
+        );
+    }
+);
+
+Route::group(
+    ['prefix' => 'account-items'],
+    function () {
+        Route::group(
+            ['middleware' => 'auth:api'],
+            function () {
+                Route::get('/all', [AccountItemController::class, 'getAll']);
             }
         );
     }
