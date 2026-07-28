@@ -166,6 +166,32 @@ class AuctionLot extends Model
     // Action Begins
     // -----------------------------
 
+    /**
+     * Restore public auction-result pricing for records created before buyer
+     * VIP discounts were moved from AuctionLot to Order.
+     */
+    public function normalizePublicPricing(): self
+    {
+        $discountAmount = (float) ($this->commission_discount_amount ?? 0);
+        if ($discountAmount <= 0) return $this;
+
+        $commission = (float) (
+            $this->commission_before_discount
+            ?? ((float) ($this->commission ?? 0) + $discountAmount)
+        );
+        $soldPrice = isset($this->sold_price)
+            ? (float) $this->sold_price + $discountAmount
+            : (float) ($this->current_bid ?? 0) + $commission;
+
+        $this->commission = $commission;
+        $this->sold_price = $soldPrice;
+        $this->commission_before_discount = $commission;
+        $this->commission_discount_percent = 0;
+        $this->commission_discount_amount = 0;
+
+        return $this;
+    }
+
     public function getCurrentMaximumBidValue(
         $allBids,
         $bidHistory,

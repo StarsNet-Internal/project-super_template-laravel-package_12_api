@@ -86,15 +86,15 @@ trait ReadsParaqonConfiguration
         ];
     }
 
-    /** Scheme B: only estimate max */
-    protected function getLotEstimateMax(AuctionLot $lot): ?float
+    /** Use the lot's Reserved Price for high-value deposit tier matching. */
+    protected function getLotReservePrice(AuctionLot $lot): ?float
     {
-        $max = data_get($lot, 'bid_incremental_settings.estimate_price.max');
-        if (is_null($max) || $max === '') {
+        $reservePrice = $lot->reserve_price;
+        if (is_null($reservePrice) || $reservePrice === '') {
             return null;
         }
 
-        return (float) $max;
+        return (float) $reservePrice;
     }
 
     /**
@@ -135,12 +135,12 @@ trait ReadsParaqonConfiguration
             return $fallbackAmount;
         }
 
-        $estimateMax = $this->getLotEstimateMax($lot);
-        if (is_null($estimateMax)) {
+        $reservePrice = $this->getLotReservePrice($lot);
+        if (is_null($reservePrice)) {
             return $fallbackAmount;
         }
 
-        $tier = $this->matchTier($tiers, $estimateMax, 'min_value', 'max_value');
+        $tier = $this->matchTier($tiers, $reservePrice, 'min_value', 'max_value');
         if (is_null($tier)) {
             return $fallbackAmount;
         }

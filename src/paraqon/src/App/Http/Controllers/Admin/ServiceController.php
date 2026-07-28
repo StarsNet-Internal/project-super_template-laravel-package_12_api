@@ -590,6 +590,8 @@ class ServiceController extends Controller
         $totalCommissionBefore = 0;
         $totalCommissionDiscount = 0;
         $totalCommissionAfter = 0;
+        $itemSubtotalBeforeDiscount = 0;
+        $itemTotalAfterDiscount = 0;
 
         // Create ShoppingCartItem(s) from each AuctionLot
         foreach ($winningLots as $lot) {
@@ -599,20 +601,29 @@ class ServiceController extends Controller
             }
 
             $discounted = $this->applyBuyerCommissionDiscount($commission0, $discountPercent);
-            $commission = $discounted['commission'];
-            $soldPrice = (float) ($lot->current_bid ?? 0) + $commission;
+            $commissionAfterDiscount = $discounted['commission'];
+            $soldPriceBeforeDiscount =
+                (float) ($lot->current_bid ?? 0)
+                + $discounted['commission_before_discount'];
+            $soldPriceAfterDiscount =
+                $soldPriceBeforeDiscount
+                - $discounted['commission_discount_amount'];
 
+            // AuctionLot is public auction-result data. Keep buyer-specific VIP
+            // savings only on the Order and its cart items.
             $lot->update([
-                'commission' => $commission,
-                'sold_price' => $soldPrice,
+                'commission' => $discounted['commission_before_discount'],
+                'sold_price' => $soldPriceBeforeDiscount,
                 'commission_before_discount' => $discounted['commission_before_discount'],
-                'commission_discount_percent' => $discounted['commission_discount_percent'],
-                'commission_discount_amount' => $discounted['commission_discount_amount'],
+                'commission_discount_percent' => 0,
+                'commission_discount_amount' => 0,
             ]);
 
             $totalCommissionBefore += $discounted['commission_before_discount'];
             $totalCommissionDiscount += $discounted['commission_discount_amount'];
-            $totalCommissionAfter += $commission;
+            $totalCommissionAfter += $commissionAfterDiscount;
+            $itemSubtotalBeforeDiscount += $soldPriceBeforeDiscount;
+            $itemTotalAfterDiscount += $soldPriceAfterDiscount;
 
             $attributes = [
                 'store_id' => $store->_id,
@@ -621,8 +632,9 @@ class ServiceController extends Controller
                 'qty' => 1,
                 'lot_number' => $lot->lot_number,
                 'winning_bid' => $lot->current_bid,
-                'sold_price' => $soldPrice,
-                'commission' => $commission,
+                // sold_price remains the net item amount for legacy consumers.
+                'sold_price' => $soldPriceAfterDiscount,
+                'commission' => $commissionAfterDiscount,
                 'commission_before_discount' => $discounted['commission_before_discount'],
                 'commission_discount_percent' => $discounted['commission_discount_percent'],
                 'commission_discount_amount' => $discounted['commission_discount_amount'],
@@ -656,19 +668,9 @@ class ServiceController extends Controller
                 $item->global_discount = null;
             });
 
-        // Initialize calculation variables
-        $itemTotalPrice = 0;
-
-        // Update items and calculate total price
-        $cartItems->each(function ($item) use (&$itemTotalPrice) {
-            $item->is_checkout = true;
-            $item->is_refundable = false;
-            $item->global_discount = null;
-            $itemTotalPrice += $item->sold_price;
-        });
-
-        // Get total price
-        $orderTotalPrice = $itemTotalPrice;
+        // Buyer payable amount is gross lot total less the VIP commission
+        // discount. Public AuctionLot sold_price remains the gross total.
+        $orderTotalPrice = $itemTotalAfterDiscount;
 
         // Calculate totalCapturedDeposit
         $totalCustomerOnHoldDepositAmount = $deposits->sum('amount');
@@ -694,7 +696,7 @@ class ServiceController extends Controller
         $rawCalculation = [
             'currency' => 'HKD',
             'price' => [
-                'subtotal' => number_format($itemTotalPrice, 2, '.', ''),
+                'subtotal' => number_format($itemSubtotalBeforeDiscount, 2, '.', ''),
                 'total' => number_format($orderTotalPrice, 2, '.', '') // Deduct price_discount.local and .global
             ],
             'price_discount' => [

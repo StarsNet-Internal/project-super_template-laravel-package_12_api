@@ -80,6 +80,7 @@ class AuctionLotController extends Controller
             ->pluck('item_id')
             ->all();
         $auctionLot->is_watching = in_array($auctionLot->id, $watchingAuctionIDs, true);
+        $auctionLot->normalizePublicPricing();
 
         return $auctionLot;
     }
@@ -156,6 +157,7 @@ class AuctionLotController extends Controller
 
         foreach ($auctionLots as $auctionLot) {
             $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
+            $auctionLot->normalizePublicPricing();
         }
 
         return $auctionLots;
@@ -182,6 +184,7 @@ class AuctionLotController extends Controller
         // Calculate highest bid
         foreach ($auctionLots as $auctionLot) {
             $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
+            $auctionLot->normalizePublicPricing();
         }
 
         return $auctionLots;

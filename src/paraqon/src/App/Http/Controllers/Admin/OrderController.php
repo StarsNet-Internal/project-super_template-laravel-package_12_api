@@ -209,10 +209,52 @@ class OrderController extends Controller
 
         $itemsData = collect($document->cart_items)->map(function ($item) use ($language) {
             $hammerPrice = number_format($item->winning_bid, 2, '.', ',');
-            $commission = number_format($item->commission ?? 0, 2, '.', ',');
+            $commissionDiscountAmount = (float) data_get(
+                $item,
+                'commission_discount_amount',
+                0
+            );
+            $commissionBeforeDiscount = (float) (
+                data_get($item, 'commission_before_discount')
+                ?? ((float) data_get($item, 'commission', 0)
+                    + $commissionDiscountAmount)
+            );
+            $commissionDiscountPercent = (float) data_get(
+                $item,
+                'commission_discount_percent',
+                0
+            );
+            $commission = number_format(
+                $commissionBeforeDiscount,
+                2,
+                '.',
+                ','
+            );
             $otherFees = number_format(0, 2, '.', ',');
-            $totalOrSumValue = $item->sold_price ?? $item->winning_bid;
+            $totalOrSumValue =
+                (float) data_get(
+                    $item,
+                    'sold_price',
+                    data_get($item, 'winning_bid', 0)
+                )
+                + $commissionDiscountAmount;
             $totalOrSum = number_format($totalOrSumValue, 2, '.', ',');
+            $itemCommissionDiscount = $commissionDiscountAmount > 0
+                ? '(' . number_format(
+                    $commissionDiscountAmount,
+                    2,
+                    '.',
+                    ','
+                ) . ')' .
+                    ($commissionDiscountPercent > 0
+                        ? ' (' . number_format(
+                            $commissionDiscountPercent,
+                            2,
+                            '.',
+                            ''
+                        ) . '%)'
+                        : '')
+                : '0.00';
 
             return [
                 'lotNo' => $item->lot_number,
@@ -220,6 +262,7 @@ class OrderController extends Controller
                 'description' => $item->product_title[$language],
                 'hammerPrice' => $hammerPrice,
                 'commission' => $commission,
+                'commissionDiscount' => $itemCommissionDiscount,
                 'otherFees' => $otherFees,
                 'totalOrSum' => $totalOrSum,
             ];
@@ -227,7 +270,6 @@ class OrderController extends Controller
 
         $total = (float) $document->calculations['price']['total'];
         $deposit = (float) $document->calculations['deposit'];
-        $totalPrice = is_nan($total) || is_nan($deposit) ? NAN : number_format($total + $deposit, 2, '.', ',');
         $creditCardFee = (float) ($document->calculations['credit_card_charge_fee'] ?? 0);
         $creditCardPct = $document->calculations['credit_card_charge_percentage'] ?? null;
         $hasCreditCardCharge =
@@ -261,9 +303,20 @@ class OrderController extends Controller
         if ($commissionDiscountAmount > 0) {
             $amountFormatted = number_format($commissionDiscountAmount, 2, '.', ',');
             $commissionDiscountText = $commissionDiscountPercent !== null
-                ? "{$amountFormatted} ({$commissionDiscountPercent}%)"
-                : $amountFormatted;
+                ? "({$amountFormatted}) ({$commissionDiscountPercent}%)"
+                : "({$amountFormatted})";
         }
+        $totalPrice = is_nan($total) || is_nan($deposit)
+            ? NAN
+            : number_format(
+                $total
+                    + $deposit
+                    - $creditCardFee
+                    + $commissionDiscountAmount,
+                2,
+                '.',
+                ','
+            );
 
         // Construct entire data
         $newCustomerId = substr($customerId, -6);

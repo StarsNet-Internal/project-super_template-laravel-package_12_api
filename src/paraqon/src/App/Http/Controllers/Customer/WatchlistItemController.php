@@ -97,6 +97,7 @@ class WatchlistItemController extends Controller
 
             $auctionLot = $auctionLots->firstWhere('_id', $auctionLotID);
             if (!$auctionLot) continue;
+            $auctionLot->normalizePublicPricing();
 
             // Clone product data to avoid modifying the original (deep clone for MongoDB objects)
             $watchedItem = json_decode(json_encode($product), false);

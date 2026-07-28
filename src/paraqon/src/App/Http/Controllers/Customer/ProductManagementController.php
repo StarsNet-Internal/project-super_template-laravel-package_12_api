@@ -73,6 +73,7 @@ class ProductManagementController extends Controller
         foreach ($products as $product) {
             $auctionLotID = $product->auction_lot_id;
             $auctionLot = AuctionLot::find($auctionLotID);
+            $auctionLot->normalizePublicPricing();
 
             $product->current_bid = $auctionLot->getCurrentBidPrice();
             $product->is_reserve_price_met = $product->current_bid >= $product->reserve_price;
@@ -165,6 +166,7 @@ class ProductManagementController extends Controller
             function ($product)
             use ($auctionLots, $watchingAuctionIDs) {
                 $auctionLot = $auctionLots[$product->_id];
+                $auctionLot->normalizePublicPricing();
 
                 // Safely extract nested values with null checks
                 $bidSettings = $auctionLot->bid_incremental_settings ?? [];
@@ -264,6 +266,7 @@ class ProductManagementController extends Controller
             $products = $products->map(
                 function ($product) use ($auctionLots, $watchingAuctionIDs) {
                     $auctionLot = $auctionLots[$product->_id];
+                    $auctionLot->normalizePublicPricing();
                     $bidSettings = $auctionLot->bid_incremental_settings ?? [];
                     $estimatePrice = $bidSettings['estimate_price'] ?? [];
 
@@ -472,6 +475,7 @@ class ProductManagementController extends Controller
         foreach ($products as $product) {
             $auctionLotID = $product->auction_lot_id;
             $auctionLot = AuctionLot::find($auctionLotID);
+            $auctionLot->normalizePublicPricing();
 
             $product->current_bid = $auctionLot->getCurrentBidPrice();
             $product->is_reserve_price_met = $product->current_bid >= $product->reserve_price;

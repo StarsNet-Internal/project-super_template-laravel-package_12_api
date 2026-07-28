@@ -161,9 +161,68 @@ class AccountItemService
     ): Collection {
         if (count($relevantStoreIDs) === 0) return collect();
 
-        return Order::where('customer_id', $customerID)
+        $orders = Order::where('customer_id', $customerID)
             ->whereIn('store_id', $relevantStoreIDs)
             ->get();
+
+        return $this->collapsePaidOrderRelations($orders);
+    }
+
+    /**
+     * Auction checkout keeps both the system-generated scheduled order and the
+     * later payment order. The scheduled order points to the payment order via
+     * paid_order_id, and both orders contain the same purchased cart items.
+     *
+     * Keep both records in the database, but expose only the terminal payment
+     * order for each relation chain to Account Items. An unpaid scheduled order
+     * without a matching payment order remains visible.
+     */
+    private function collapsePaidOrderRelations(Collection $orders): Collection
+    {
+        $ordersByID = $orders->keyBy(
+            fn(Order $order) => (string) $order->_id
+        );
+
+        $paidOrderIDs = $orders
+            ->filter(function (Order $order) use ($ordersByID) {
+                $orderID = (string) $order->_id;
+                $paidOrderID = (string) ($order->paid_order_id ?? '');
+
+                return $paidOrderID !== ''
+                    && $paidOrderID !== $orderID
+                    && $ordersByID->has($paidOrderID);
+            })
+            ->map(fn(Order $order) => (string) $order->paid_order_id)
+            ->unique();
+
+        return $orders
+            ->reject(
+                fn(Order $order) => $paidOrderIDs->contains(
+                    (string) $order->_id
+                )
+            )
+            ->map(function (Order $order) use ($ordersByID) {
+                $visitedOrderIDs = [];
+
+                while (true) {
+                    $orderID = (string) $order->_id;
+                    if (isset($visitedOrderIDs[$orderID])) break;
+                    $visitedOrderIDs[$orderID] = true;
+
+                    $paidOrderID = (string) ($order->paid_order_id ?? '');
+                    if ($paidOrderID === ''
+                        || isset($visitedOrderIDs[$paidOrderID])
+                        || !$ordersByID->has($paidOrderID)) {
+                        break;
+                    }
+
+                    $order = $ordersByID->get($paidOrderID);
+                }
+
+                return $order;
+            })
+            ->unique(fn(Order $order) => (string) $order->_id)
+            ->values();
     }
 
     private function getOrdersForProducts(
@@ -174,9 +233,11 @@ class AccountItemService
             return collect();
         }
 
-        return Order::whereIn('store_id', $relevantStoreIDs)
+        $orders = Order::whereIn('store_id', $relevantStoreIDs)
             ->whereIn('cart_items.product_id', $productIDs)
             ->get();
+
+        return $this->collapsePaidOrderRelations($orders);
     }
 
     private function getProductIDsFromOrders(Collection $orders): array
@@ -277,7 +338,8 @@ class AccountItemService
                     $orderEntry['item'] ?? null,
                     'sold',
                     $context,
-                    true
+                    includeSettlement: true,
+                    useOrderPurpose: true
                 );
             });
     }
@@ -298,7 +360,8 @@ class AccountItemService
                         $order,
                         $orderItem,
                         'buy',
-                        $context
+                        $context,
+                        useOrderPurpose: true
                     );
                 });
         });
@@ -310,7 +373,8 @@ class AccountItemService
         $orderItem,
         string $channel,
         array $context,
-        bool $includeSettlement = false
+        bool $includeSettlement = false,
+        bool $useOrderPurpose = false
     ): array {
         $productID = (string) ($product?->_id ?? data_get($orderItem, 'product_id', ''));
         $lots = $context['lots_by_product']->get($productID, collect());
@@ -318,7 +382,14 @@ class AccountItemService
         $store = is_null($order)
             ? $context['stores']['by_id']->get((string) ($lot?->store_id ?? ''))
             : $context['stores']['by_id']->get((string) $order->store_id);
-        $purpose = $this->getPurpose($product, $order, $lot, $store, $context['stores']);
+        $purpose = $this->getPurpose(
+            $product,
+            $order,
+            $lot,
+            $store,
+            $context['stores'],
+            $useOrderPurpose
+        );
         $variant = $context['variants_by_product']->get($productID);
         $histories = $context['histories_by_product']->get($productID, collect());
         $documents = $context['documents_by_product']->get($productID, collect());
@@ -353,6 +424,15 @@ class AccountItemService
         $paymentTimestampSource = $includeSettlement && $hasSettlement
             ? $settlementDocument
             : $checkout;
+        $paymentReceipt = $includeSettlement
+            ? $this->getSettlementPaymentReceipt($settlementDocument)
+            : (
+                $channel === 'buy'
+                    && !is_null($order)
+                    && (bool) $order->is_paid
+                ? data_get($order, 'documents.payment_receipt')
+                : null
+            );
         $agreementReference = data_get($agreement, 'document.statement_no');
         $settlementReference = $settlementDocument?->reference_no;
         if (empty($settlementReference)) {
@@ -378,6 +458,7 @@ class AccountItemService
             'history' => $histories->values()->map(
                 fn(LocationHistory $history) => $history->toArray()
             )->all(),
+            'documents' => $paymentReceipt,
             'price' => $price,
             'reserve_price' => $price,
             'contract_reference' => $includeSettlement
@@ -412,8 +493,18 @@ class AccountItemService
         ?Order $order,
         ?AuctionLot $lot,
         ?Store $store,
-        array $stores
+        array $stores,
+        bool $useOrderPurpose
     ): string {
+        if ($useOrderPurpose && !is_null($order)) {
+            if (!empty($store?->auction_type)) return 'AUCTION';
+
+            $isVaultOrder = !is_null($stores['main_id'])
+                && (string) $order->store_id === $stores['main_id'];
+
+            return $isVaultOrder ? 'THE_VAULT' : 'PRIVATE_SALE';
+        }
+
         $isAuction = !empty($store?->auction_type)
             || (is_null($order) && !is_null($lot));
 
@@ -501,6 +592,26 @@ class AccountItemService
         return $documents->first(
             fn(array $entry) => $entry['document']->type === $type
         );
+    }
+
+    private function getSettlementPaymentReceipt(
+        ?Document $settlementDocument
+    ): ?array {
+        if (is_null($settlementDocument)) return null;
+
+        $receipt = collect($settlementDocument->documents ?? [])->first(
+            fn($document) =>
+                data_get($document, 'type') === 'PAYMENT_RECEIPT'
+                && !empty(data_get($document, 'url'))
+        );
+        $url = data_get($receipt, 'url');
+        if (empty($url)) return null;
+
+        return [
+            'en' => $url,
+            'zh' => $url,
+            'cn' => $url,
+        ];
     }
 
     private function getHammerPrice($orderItem, string $purpose): ?float

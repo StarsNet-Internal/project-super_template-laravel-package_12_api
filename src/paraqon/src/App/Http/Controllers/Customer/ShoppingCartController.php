@@ -63,6 +63,52 @@ class ShoppingCartController extends Controller
         return [$percentage, $fee];
     }
 
+    private function applyAuctionOrderPricing(
+        $item,
+        ?AuctionLot $lot
+    ): float {
+        $discountAmount = (float) ($item->commission_discount_amount ?? 0);
+        $discountPercent = (float) ($item->commission_discount_percent ?? 0);
+        $storedCommission = $item->commission;
+        $commissionBeforeDiscount = (float) (
+            $item->commission_before_discount
+            ?? (!is_null($storedCommission)
+                ? (float) $storedCommission + $discountAmount
+                : ($lot?->commission ?? $item->commission ?? 0))
+        );
+        $commissionAfterDiscount = (float) (
+            $storedCommission
+            ?? max(0, $commissionBeforeDiscount - $discountAmount)
+        );
+
+        $storedSoldPrice = $item->sold_price;
+        $soldPriceBeforeDiscount = (float) (
+            !is_null($storedSoldPrice)
+                ? (float) $storedSoldPrice + $discountAmount
+                : ($lot?->sold_price
+                    ?? ((float) ($lot?->current_bid ?? 0)
+                        + $commissionBeforeDiscount))
+        );
+        $soldPriceAfterDiscount = (float) (
+            $storedSoldPrice
+            ?? max(0, $soldPriceBeforeDiscount - $discountAmount)
+        );
+
+        $item->winning_bid = (float) (
+            $item->winning_bid
+            ?? $lot?->current_bid
+            ?? 0
+        );
+        // sold_price remains net for legacy checkout consumers.
+        $item->sold_price = $soldPriceAfterDiscount;
+        $item->commission = $commissionAfterDiscount;
+        $item->commission_before_discount = $commissionBeforeDiscount;
+        $item->commission_discount_percent = $discountPercent;
+        $item->commission_discount_amount = $discountAmount;
+
+        return $soldPriceBeforeDiscount;
+    }
+
     public function getAllAuctionCartItems(Request $request): array
     {
         // Extract attributes from $request
@@ -71,7 +117,6 @@ class ShoppingCartController extends Controller
 
         // Get authenticated User information
         $customer = $this->customer();
-
         // Get ShoppingCartItem(s)
         $cartItems = ShoppingCartItem::where('customer_id', $customer->id)
             ->where('store_id', $store->id)
@@ -121,20 +166,13 @@ class ShoppingCartController extends Controller
                 ->where('product_id', $item->product_id)
                 ->first();
 
-            // Calculations
-            // $winningBid = (float) $item->winning_bid ?? 0;
-            $winningBid = (float) optional($lot)->current_bid ?? 0;
-            $item->winning_bid = $winningBid;
-
-            // Add new keys
-            $item->sold_price = optional($lot)->sold_price ?? optional($lot)->current_bid;
-            $item->commission = optional($lot)->commission ?? 0;
-            $item->commission_before_discount = optional($lot)->commission_before_discount ?? $item->commission;
-            $item->commission_discount_percent = optional($lot)->commission_discount_percent ?? 0;
-            $item->commission_discount_amount = optional($lot)->commission_discount_amount ?? 0;
+            $soldPriceBeforeDiscount = $this->applyAuctionOrderPricing(
+                $item,
+                $lot
+            );
 
             if ($item->is_checkout) {
-                $subtotalPrice += $item->sold_price;
+                $subtotalPrice += $soldPriceBeforeDiscount;
             }
 
             // Service Charge
@@ -156,7 +194,18 @@ class ShoppingCartController extends Controller
                 }
             }
         }
-        $totalPrice = $subtotalPrice + $totalServiceCharge;
+        $selectedCartItems = $cartItems->filter(fn($item) => $item->is_checkout);
+        $commissionBeforeDiscount = (float) $selectedCartItems->sum('commission_before_discount');
+        $commissionDiscountAmount = (float) $selectedCartItems->sum('commission_discount_amount');
+        $commissionDiscountPercent = (float) ($selectedCartItems
+            ->first(fn($item) => (float) ($item->commission_discount_percent ?? 0) > 0)
+            ?->commission_discount_percent ?? 0);
+        $commissionAfterDiscount = (float) $selectedCartItems->sum('commission');
+
+        $totalPrice =
+            $subtotalPrice
+            + $totalServiceCharge
+            - $commissionDiscountAmount;
 
         // get shippingFee
         $courier = Courier::find($courierID);
@@ -185,14 +234,6 @@ class ShoppingCartController extends Controller
             $request
         );
         $totalPrice = max(0, $totalPrice - $globalPriceDiscount);
-
-        $selectedCartItems = $cartItems->filter(fn($item) => $item->is_checkout);
-        $commissionBeforeDiscount = (float) $selectedCartItems->sum('commission_before_discount');
-        $commissionDiscountAmount = (float) $selectedCartItems->sum('commission_discount_amount');
-        $commissionDiscountPercent = (float) ($selectedCartItems
-            ->first(fn($item) => (float) ($item->commission_discount_percent ?? 0) > 0)
-            ?->commission_discount_percent ?? 0);
-        $commissionAfterDiscount = (float) $selectedCartItems->sum('commission');
 
         // Cart preview defaults to ONLINE for backward compatibility.
         $paymentMethod = $request->input('payment_method', CheckoutType::ONLINE->value);
@@ -419,20 +460,13 @@ class ShoppingCartController extends Controller
             // Add keys
             $item->lot_number = $lot->lot_number;
 
-            // Calculations
-            // $winningBid = (float) $item->winning_bid ?? 0;
-            $winningBid = (float) optional($lot)->current_bid ?? 0;
-            $item->winning_bid = $winningBid;
-
-            // Add new keys
-            $item->sold_price = optional($lot)->sold_price ?? optional($lot)->current_bid;
-            $item->commission = optional($lot)->commission ?? 0;
-            $item->commission_before_discount = optional($lot)->commission_before_discount ?? $item->commission;
-            $item->commission_discount_percent = optional($lot)->commission_discount_percent ?? 0;
-            $item->commission_discount_amount = optional($lot)->commission_discount_amount ?? 0;
+            $soldPriceBeforeDiscount = $this->applyAuctionOrderPricing(
+                $item,
+                $lot
+            );
 
             if ($item->is_checkout) {
-                $subtotalPrice += $item->sold_price;
+                $subtotalPrice += $soldPriceBeforeDiscount;
             }
 
             // Shipping Fee
@@ -454,7 +488,18 @@ class ShoppingCartController extends Controller
                 }
             }
         }
-        $totalPrice = $subtotalPrice + $totalServiceCharge;
+        $selectedCartItems = $cartItems->filter(fn($item) => $item->is_checkout);
+        $commissionBeforeDiscount = (float) $selectedCartItems->sum('commission_before_discount');
+        $commissionDiscountAmount = (float) $selectedCartItems->sum('commission_discount_amount');
+        $commissionDiscountPercent = (float) ($selectedCartItems
+            ->first(fn($item) => (float) ($item->commission_discount_percent ?? 0) > 0)
+            ?->commission_discount_percent ?? 0);
+        $commissionAfterDiscount = (float) $selectedCartItems->sum('commission');
+
+        $totalPrice =
+            $subtotalPrice
+            + $totalServiceCharge
+            - $commissionDiscountAmount;
 
         // get shippingFee
         $courier = Courier::find($courierID);
@@ -481,14 +526,6 @@ class ShoppingCartController extends Controller
             $request
         );
         $totalPrice = max(0, $totalPrice - $globalPriceDiscount);
-
-        $selectedCartItems = $cartItems->filter(fn($item) => $item->is_checkout);
-        $commissionBeforeDiscount = (float) $selectedCartItems->sum('commission_before_discount');
-        $commissionDiscountAmount = (float) $selectedCartItems->sum('commission_discount_amount');
-        $commissionDiscountPercent = (float) ($selectedCartItems
-            ->first(fn($item) => (float) ($item->commission_discount_percent ?? 0) > 0)
-            ?->commission_discount_percent ?? 0);
-        $commissionAfterDiscount = (float) $selectedCartItems->sum('commission');
 
         // Credit-card charge applies only to ONLINE checkout; Deposit never uses this.
         [$creditCardChargePercentage, $creditCardChargeFee] =
