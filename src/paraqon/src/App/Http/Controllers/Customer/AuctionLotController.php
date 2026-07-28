@@ -310,43 +310,23 @@ class AuctionLotController extends Controller
                 ], 400);
             }
 
-            // Validate that the bid amount aligns with the lot's bidding increment.
-            // Mirrors the customer site's isValidIncrement(): the base price is the
-            // starting price for the first bid, otherwise current_bid + increment,
-            // and the bid must land exactly on an increment step from that base.
+            // Validate that the bid is one of the values the customer site offers in
+            // its bid dropdown, so a bid crafted outside the UI cannot land between
+            // two options. See findNextBidOption() for how the options are built.
             if (!empty($incrementRules)) {
-                $matchedInterval = null;
-                foreach ($incrementRules as $interval) {
-                    $to = $interval['to'] ?? null;
-                    if ($request->bid >= $interval['from'] && (is_null($to) || $request->bid < $to)) {
-                        $matchedInterval = $interval;
-                        break;
-                    }
-                }
-                if (is_null($matchedInterval)) {
-                    $matchedInterval = $incrementRules[count($incrementRules) - 1];
-                }
+                $nextBidOption = $this->findNextBidOption(
+                    $incrementRules,
+                    (float) $currentBid,
+                    !$isBidPlaced,
+                    (float) $request->bid
+                );
 
-                $incrementValue = (float) $matchedInterval['increment'];
-                if ($incrementValue > 0) {
-                    $basePrice = $isBidPlaced
-                        ? max($currentBid + $incrementValue, (float) $matchedInterval['from'])
-                        : max((float) $auctionLot->starting_price, (float) $matchedInterval['from']);
-
-                    $diff = $request->bid - $basePrice;
-                    $remainder = fmod($diff, $incrementValue);
-                    $isAligned = $diff >= 0
-                        && (abs($remainder) < 0.01 || abs($remainder - $incrementValue) < 0.01);
-
-                    if (!$isAligned) {
-                        $steps = $diff < 0 ? 0 : floor(($diff / $incrementValue) + 0.0001);
-                        $suggestedBid = $basePrice + (($steps + 1) * $incrementValue);
-                        return response()->json([
-                            'message' => 'Your bid must align with the bidding increment of ' . $incrementValue . '. Try ' . $suggestedBid . '.',
-                            'error_status' => 5,
-                            'bid' => $suggestedBid
-                        ], 400);
-                    }
+                if (!is_null($nextBidOption) && abs($nextBidOption - (float) $request->bid) >= 0.01) {
+                    return response()->json([
+                        'message' => 'Your bid must align with the bidding increment. Try ' . $nextBidOption . '.',
+                        'error_status' => 5,
+                        'bid' => $nextBidOption
+                    ], 400);
                 }
             }
 
@@ -611,43 +591,23 @@ class AuctionLotController extends Controller
                 ], 400);
             }
 
-            // Validate that the bid amount aligns with the lot's bidding increment.
-            // Mirrors the customer site's isValidIncrement(): the base price is the
-            // starting price for the first bid, otherwise current_bid + increment,
-            // and the bid must land exactly on an increment step from that base.
+            // Validate that the bid is one of the values the customer site offers in
+            // its bid dropdown, so a bid crafted outside the UI cannot land between
+            // two options. See findNextBidOption() for how the options are built.
             if (!empty($incrementRules)) {
-                $matchedInterval = null;
-                foreach ($incrementRules as $interval) {
-                    $to = $interval['to'] ?? null;
-                    if ($request->bid >= $interval['from'] && (is_null($to) || $request->bid < $to)) {
-                        $matchedInterval = $interval;
-                        break;
-                    }
-                }
-                if (is_null($matchedInterval)) {
-                    $matchedInterval = $incrementRules[count($incrementRules) - 1];
-                }
+                $nextBidOption = $this->findNextBidOption(
+                    $incrementRules,
+                    (float) $currentBid,
+                    !$isBidPlaced,
+                    (float) $request->bid
+                );
 
-                $incrementValue = (float) $matchedInterval['increment'];
-                if ($incrementValue > 0) {
-                    $basePrice = $isBidPlaced
-                        ? max($currentBid + $incrementValue, (float) $matchedInterval['from'])
-                        : max((float) $auctionLot->starting_price, (float) $matchedInterval['from']);
-
-                    $diff = $request->bid - $basePrice;
-                    $remainder = fmod($diff, $incrementValue);
-                    $isAligned = $diff >= 0
-                        && (abs($remainder) < 0.01 || abs($remainder - $incrementValue) < 0.01);
-
-                    if (!$isAligned) {
-                        $steps = $diff < 0 ? 0 : floor(($diff / $incrementValue) + 0.0001);
-                        $suggestedBid = $basePrice + (($steps + 1) * $incrementValue);
-                        return response()->json([
-                            'message' => 'Your bid must align with the bidding increment of ' . $incrementValue . '. Try ' . $suggestedBid . '.',
-                            'error_status' => 5,
-                            'bid' => $suggestedBid
-                        ], 400);
-                    }
+                if (!is_null($nextBidOption) && abs($nextBidOption - (float) $request->bid) >= 0.01) {
+                    return response()->json([
+                        'message' => 'Your bid must align with the bidding increment. Try ' . $nextBidOption . '.',
+                        'error_status' => 5,
+                        'bid' => $nextBidOption
+                    ], 400);
                 }
             }
 
@@ -849,5 +809,66 @@ class AuctionLotController extends Controller
             'message' => 'Created New maximum Bid successfully',
             '_id' => $bid->_id
         ], 200);
+    }
+
+    /**
+     * Find the lowest bid option greater than or equal to $requestedBid.
+     *
+     * This reproduces getBidIncrements() in the customer site's bid mixin
+     * (app/mixins/product/bid.js), which fills the bid dropdown by walking up
+     * from the current bid, each step adding the increment of whichever interval
+     * the running value currently sits in. The walk is cumulative, so the options
+     * are not simply multiples of a single interval's increment: from a current
+     * bid of 800 it yields 900, 1000, 2000, ... 10000, 20000, ... 100000, 150000.
+     *
+     * When the walk lands exactly on $requestedBid the bid came from the dropdown.
+     * Anything in between (a 901 posted straight to the API, say) resolves to the
+     * next option up, which the caller returns as the suggested bid.
+     *
+     * The frontend's maxOptions cap is deliberately not applied here: it limits
+     * how many entries the dropdown renders, not which bids are legitimate.
+     *
+     * Returns null when the rules cannot produce any option, in which case the
+     * caller skips increment validation rather than rejecting a valid bid.
+     */
+    private function findNextBidOption(
+        array $incrementRules,
+        float $startingValue,
+        bool $isStartingValueBidable,
+        float $requestedBid
+    ): ?float {
+        // Guards a malformed rule set from spinning for an unbounded time
+        $maximumSteps = 1000000;
+
+        // On the first bid the dropdown also offers the starting price itself
+        if ($isStartingValueBidable && $requestedBid <= $startingValue + 0.01) {
+            return $startingValue;
+        }
+
+        $currentValue = $startingValue;
+        $lastOption = null;
+        $steps = 0;
+
+        foreach ($incrementRules as $interval) {
+            $to = isset($interval['to']) ? (float) $interval['to'] : INF;
+            $increment = (float) ($interval['increment'] ?? 0);
+
+            // A non-positive increment would never advance the walk
+            if ($increment <= 0) continue;
+            if ($currentValue >= $to) continue;
+
+            while ($currentValue < $to) {
+                if (++$steps > $maximumSteps) return null;
+
+                $currentValue += $increment;
+                if ($currentValue <= $startingValue) continue;
+
+                $lastOption = $currentValue;
+                if ($currentValue >= $requestedBid - 0.01) return $currentValue;
+            }
+        }
+
+        // Bid sits above every option the rules can generate
+        return $lastOption;
     }
 }
