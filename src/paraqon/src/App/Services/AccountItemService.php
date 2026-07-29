@@ -37,13 +37,21 @@ class AccountItemService
             : $this->getSellerDocuments($customerID);
 
         if ($scope === 'purchased') {
-            $orders = $this->getCustomerOrders($customerID, $stores['relevant_ids']);
+            $orders = $this->getCustomerOrders(
+                $customerID,
+                $stores['relevant_ids'],
+                $stores['auction_ids']
+            );
             $productIDs = $this->getProductIDsFromOrders($orders);
             $products = $this->getProducts($productIDs);
         } else {
             $productIDs = $this->getSellerProductIDs($customerID, $documents);
             $products = $this->getProducts($productIDs);
-            $orders = $this->getOrdersForProducts($productIDs, $stores['relevant_ids']);
+            $orders = $this->getOrdersForProducts(
+                $productIDs,
+                $stores['relevant_ids'],
+                $stores['auction_ids']
+            );
         }
 
         $context = $this->buildContext(
@@ -89,6 +97,9 @@ class AccountItemService
 
         return [
             'main_id' => is_null($mainStore) ? null : (string) $mainStore->_id,
+            'auction_ids' => $auctionStores
+                ->map(fn(Store $store) => (string) $store->_id)
+                ->all(),
             'vault_category_ids' => $vaultCategoryIDs,
             'relevant_ids' => $relevantStores
                 ->map(fn(Store $store) => (string) $store->_id)
@@ -157,7 +168,8 @@ class AccountItemService
 
     private function getCustomerOrders(
         string $customerID,
-        array $relevantStoreIDs
+        array $relevantStoreIDs,
+        array $auctionStoreIDs
     ): Collection {
         if (count($relevantStoreIDs) === 0) return collect();
 
@@ -165,69 +177,69 @@ class AccountItemService
             ->whereIn('store_id', $relevantStoreIDs)
             ->get();
 
-        return $this->collapsePaidOrderRelations($orders);
+        return $this->collapseAuctionOrderGroups($orders, $auctionStoreIDs);
     }
 
     /**
-     * Auction checkout keeps both the system-generated scheduled order and the
-     * later payment order. The scheduled order points to the payment order via
-     * paid_order_id, and both orders contain the same purchased cart items.
+     * Mirror the Admin Auction Orders pairing rule. Auction checkout keeps a
+     * system order plus one or more non-system payment attempts without a
+     * reliable paid_order_id relation. Admin pairs them by store and customer,
+     * ignores unpaid online attempts, and uses the latest eligible non-system
+     * order; otherwise it keeps the latest system order.
      *
-     * Keep both records in the database, but expose only the terminal payment
-     * order for each relation chain to Account Items. An unpaid scheduled order
-     * without a matching payment order remains visible.
+     * Do not apply this grouping to The Vault or Private Sale because repeated
+     * orders in those stores are independent purchases.
      */
-    private function collapsePaidOrderRelations(Collection $orders): Collection
-    {
-        $ordersByID = $orders->keyBy(
-            fn(Order $order) => (string) $order->_id
+    private function collapseAuctionOrderGroups(
+        Collection $orders,
+        array $auctionStoreIDs
+    ): Collection {
+        $auctionStoreIDs = collect($auctionStoreIDs)
+            ->map(fn($id) => (string) $id);
+        [$auctionOrders, $otherOrders] = $orders->partition(
+            fn(Order $order) => $auctionStoreIDs->contains(
+                (string) $order->store_id
+            )
         );
 
-        $paidOrderIDs = $orders
-            ->filter(function (Order $order) use ($ordersByID) {
-                $orderID = (string) $order->_id;
-                $paidOrderID = (string) ($order->paid_order_id ?? '');
-
-                return $paidOrderID !== ''
-                    && $paidOrderID !== $orderID
-                    && $ordersByID->has($paidOrderID);
-            })
-            ->map(fn(Order $order) => (string) $order->paid_order_id)
-            ->unique();
-
-        return $orders
-            ->reject(
-                fn(Order $order) => $paidOrderIDs->contains(
-                    (string) $order->_id
-                )
+        $selectedAuctionOrders = $auctionOrders
+            ->groupBy(
+                fn(Order $order) =>
+                    (string) $order->store_id
+                    . ':'
+                    . (string) $order->customer_id
             )
-            ->map(function (Order $order) use ($ordersByID) {
-                $visitedOrderIDs = [];
+            ->map(function (Collection $group): ?Order {
+                $latestManualOrder = $group
+                    ->filter(fn(Order $order) => !(bool) $order->is_system)
+                    ->reject(
+                        fn(Order $order) =>
+                            $order->payment_method === 'ONLINE'
+                            && !(bool) $order->is_paid
+                    )
+                    ->sortByDesc('created_at')
+                    ->first();
 
-                while (true) {
-                    $orderID = (string) $order->_id;
-                    if (isset($visitedOrderIDs[$orderID])) break;
-                    $visitedOrderIDs[$orderID] = true;
-
-                    $paidOrderID = (string) ($order->paid_order_id ?? '');
-                    if ($paidOrderID === ''
-                        || isset($visitedOrderIDs[$paidOrderID])
-                        || !$ordersByID->has($paidOrderID)) {
-                        break;
-                    }
-
-                    $order = $ordersByID->get($paidOrderID);
+                if (!is_null($latestManualOrder)) {
+                    return $latestManualOrder;
                 }
 
-                return $order;
+                return $group
+                    ->filter(fn(Order $order) => (bool) $order->is_system)
+                    ->sortByDesc('created_at')
+                    ->first();
             })
-            ->unique(fn(Order $order) => (string) $order->_id)
+            ->filter();
+
+        return $otherOrders
+            ->concat($selectedAuctionOrders)
             ->values();
     }
 
     private function getOrdersForProducts(
         array $productIDs,
-        array $relevantStoreIDs
+        array $relevantStoreIDs,
+        array $auctionStoreIDs
     ): Collection {
         if (count($productIDs) === 0 || count($relevantStoreIDs) === 0) {
             return collect();
@@ -237,7 +249,7 @@ class AccountItemService
             ->whereIn('cart_items.product_id', $productIDs)
             ->get();
 
-        return $this->collapsePaidOrderRelations($orders);
+        return $this->collapseAuctionOrderGroups($orders, $auctionStoreIDs);
     }
 
     private function getProductIDsFromOrders(Collection $orders): array
