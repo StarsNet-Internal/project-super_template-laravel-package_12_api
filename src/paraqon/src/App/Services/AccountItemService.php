@@ -80,8 +80,11 @@ class AccountItemService
         $mainStore = $this->getStoreByAliasOrSlug('default-main-store');
         $privateSaleStore = $this->getStoreByAliasOrSlug('private-sale-store');
         $auctionStores = Store::whereNotNull('auction_type')->get();
+        $auctionStoreIDs = $auctionStores
+            ->map(fn(Store $store) => (string) $store->_id)
+            ->all();
 
-        $relevantStores = $auctionStores
+        $relevantStores = collect($auctionStores->all())
             ->when($mainStore, fn(Collection $items) => $items->push($mainStore))
             ->when($privateSaleStore, fn(Collection $items) => $items->push($privateSaleStore))
             ->unique(fn(Store $store) => (string) $store->_id)
@@ -97,9 +100,7 @@ class AccountItemService
 
         return [
             'main_id' => is_null($mainStore) ? null : (string) $mainStore->_id,
-            'auction_ids' => $auctionStores
-                ->map(fn(Store $store) => (string) $store->_id)
-                ->all(),
+            'auction_ids' => $auctionStoreIDs,
             'vault_category_ids' => $vaultCategoryIDs,
             'relevant_ids' => $relevantStores
                 ->map(fn(Store $store) => (string) $store->_id)
