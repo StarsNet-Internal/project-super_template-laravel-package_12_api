@@ -65,13 +65,25 @@ class ShoppingCartController extends Controller
 
     private function applyAuctionOrderPricing(
         $item,
-        ?AuctionLot $lot
+        ?AuctionLot $lot,
+        $systemOrderItem = null
     ): float {
-        $discountAmount = (float) ($item->commission_discount_amount ?? 0);
-        $discountPercent = (float) ($item->commission_discount_percent ?? 0);
-        $storedCommission = $item->commission;
+        $discountAmount = (float) (
+            data_get($systemOrderItem, 'commission_discount_amount')
+            ?? $item->commission_discount_amount
+            ?? 0
+        );
+        $discountPercent = (float) (
+            data_get($systemOrderItem, 'commission_discount_percent')
+            ?? $item->commission_discount_percent
+            ?? 0
+        );
+        $storedCommission = data_get($systemOrderItem, 'commission')
+            ?? data_get($systemOrderItem, 'commisssion')
+            ?? $item->commission;
         $commissionBeforeDiscount = (float) (
-            $item->commission_before_discount
+            data_get($systemOrderItem, 'commission_before_discount')
+            ?? $item->commission_before_discount
             ?? (!is_null($storedCommission)
                 ? (float) $storedCommission + $discountAmount
                 : ($lot?->commission ?? $item->commission ?? 0))
@@ -81,7 +93,8 @@ class ShoppingCartController extends Controller
             ?? max(0, $commissionBeforeDiscount - $discountAmount)
         );
 
-        $storedSoldPrice = $item->sold_price;
+        $storedSoldPrice = data_get($systemOrderItem, 'sold_price')
+            ?? $item->sold_price;
         $soldPriceBeforeDiscount = (float) (
             !is_null($storedSoldPrice)
                 ? (float) $storedSoldPrice + $discountAmount
@@ -95,7 +108,8 @@ class ShoppingCartController extends Controller
         );
 
         $item->winning_bid = (float) (
-            $item->winning_bid
+            data_get($systemOrderItem, 'winning_bid')
+            ?? $item->winning_bid
             ?? $lot?->current_bid
             ?? 0
         );
@@ -109,6 +123,21 @@ class ShoppingCartController extends Controller
         return $soldPriceBeforeDiscount;
     }
 
+    private function getSystemOrderItem(?Order $systemOrder, $cartItem)
+    {
+        $items = collect($systemOrder?->cart_items ?? []);
+        $variantID = (string) $cartItem->product_variant_id;
+
+        return $items->first(
+            fn($item) =>
+                (string) data_get($item, 'product_variant_id') === $variantID
+        ) ?? $items->first(
+            fn($item) =>
+                (string) data_get($item, 'product_id')
+                    === (string) $cartItem->product_id
+        );
+    }
+
     public function getAllAuctionCartItems(Request $request): array
     {
         // Extract attributes from $request
@@ -117,6 +146,11 @@ class ShoppingCartController extends Controller
 
         // Get authenticated User information
         $customer = $this->customer();
+        $systemOrder = Order::where('store_id', $store->id)
+            ->where('customer_id', $customer->_id)
+            ->where('is_system', true)
+            ->latest()
+            ->first();
         // Get ShoppingCartItem(s)
         $cartItems = ShoppingCartItem::where('customer_id', $customer->id)
             ->where('store_id', $store->id)
@@ -168,7 +202,8 @@ class ShoppingCartController extends Controller
 
             $soldPriceBeforeDiscount = $this->applyAuctionOrderPricing(
                 $item,
-                $lot
+                $lot,
+                $this->getSystemOrderItem($systemOrder, $item)
             );
 
             if ($item->is_checkout) {
@@ -214,11 +249,7 @@ class ShoppingCartController extends Controller
             : 0;
         $totalPrice += $shippingFee;
 
-        // Find system order
-        $systemOrder = Order::where('store_id', $store->id)
-            ->where('customer_id', $customer->_id)
-            ->where('is_system', true)
-            ->first();
+        // Apply the deposit captured against the system auction order.
         $systemOrderDeposit = 0;
         if (!is_null($systemOrder)) {
             $systemOrderDeposit = $systemOrder->calculations['deposit'];
@@ -401,6 +432,11 @@ class ShoppingCartController extends Controller
         // Get authenticated User information
         $customer = $this->customer();
         $checkoutVariantIDs = $request->checkout_product_variant_ids;
+        $systemOrder = Order::where('store_id', $store->id)
+            ->where('customer_id', $customer->_id)
+            ->where('is_system', true)
+            ->latest()
+            ->first();
 
         // Get ShoppingCartItem(s)
         $cartItems = ShoppingCartItem::where('customer_id', $customer->id)
@@ -462,7 +498,8 @@ class ShoppingCartController extends Controller
 
             $soldPriceBeforeDiscount = $this->applyAuctionOrderPricing(
                 $item,
-                $lot
+                $lot,
+                $this->getSystemOrderItem($systemOrder, $item)
             );
 
             if ($item->is_checkout) {
@@ -509,12 +546,12 @@ class ShoppingCartController extends Controller
             0;
         $totalPrice += $shippingFee;
 
-        // Find system order
-        $systemOrder = Order::where('store_id', $store->id)
-            ->where('customer_id', $customer->_id)
-            ->where('is_system', true)
-            ->first();
-        $systemOrderDeposit = $systemOrder->calculations['deposit'];
+        // Apply the deposit captured against the system auction order.
+        $systemOrderDeposit = (float) data_get(
+            $systemOrder,
+            'calculations.deposit',
+            0
+        );
 
         // Update total price
         $totalPrice -= $systemOrderDeposit;

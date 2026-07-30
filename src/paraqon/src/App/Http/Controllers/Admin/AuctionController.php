@@ -93,7 +93,7 @@ class AuctionController extends Controller
             ->get()
             ->each(function ($customer) use ($registeredCustomers) {
                 $customer->paddle_id = $registeredCustomers[$customer->id]->paddle_id ?? '';
-                $customer->has_vault_subscription = $this->customerHasVaultSubscription($customer);
+                $customer->has_vault_subscription = $this->customerHasVaultBuyerVip($customer);
                 $customer->unsetRelation('groups');
             });
     }

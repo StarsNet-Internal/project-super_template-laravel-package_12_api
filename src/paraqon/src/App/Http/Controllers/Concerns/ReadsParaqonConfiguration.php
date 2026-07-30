@@ -166,4 +166,21 @@ trait ReadsParaqonConfiguration
 
         return false;
     }
+
+    protected function customerHasVaultBuyerVip($customer): bool
+    {
+        if (is_null($customer)) {
+            return false;
+        }
+
+        $groups = $customer->relationLoaded('groups')
+            ? $customer->getRelation('groups')
+            : $customer->groups()->statusActive()->get(['slug']);
+
+        return $groups->contains(
+            fn($group) =>
+                strtolower((string) ($group->slug ?? ''))
+                    === 'the-vault-buyer-vip'
+        );
+    }
 }

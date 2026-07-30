@@ -584,7 +584,7 @@ class ServiceController extends Controller
         $orderTotalHammer = (float) $winningLots->sum(function ($lot) {
             return (float) ($lot->current_bid ?? 0);
         });
-        $discountPercent = $this->customerHasVaultSubscription($customer)
+        $discountPercent = $this->customerHasVaultBuyerVip($customer)
             ? $this->getBuyerCommissionDiscountPercent($orderTotalHammer)
             : 0;
         $totalCommissionBefore = 0;
