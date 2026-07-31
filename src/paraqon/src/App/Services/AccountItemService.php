@@ -47,6 +47,14 @@ class AccountItemService
         } else {
             $productIDs = $this->getSellerProductIDs($customerID, $documents);
             $products = $this->getProducts($productIDs);
+            if ($scope === 'selling') {
+                $products = $products
+                    ->where('status', '!=', Status::DRAFT->value)
+                    ->values();
+                $productIDs = $products
+                    ->map(fn(Product $product) => (string) $product->_id)
+                    ->all();
+            }
             $orders = $this->getOrdersForProducts(
                 $productIDs,
                 $stores['relevant_ids'],
@@ -432,7 +440,7 @@ class AccountItemService
         $settlementDocument = $settlement['document'] ?? null;
         $hasSettlement = !is_null($settlementItem);
         $paymentStatus = $includeSettlement && $hasSettlement
-            ? $this->getSettlementPaymentStatus($settlementItem)
+            ? $this->getSettlementPaymentStatus($settlementDocument)
             : $this->getOrderPaymentStatus($order, $checkout);
         $paymentTimestampSource = $includeSettlement && $hasSettlement
             ? $settlementDocument
@@ -655,10 +663,20 @@ class AccountItemService
         return is_null($hammerPrice) ? null : $hammerPrice + $commission;
     }
 
-    private function getSettlementPaymentStatus($settlementItem): ?string
+    private function getSettlementPaymentStatus(
+        ?Document $settlementDocument
+    ): string
     {
-        $status = data_get($settlementItem, 'product_consignor_status');
-        return is_null($status) ? null : strtoupper((string) $status);
+        if (is_null($settlementDocument)) return 'PENDING';
+
+        $hasSettlementFile = collect($settlementDocument->documents ?? [])
+            ->contains(
+                fn($document) =>
+                    data_get($document, 'type') === 'CONSIGNOR_SETTLEMENT'
+                    && !empty(data_get($document, 'url'))
+            );
+
+        return $hasSettlementFile ? 'PAID' : 'PENDING';
     }
 
     private function getOrderPaymentStatus(
