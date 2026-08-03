@@ -321,18 +321,25 @@ class AccountItemService
         Collection $products,
         array $context
     ): Collection {
-        return $products->map(function (Product $product) use ($context) {
-            $productID = (string) $product->_id;
-            $orderEntry = $context['orders_by_product']->get($productID)?->first();
+        return $products
+            ->filter(function (Product $product) use ($context) {
+                $productID = (string) $product->_id;
+                $lot = $context['lots_by_product']->get($productID)?->first();
 
-            return $this->buildItem(
-                $product,
-                $orderEntry['order'] ?? null,
-                $orderEntry['item'] ?? null,
-                'sold',
-                $context
-            );
-        });
+                return is_null($lot) || $lot->status !== Status::DRAFT->value;
+            })
+            ->map(function (Product $product) use ($context) {
+                $productID = (string) $product->_id;
+                $orderEntry = $context['orders_by_product']->get($productID)?->first();
+
+                return $this->buildItem(
+                    $product,
+                    $orderEntry['order'] ?? null,
+                    $orderEntry['item'] ?? null,
+                    'sold',
+                    $context
+                );
+            });
     }
 
     private function buildSoldItems(
@@ -369,23 +376,31 @@ class AccountItemService
         Collection $orders,
         array $context
     ): Collection {
-        return $orders->flatMap(function (Order $order) use ($context) {
-            return collect($order->cart_items)
-                ->filter(fn($orderItem) => !empty(data_get($orderItem, 'product_id')))
-                ->map(function ($orderItem) use ($order, $context) {
-                    $productID = (string) data_get($orderItem, 'product_id');
-                    $product = $context['products_by_id']->get($productID);
+        return $orders
+            ->reject(
+                fn(Order $order) =>
+                    !is_null($context['stores']['main_id'])
+                    && (string) $order->store_id === $context['stores']['main_id']
+                    && $order->payment_method === 'ONLINE'
+                    && !(bool) $order->is_paid
+            )
+            ->flatMap(function (Order $order) use ($context) {
+                return collect($order->cart_items)
+                    ->filter(fn($orderItem) => !empty(data_get($orderItem, 'product_id')))
+                    ->map(function ($orderItem) use ($order, $context) {
+                        $productID = (string) data_get($orderItem, 'product_id');
+                        $product = $context['products_by_id']->get($productID);
 
-                    return $this->buildItem(
-                        $product,
-                        $order,
-                        $orderItem,
-                        'buy',
-                        $context,
-                        useOrderPurpose: true
-                    );
-                });
-        });
+                        return $this->buildItem(
+                            $product,
+                            $order,
+                            $orderItem,
+                            'buy',
+                            $context,
+                            useOrderPurpose: true
+                        );
+                    });
+            });
     }
 
     private function buildItem(
