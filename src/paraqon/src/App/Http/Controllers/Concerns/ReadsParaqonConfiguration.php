@@ -51,36 +51,50 @@ trait ReadsParaqonConfiguration
         return null;
     }
 
-    protected function getBuyerCommissionDiscountPercent(float $orderTotalHammer): float
+    protected function getBuyerCommissionDiscountPercent(float $orderTotalHammer): ?float
     {
         $config = $this->getLatestConfigurationBySlug('buyer-commission-discount-settings');
         if (is_null($config)) {
-            return 0;
+            return null;
         }
 
         $tiers = $config->tiers ?? [];
         if (!is_array($tiers) || count($tiers) === 0) {
-            return 0;
+            return null;
         }
 
         $tier = $this->matchTier($tiers, $orderTotalHammer, 'min_order_total', 'max_order_total');
         if (is_null($tier)) {
-            return 0;
+            return null;
         }
 
-        return (float) ($tier['discount_percent'] ?? 0);
+        // Keep the existing configuration field; only its calculation meaning
+        // changes from a discount percentage to the direct VIP commission rate.
+        return max(0, min(100, (float) ($tier['discount_percent'] ?? 0)));
     }
 
-    protected function applyBuyerCommissionDiscount(float $commission, float $discountPercent): array
+    protected function applyBuyerCommissionDiscount(
+        float $hammerPrice,
+        float $commission,
+        ?float $vipCommissionRate
+    ): array
     {
-        $commission0 = max(0, $commission);
-        $discountPercent = max(0, min(100, $discountPercent));
-        $commissionAfter = (float) floor($commission0 * (1 - $discountPercent / 100));
-        $discountAmount = (float) max(0, floor($commission0) - $commissionAfter);
+        $hammerPrice = max(0, $hammerPrice);
+        $commissionBeforeDiscount = (float) floor(max(0, $commission));
+        $vipCommissionRate = is_null($vipCommissionRate)
+            ? null
+            : max(0, min(100, $vipCommissionRate));
+        $commissionAfter = is_null($vipCommissionRate)
+            ? $commissionBeforeDiscount
+            : (float) floor($hammerPrice * $vipCommissionRate / 100);
+        $discountAmount = (float) max(
+            0,
+            $commissionBeforeDiscount - $commissionAfter
+        );
 
         return [
-            'commission_before_discount' => (float) floor($commission0),
-            'commission_discount_percent' => $discountPercent,
+            'commission_before_discount' => $commissionBeforeDiscount,
+            'commission_discount_percent' => $vipCommissionRate ?? 0,
             'commission_discount_amount' => $discountAmount,
             'commission' => $commissionAfter,
         ];

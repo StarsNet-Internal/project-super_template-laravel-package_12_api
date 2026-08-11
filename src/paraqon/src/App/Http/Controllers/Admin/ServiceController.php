@@ -580,13 +580,14 @@ class ServiceController extends Controller
         Collection $winningLots,
         Collection $deposits
     ): Order {
-        // Vault members only: THE VAULT VIP discount by hammer order total from Configuration.
+        // Vault Buyer VIP members use the configured tier as their commission
+        // rate directly. The tier is selected by the customer's total hammer.
         $orderTotalHammer = (float) $winningLots->sum(function ($lot) {
             return (float) ($lot->current_bid ?? 0);
         });
-        $discountPercent = $this->customerHasVaultBuyerVip($customer)
+        $vaultVipCommissionRate = $this->customerHasVaultBuyerVip($customer)
             ? $this->getBuyerCommissionDiscountPercent($orderTotalHammer)
-            : 0;
+            : null;
         $totalCommissionBefore = 0;
         $totalCommissionDiscount = 0;
         $totalCommissionAfter = 0;
@@ -595,19 +596,26 @@ class ServiceController extends Controller
 
         // Create ShoppingCartItem(s) from each AuctionLot
         foreach ($winningLots as $lot) {
-            $commission0 = (float) ($lot->commission ?? 0);
-            if ($discountPercent > 0 && isset($lot->commission_rate) && (float) $lot->commission_rate > 0) {
-                $commission0 = (float) floor(((float) $lot->current_bid) * ((float) $lot->commission_rate) / 100);
+            $hammerPrice = (float) ($lot->current_bid ?? 0);
+            $buyerCommissionRate = is_numeric($lot->commission_rate ?? null)
+                ? (float) $lot->commission_rate
+                : null;
+            $commissionBeforeDiscount = (float) ($lot->commission ?? 0);
+            if (!is_null($vaultVipCommissionRate) && !is_null($buyerCommissionRate)) {
+                $commissionBeforeDiscount = (float) floor(
+                    $hammerPrice * $buyerCommissionRate / 100
+                );
             }
 
-            $discounted = $this->applyBuyerCommissionDiscount($commission0, $discountPercent);
+            $discounted = $this->applyBuyerCommissionDiscount(
+                $hammerPrice,
+                $commissionBeforeDiscount,
+                $vaultVipCommissionRate
+            );
             $commissionAfterDiscount = $discounted['commission'];
             $soldPriceBeforeDiscount =
-                (float) ($lot->current_bid ?? 0)
-                + $discounted['commission_before_discount'];
-            $soldPriceAfterDiscount =
-                $soldPriceBeforeDiscount
-                - $discounted['commission_discount_amount'];
+                $hammerPrice + $discounted['commission_before_discount'];
+            $soldPriceAfterDiscount = $hammerPrice + $commissionAfterDiscount;
 
             // AuctionLot is public auction-result data. Keep buyer-specific VIP
             // savings only on the Order and its cart items.
@@ -632,7 +640,7 @@ class ServiceController extends Controller
                 'qty' => 1,
                 'lot_number' => $lot->lot_number,
                 'winning_bid' => $lot->current_bid,
-                // sold_price remains the net item amount for legacy consumers.
+                // Keep the existing item contract: sold_price is the net amount.
                 'sold_price' => $soldPriceAfterDiscount,
                 'commission' => $commissionAfterDiscount,
                 'commission_before_discount' => $discounted['commission_before_discount'],
@@ -668,8 +676,6 @@ class ServiceController extends Controller
                 $item->global_discount = null;
             });
 
-        // Buyer payable amount is gross lot total less the VIP commission
-        // discount. Public AuctionLot sold_price remains the gross total.
         $orderTotalPrice = $itemTotalAfterDiscount;
 
         // Calculate totalCapturedDeposit
@@ -712,7 +718,7 @@ class ServiceController extends Controller
             'storage_fee' => 0,
             'shipping_fee' => 0,
             'commission_before_discount' => number_format($totalCommissionBefore, 2, '.', ''),
-            'commission_discount_percent' => number_format($discountPercent, 2, '.', ''),
+            'commission_discount_percent' => number_format($vaultVipCommissionRate ?? 0, 2, '.', ''),
             'commission_discount_amount' => number_format($totalCommissionDiscount, 2, '.', ''),
             'commission' => number_format($totalCommissionAfter, 2, '.', ''),
         ];
