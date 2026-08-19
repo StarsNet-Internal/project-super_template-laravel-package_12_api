@@ -220,6 +220,7 @@ Route::group(
         Route::post('/algolia/stores/{store_id}/products', [ServiceController::class, 'synchronizeAllProductsWithAlgolia']);
 
         Route::get('/auctions/{store_id}/state', [ServiceController::class, 'getAuctionCurrentState']);
+        Route::post('/orders/expire-payments', [ServiceController::class, 'expireVaultOrderPayments']);
         Route::get('/orders/capture', [ServiceController::class, 'captureOrderPayment']);
         Route::post('/orders/{order_id}/capture', [ServiceController::class, 'captureOrderPaymentImmediately']);
 

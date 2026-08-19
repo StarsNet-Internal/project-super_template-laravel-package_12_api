@@ -14,6 +14,7 @@ use App\Http\Controllers\Traits\DistributePointTrait;
 
 // Services
 use App\Http\Starsnet\PinkiePay;
+use Starsnet\Project\Paraqon\App\Services\VaultPaymentService;
 
 // Enums
 use App\Enums\CheckoutType;
@@ -723,7 +724,10 @@ class ShoppingCartController extends Controller
         ];
     }
 
-    public function checkOutMainStore(Request $request)
+    public function checkOutMainStore(
+        Request $request,
+        VaultPaymentService $vaultPaymentService
+    )
     {
         $now = now();
 
@@ -836,7 +840,7 @@ class ShoppingCartController extends Controller
         if ($totalPrice <= 0) $paymentMethod = CheckoutType::OFFLINE->value;
 
         // Create Order
-        $order = Order::create([
+        $orderAttributes = [
             'store_id' => $store->_id,
             'customer_id' => $customer->id,
             'is_paid' => $request->input('is_paid', false),
@@ -846,13 +850,22 @@ class ShoppingCartController extends Controller
             'delivery_info' => $this->getDeliveryInfo($deliveryInfo),
             'delivery_details' => $deliveryDetails,
             'is_voucher_applied' => $checkoutDetails['is_voucher_applied'],
-        ]);
+        ];
+        if (
+            $store->slug === VaultPaymentService::STORE_SLUG
+            && $paymentMethod === CheckoutType::ONLINE->value
+        ) {
+            $orderAttributes['payment_expires_at'] = $vaultPaymentService->paymentExpiresAt();
+        }
+
+        $order = Order::create($orderAttributes);
 
         // Create OrderCartItem(s)
         $checkoutItems = collect($checkoutDetails['cart_items'])
             ->filter(fn($item) => $item->is_checkout)
             ->values();
 
+        $inventoryDeductions = [];
         foreach ($checkoutItems as $item) {
             $attributes = $item->toArray();
             unset($attributes['_id'], $attributes['is_checkout']);
@@ -862,13 +875,18 @@ class ShoppingCartController extends Controller
             $qty = $attributes['qty'];
             /** @var ProductVariant $variant */
             $variant = ProductVariant::find($variantID);
-            $this->deductWarehouseInventoriesByStore(
+            $deductions = $this->deductWarehouseInventoriesByStore(
                 $store,
                 $variant,
                 $qty
             );
+            $inventoryDeductions = array_merge($inventoryDeductions, $deductions);
 
             $order->createCartItem($attributes);
+        }
+
+        if (!is_null($order->payment_expires_at)) {
+            $order->update(['inventory_deductions' => $inventoryDeductions]);
         }
 
         // Update Order
@@ -881,13 +899,12 @@ class ShoppingCartController extends Controller
         if ($order->getTotalPrice() > 0) {
             switch ($paymentMethod) {
                 case CheckoutType::ONLINE->value:
+                    if ($store->slug === VaultPaymentService::STORE_SLUG) {
+                        $vaultPaymentService->createPaymentIntent($order, $checkout);
+                        break;
+                    }
+
                     $stripeAmount = (int) $totalPrice * 100;
-
-                    // Vault / default-main-store: authorize now, capture after 5 days
-                    $delayEventType = ($store->slug === 'default-main-store')
-                        ? 'five_day_delay'
-                        : 'one_day_delay';
-
                     $data = [
                         'amount' => $stripeAmount,
                         'currency' => 'HKD',
@@ -895,7 +912,7 @@ class ShoppingCartController extends Controller
                         'metadata' => [
                             'model_type' => 'checkout',
                             'model_id' => $checkout->_id,
-                            'custom_event_type' => $delayEventType
+                            'custom_event_type' => 'one_day_delay'
                         ]
                     ];
 
@@ -1325,11 +1342,12 @@ class ShoppingCartController extends Controller
         ProductVariant $variant,
         int $qtyChange
     ) {
-        if ($qtyChange === 0) return false;
+        if ($qtyChange === 0) return [];
 
         $inventories = $this->getActiveWarehouseInventoriesByStore($store, $variant);
 
         $remainder = $qtyChange;
+        $deductions = [];
 
         if ($inventories->count() > 0) {
             /** @var WarehouseInventory $inventory */
@@ -1347,13 +1365,22 @@ class ShoppingCartController extends Controller
 
                 // Update WarehouseInventory
                 $inventory->decrementQty($deductableQty);
+                if ($deductableQty > 0) {
+                    $deductions[] = [
+                        'warehouse_inventory_id' => (string) $inventory->_id,
+                        'warehouse_id' => (string) $inventory->warehouse_id,
+                        'product_id' => (string) $inventory->product_id,
+                        'product_variant_id' => (string) $variant->_id,
+                        'qty' => $deductableQty,
+                    ];
+                }
 
                 // Update remainder
                 $remainder -= $deductableQty;
             }
         }
 
-        return true;
+        return $deductions;
     }
 
     private function getActiveWarehouseInventoriesByStore(Store $store, ProductVariant $variant)

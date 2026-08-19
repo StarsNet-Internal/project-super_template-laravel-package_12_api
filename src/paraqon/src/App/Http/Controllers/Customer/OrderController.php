@@ -22,6 +22,7 @@ use App\Http\Starsnet\PinkiePay;
 use App\Models\Checkout;
 use App\Models\Order;
 use App\Models\Store;
+use Starsnet\Project\Paraqon\App\Services\VaultPaymentService;
 
 class OrderController extends Controller
 {
@@ -80,12 +81,49 @@ class OrderController extends Controller
         return ['message' => 'Uploaded image successfully'];
     }
 
-    public function payPendingOrderByOnlineMethod(Request $request)
+    public function payPendingOrderByOnlineMethod(
+        Request $request,
+        VaultPaymentService $vaultPaymentService
+    )
     {
         /** @var ?Order $order */
         $order = Order::find($request->route('order_id'));
         if (is_null($order)) abort(404, 'Order not found');
         if ($this->customer()->id !== $order->customer_id) abort(403, 'Customer do not own this order');
+
+        $store = $order->store;
+        if (
+            $store?->slug === VaultPaymentService::STORE_SLUG
+            && !is_null($order->payment_expires_at)
+        ) {
+            if ($vaultPaymentService->hasPaymentWindowExpired($order)) {
+                $vaultPaymentService->expireIfDue($order);
+                abort(410, 'The 30-minute payment window has expired');
+            }
+
+            $order = $order->fresh();
+            if (!$vaultPaymentService->isAwaitingPayment($order)) {
+                abort(409, 'Order is no longer awaiting payment');
+            }
+
+            if ($order->payment_method !== CheckoutType::ONLINE->value) {
+                abort(403, 'Order does not accept ONLINE payment');
+            }
+
+            /** @var ?Checkout $checkout */
+            $checkout = $order->checkout()->latest()->first();
+            if (is_null($checkout)) abort(404, 'Checkout not found');
+
+            $paymentIntent = $vaultPaymentService->replacePaymentIntent($order, $checkout);
+
+            return [
+                'message' => 'Generated new Vault payment intent successfully',
+                'order_id' => $order->_id,
+                'payment_expires_at' => $order->payment_expires_at,
+                'checkout' => $checkout->fresh(),
+                'client_secret' => $paymentIntent['client_secret'],
+            ];
+        }
 
         // Create paymentToken
         $checkout = $order->checkout()->latest()->first();

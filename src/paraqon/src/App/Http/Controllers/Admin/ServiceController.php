@@ -42,13 +42,17 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionLotController 
 
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\RedeemsExpressDiscount;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\ReadsParaqonConfiguration;
+use Starsnet\Project\Paraqon\App\Services\VaultPaymentService;
 
 class ServiceController extends Controller
 {
     use RedeemsExpressDiscount;
     use ReadsParaqonConfiguration;
 
-    public function paymentCallback(Request $request): array
+    public function paymentCallback(
+        Request $request,
+        VaultPaymentService $vaultPaymentService
+    ): array
     {
         // Extract attributes from $request
         $eventType = (string) $request->type;
@@ -279,6 +283,19 @@ class ServiceController extends Controller
 
                 $customEventType = $request->data['object']['metadata']['custom_event_type'] ?? null;
                 $isDelayedCapture = in_array($customEventType, ['one_day_delay', 'five_day_delay'], true);
+
+                if (
+                    $customEventType === 'five_day_delay'
+                    && $eventType === 'charge.succeeded'
+                    && $vaultPaymentService->hasPaymentWindowExpired($order)
+                ) {
+                    $vaultPaymentService->expireIfDue($order);
+
+                    return [
+                        'message' => 'Vault payment authorization arrived after the 30-minute payment window',
+                        'order_id' => $order->_id,
+                    ];
+                }
 
                 if ($isDelayedCapture && $eventType == 'charge.succeeded') {
                     $delayDays = $customEventType === 'five_day_delay' ? 5 : 1;
@@ -1102,6 +1119,18 @@ class ServiceController extends Controller
         return [
             'message' => 'Approved order count: ' . count($orderIDs),
             'order_ids' => $orderIDs
+        ];
+    }
+
+    public function expireVaultOrderPayments(
+        VaultPaymentService $vaultPaymentService
+    ): array
+    {
+        $orderIDs = $vaultPaymentService->expireDueOrders();
+
+        return [
+            'message' => 'Expired Vault order count: ' . count($orderIDs),
+            'order_ids' => $orderIDs,
         ];
     }
 

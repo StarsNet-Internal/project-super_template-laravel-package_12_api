@@ -5,6 +5,7 @@ namespace Starsnet\Project\Paraqon\App\Services;
 use App\Enums\Status;
 use App\Models\Alias;
 use App\Models\Checkout;
+use App\Models\Configuration;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\ProductCategory;
@@ -308,6 +309,7 @@ class AccountItemService
                 ->map(fn(Collection $items) => $this->latestFirst($items)),
             'histories_by_product' => $histories
                 ->groupBy(fn(LocationHistory $history) => (string) $history->product_id),
+            'history_visibility_by_status' => $this->getHistoryVisibilityByStatus(),
             'orders_by_product' => $this->groupOrdersByProduct($orders),
             'documents_by_product' => $this->groupDocumentsByProduct($documents),
             'checkouts_by_order' => $checkouts
@@ -491,9 +493,11 @@ class AccountItemService
             'title' => $product?->title
                 ?? data_get($orderItem, 'product_title')
                 ?? data_get($orderItem, 'title'),
-            'history' => $histories->values()->map(
-                fn(LocationHistory $history) => $history->toArray()
-            )->all(),
+            'history' => $this->getVisibleHistories(
+                $histories,
+                $channel === 'buy' ? 'buyer' : 'seller',
+                $context['history_visibility_by_status']
+            ),
             'documents' => $paymentReceipt,
             'price' => $price,
             'reserve_price' => $price,
@@ -522,6 +526,58 @@ class AccountItemService
                     ?? data_get($checkout, 'approval.reason'))
                 : null,
         ];
+    }
+
+    private function getHistoryVisibilityByStatus(): Collection
+    {
+        $configuration = Configuration::where('slug', 'product-location')
+            ->latest()
+            ->first();
+
+        return collect($configuration?->statuses ?? [])
+            ->mapWithKeys(function ($status): array {
+                $visibleTo = strtolower(
+                    (string) data_get($status, 'visible_to', '')
+                );
+                if (!in_array($visibleTo, ['buyer', 'seller', 'all'], true)) {
+                    return [];
+                }
+
+                return [
+                    $this->getHistoryStatusKey(data_get($status, 'value'))
+                        => $visibleTo,
+                ];
+            });
+    }
+
+    private function getVisibleHistories(
+        Collection $histories,
+        string $audience,
+        Collection $visibilityByStatus
+    ): array {
+        return $histories
+            ->filter(function (LocationHistory $history) use (
+                $audience,
+                $visibilityByStatus
+            ): bool {
+                $statusKey = $this->getHistoryStatusKey(
+                    data_get($history, 'status.status')
+                );
+                if (!$visibilityByStatus->has($statusKey)) return true;
+
+                $visibleTo = $visibilityByStatus->get($statusKey);
+                return $visibleTo === 'all' || $visibleTo === $audience;
+            })
+            ->values()
+            ->map(fn(LocationHistory $history) => $history->toArray())
+            ->all();
+    }
+
+    private function getHistoryStatusKey($status): string
+    {
+        return is_null($status) || $status === ''
+            ? '__EMPTY__'
+            : (string) $status;
     }
 
     private function getPurpose(

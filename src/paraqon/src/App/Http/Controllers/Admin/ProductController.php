@@ -21,7 +21,7 @@ class ProductController extends Controller
         // Extract attributes from $request
         $statuses = (array) $request->input('status', Status::defaultStatuses());
 
-        $getKeys = ['_id', 'title', 'images', 'status', 'updated_at', 'created_at', 'product_interface', 'prefix', 'stock_no', 'owned_by_customer_id', 'reserve_price', 'bid_incremental_settings', 'seller_id', 'buyer_id'];
+        $getKeys = ['_id', 'title', 'images', 'status', 'updated_at', 'created_at', 'product_interface', 'prefix', 'stock_no', 'owned_by_customer_id', 'reserve_price', 'bid_incremental_settings', 'seller_id', 'buyer_id', 'category_ids'];
         /** @var Collection $products */
         $products = Product::statusesAllowed(Status::defaultStatuses(), $statuses)
             ->with([
