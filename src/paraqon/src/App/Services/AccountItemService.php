@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\ProductVariant;
 use App\Models\Store;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Document;
@@ -603,25 +604,55 @@ class AccountItemService
         ?LocationHistory $history
     ): string {
         if (in_array($status, self::BUYER_READY_STATUSES, true)) {
-            return 'Ready for Pick-up';
+            return $this->withHistoryCreatedAt('Ready for Pick-up', $history);
         }
 
         if (in_array($status, self::BUYER_SHIPPED_STATUSES, true)) {
             $remarks = $this->getHistoryRemarks(
                 data_get($history, 'status.remarks')
             );
-            return $remarks === '' ? 'Shipped' : "Shipped {$remarks}";
+            $label = $remarks === '' ? 'Shipped' : "Shipped {$remarks}";
+            return $this->withHistoryCreatedAt($label, $history);
         }
 
         if (in_array($status, self::BUYER_COMPLETED_STATUSES, true)) {
-            return 'Completed';
+            return $this->withHistoryCreatedAt('Completed', $history);
         }
 
         if (in_array($status, self::BUYER_PENDING_STATUSES, true)) {
-            return 'Pending';
+            return $this->withHistoryCreatedAt('Pending', $history);
         }
 
         return '-';
+    }
+
+    private function withHistoryCreatedAt(
+        string $status,
+        ?LocationHistory $history
+    ): string {
+        $createdAt = data_get($history, 'created_at');
+        if (is_null($createdAt) || $createdAt === '') return $status;
+
+        try {
+            if ($createdAt instanceof \DateTimeInterface) {
+                $createdAt = Carbon::instance($createdAt);
+            } elseif (is_object($createdAt)
+                && method_exists($createdAt, 'toDateTime')) {
+                $createdAt = Carbon::instance($createdAt->toDateTime());
+            } elseif (is_scalar($createdAt)) {
+                $createdAt = Carbon::parse((string) $createdAt);
+            } else {
+                return $status;
+            }
+
+            $timestamp = $createdAt
+                ->setTimezone(config('app.timezone', 'Asia/Hong_Kong'))
+                ->format('d/m/Y H:i');
+        } catch (\Throwable) {
+            return $status;
+        }
+
+        return "{$status}/{$timestamp}";
     }
 
     private function getHistoryRemarks($remarks): string
