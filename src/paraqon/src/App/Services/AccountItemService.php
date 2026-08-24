@@ -5,7 +5,6 @@ namespace Starsnet\Project\Paraqon\App\Services;
 use App\Enums\Status;
 use App\Models\Alias;
 use App\Models\Checkout;
-use App\Models\Configuration;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\ProductCategory;
@@ -25,6 +24,31 @@ class AccountItemService
         'CONSIGNMENT_AGREEMENT_FOR_AUCTION',
         'PRIVATE_SALE_AGREEMENT',
         'CONSIGNOR_SETTLEMENT',
+    ];
+
+    private const LOCATION_IN_OFFICE = 'IN_OFFICE';
+    private const STATUS_RETURNED_TO_CONSIGNOR = 'RETURNED_TO_CONSIGNOR';
+    private const SELLER_DELIVERED_STATUSES = [
+        'SOLD',
+        'SOLD_ORDER_COMPLETED',
+        'PACKAGE_HAS_SHIPPED',
+    ];
+    private const BUYER_PENDING_STATUSES = [
+        'PENDING',
+        'PENDING_OUT_FOR_CONSIGNMENT',
+        'PENDING_OUT_FOR_SERVICES',
+        'PENDING_PROCESSING',
+    ];
+    private const BUYER_READY_STATUSES = [
+        'PENDING_READY_TO_PICKUP_SHIPMENT',
+    ];
+    private const BUYER_SHIPPED_STATUSES = [
+        'PACKAGE_HAS_SHIPPED',
+    ];
+    private const BUYER_COMPLETED_STATUSES = [
+        'SOLD',
+        'SOLD_ORDER_COMPLETED',
+        'RETURNED_TO_CONSIGNOR',
     ];
 
     public function getAll(
@@ -309,7 +333,6 @@ class AccountItemService
                 ->map(fn(Collection $items) => $this->latestFirst($items)),
             'histories_by_product' => $histories
                 ->groupBy(fn(LocationHistory $history) => (string) $history->product_id),
-            'history_visibility_by_status' => $this->getHistoryVisibilityByStatus(),
             'orders_by_product' => $this->groupOrdersByProduct($orders),
             'documents_by_product' => $this->groupDocumentsByProduct($documents),
             'checkouts_by_order' => $checkouts
@@ -339,7 +362,8 @@ class AccountItemService
                     $orderEntry['order'] ?? null,
                     $orderEntry['item'] ?? null,
                     'sold',
-                    $context
+                    $context,
+                    formatSellingColumns: true
                 );
             });
     }
@@ -412,7 +436,8 @@ class AccountItemService
         string $channel,
         array $context,
         bool $includeSettlement = false,
-        bool $useOrderPurpose = false
+        bool $useOrderPurpose = false,
+        bool $formatSellingColumns = false
     ): array {
         $productID = (string) ($product?->_id ?? data_get($orderItem, 'product_id', ''));
         $lots = $context['lots_by_product']->get($productID, collect());
@@ -430,6 +455,7 @@ class AccountItemService
         );
         $variant = $context['variants_by_product']->get($productID);
         $histories = $context['histories_by_product']->get($productID, collect());
+        $latestHistory = $this->latest($histories);
         $documents = $context['documents_by_product']->get($productID, collect());
         $agreement = $this->getAgreement($documents, $purpose);
         $settlement = $includeSettlement
@@ -477,26 +503,42 @@ class AccountItemService
             $settlementReference = $settlementDocument?->statement_no;
         }
 
+        $stockNumber = $this->getStockNumber($product, $orderItem);
+        $auctionPrefix = $purpose === 'AUCTION'
+            ? $this->getAuctionPrefix($store)
+            : null;
+        $lotNumber = $purpose === 'AUCTION'
+            ? $this->getLotNumber($lot, $orderItem)
+            : null;
+
         return [
             '_id' => $productID,
             'order_id' => is_null($order) ? null : (string) $order->_id,
-            'stock_no' => $this->getStockNumber($product, $orderItem),
-            'auction_no' => $purpose === 'AUCTION'
-                ? data_get($store, 'invoice_prefix')
-                : null,
-            'lot_number' => $purpose === 'AUCTION'
-                ? data_get($orderItem, 'lot_number', $lot?->lot_number)
-                : null,
+            'stock_no' => $this->getDisplayStockNumber(
+                $stockNumber,
+                $auctionPrefix,
+                $lotNumber,
+                $purpose,
+                $formatSellingColumns
+            ),
+            'auction_no' => $auctionPrefix,
+            'lot_number' => $lotNumber,
             'created_at' => $product?->created_at ?? $order?->created_at,
             'purpose' => $purpose,
             'images' => $this->getImages($product, $orderItem),
             'title' => $product?->title
                 ?? data_get($orderItem, 'product_title')
                 ?? data_get($orderItem, 'title'),
-            'history' => $this->getVisibleHistories(
-                $histories,
-                $channel === 'buy' ? 'buyer' : 'seller',
-                $context['history_visibility_by_status']
+            'listing_status' => data_get($latestHistory, 'status.status'),
+            'physical_location' => $this->getAccountItemLocation(
+                $latestHistory,
+                $channel
+            ),
+            'past_history' => $this->getPastHistory(
+                $stockNumber,
+                $store,
+                $purpose,
+                $formatSellingColumns
             ),
             'documents' => $paymentReceipt,
             'price' => $price,
@@ -528,56 +570,135 @@ class AccountItemService
         ];
     }
 
-    private function getHistoryVisibilityByStatus(): Collection
-    {
-        $configuration = Configuration::where('slug', 'product-location')
-            ->latest()
-            ->first();
+    private function getAccountItemLocation(
+        ?LocationHistory $history,
+        string $channel
+    ): string {
+        $status = $this->normalizeHistoryValue(
+            data_get($history, 'status.status')
+        );
+        $location = $this->normalizeHistoryValue(
+            data_get($history, 'location.location')
+        );
 
-        return collect($configuration?->statuses ?? [])
-            ->mapWithKeys(function ($status): array {
-                $visibleTo = strtolower(
-                    (string) data_get($status, 'visible_to', '')
-                );
-                if (!in_array($visibleTo, ['buyer', 'seller', 'all'], true)) {
-                    return [];
-                }
+        if ($channel === 'buy') {
+            return $this->getBuyerItemStatus($status, $history);
+        }
 
-                return [
-                    $this->getHistoryStatusKey(data_get($status, 'value'))
-                        => $visibleTo,
-                ];
-            });
+        if ($status === self::STATUS_RETURNED_TO_CONSIGNOR) {
+            return 'Returned to Consignor';
+        }
+
+        if (in_array($status, self::SELLER_DELIVERED_STATUSES, true)) {
+            return 'Delivered to Buyer';
+        }
+
+        return $location === self::LOCATION_IN_OFFICE
+            ? 'With PARAQON'
+            : '-';
     }
 
-    private function getVisibleHistories(
-        Collection $histories,
-        string $audience,
-        Collection $visibilityByStatus
-    ): array {
-        return $histories
-            ->filter(function (LocationHistory $history) use (
-                $audience,
-                $visibilityByStatus
-            ): bool {
-                $statusKey = $this->getHistoryStatusKey(
-                    data_get($history, 'status.status')
-                );
-                if (!$visibilityByStatus->has($statusKey)) return true;
+    private function getBuyerItemStatus(
+        string $status,
+        ?LocationHistory $history
+    ): string {
+        if (in_array($status, self::BUYER_READY_STATUSES, true)) {
+            return 'Ready for Pick-up';
+        }
 
-                $visibleTo = $visibilityByStatus->get($statusKey);
-                return $visibleTo === 'all' || $visibleTo === $audience;
-            })
-            ->values()
-            ->map(fn(LocationHistory $history) => $history->toArray())
-            ->all();
+        if (in_array($status, self::BUYER_SHIPPED_STATUSES, true)) {
+            $remarks = $this->getHistoryRemarks(
+                data_get($history, 'status.remarks')
+            );
+            return $remarks === '' ? 'Shipped' : "Shipped {$remarks}";
+        }
+
+        if (in_array($status, self::BUYER_COMPLETED_STATUSES, true)) {
+            return 'Completed';
+        }
+
+        if (in_array($status, self::BUYER_PENDING_STATUSES, true)) {
+            return 'Pending';
+        }
+
+        return '-';
     }
 
-    private function getHistoryStatusKey($status): string
+    private function getHistoryRemarks($remarks): string
     {
-        return is_null($status) || $status === ''
-            ? '__EMPTY__'
-            : (string) $status;
+        if (is_scalar($remarks)) return trim((string) $remarks);
+
+        foreach (['en', 'zh', 'cn'] as $locale) {
+            $localized = data_get($remarks, $locale);
+            if (is_scalar($localized) && trim((string) $localized) !== '') {
+                return trim((string) $localized);
+            }
+        }
+
+        return '';
+    }
+
+    private function getPastHistory(
+        ?string $stockNumber,
+        ?Store $store,
+        string $purpose,
+        bool $formatSellingColumns
+    ): string {
+        if (!$formatSellingColumns || $purpose !== 'AUCTION') return '-';
+
+        $auctionTitle = trim((string) data_get($store, 'title.en', ''));
+        if (empty($stockNumber) || $auctionTitle === '') return '-';
+
+        return "ex:stock no.{$stockNumber} in {$auctionTitle}";
+    }
+
+    private function getDisplayStockNumber(
+        ?string $stockNumber,
+        ?string $auctionPrefix,
+        $lotNumber,
+        string $purpose,
+        bool $formatSellingColumns
+    ): ?string {
+        if (!$formatSellingColumns
+            || $purpose !== 'AUCTION'
+            || empty($stockNumber)
+            || empty($auctionPrefix)
+            || is_null($lotNumber)
+            || $lotNumber === '') {
+            return $stockNumber;
+        }
+
+        return "{$stockNumber} / {$auctionPrefix} lot {$lotNumber}";
+    }
+
+    private function getAuctionPrefix(?Store $store): ?string
+    {
+        $prefix = trim((string) (
+            data_get($store, 'prefix')
+                ?? data_get($store, 'invoice_prefix')
+                ?? ''
+        ));
+
+        return $prefix === '' ? null : $prefix;
+    }
+
+    private function getLotNumber(?AuctionLot $lot, $orderItem)
+    {
+        return data_get($orderItem, 'lot.number')
+            ?? data_get($orderItem, 'lot_number')
+            ?? data_get($lot, 'number')
+            ?? data_get($lot, 'lot_number');
+    }
+
+    private function normalizeHistoryValue($value): string
+    {
+        $normalized = preg_replace(
+            '/[^A-Z0-9]+/',
+            '_',
+            strtoupper(trim((string) $value))
+        );
+
+        return trim((string) $normalized, '_');
     }
 
     private function getPurpose(
