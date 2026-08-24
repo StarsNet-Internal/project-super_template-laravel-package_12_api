@@ -680,7 +680,7 @@ class AccountItemService
         $auctionTitle = trim((string) data_get($store, 'title.en', ''));
         if (empty($stockNumber) || $auctionTitle === '') return '-';
 
-        return "ex:stock no.{$stockNumber} in {$auctionTitle}";
+        return "stock no.{$stockNumber} in {$auctionTitle}";
     }
 
     private function getDisplayStockNumber(
