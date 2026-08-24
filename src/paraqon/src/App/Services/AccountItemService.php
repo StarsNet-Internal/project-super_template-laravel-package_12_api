@@ -34,23 +34,7 @@ class AccountItemService
         'SOLD_ORDER_COMPLETED',
         'PACKAGE_HAS_SHIPPED',
     ];
-    private const BUYER_PENDING_STATUSES = [
-        'PENDING',
-        'PENDING_OUT_FOR_CONSIGNMENT',
-        'PENDING_OUT_FOR_SERVICES',
-        'PENDING_PROCESSING',
-    ];
-    private const BUYER_READY_STATUSES = [
-        'PENDING_READY_TO_PICKUP_SHIPMENT',
-    ];
-    private const BUYER_SHIPPED_STATUSES = [
-        'PACKAGE_HAS_SHIPPED',
-    ];
-    private const BUYER_COMPLETED_STATUSES = [
-        'SOLD',
-        'SOLD_ORDER_COMPLETED',
-        'RETURNED_TO_CONSIGNOR',
-    ];
+    private const STATUS_PACKAGE_HAS_SHIPPED = 'PACKAGE_HAS_SHIPPED';
 
     public function getAll(
         string $customerID,
@@ -533,7 +517,8 @@ class AccountItemService
             'listing_status' => data_get($latestHistory, 'status.status'),
             'physical_location' => $this->getAccountItemLocation(
                 $latestHistory,
-                $channel
+                $channel,
+                $order
             ),
             'past_history' => $this->getPastHistory(
                 $stockNumber,
@@ -573,18 +558,25 @@ class AccountItemService
 
     private function getAccountItemLocation(
         ?LocationHistory $history,
-        string $channel
+        string $channel,
+        ?Order $order
     ): string {
+        if ($channel === 'buy') {
+            if (is_null($order)) {
+                throw new \LogicException(
+                    'Purchased account item must have an order.'
+                );
+            }
+
+            return $this->getBuyerItemStatus($order, $history);
+        }
+
         $status = $this->normalizeHistoryValue(
             data_get($history, 'status.status')
         );
         $location = $this->normalizeHistoryValue(
             data_get($history, 'location.location')
         );
-
-        if ($channel === 'buy') {
-            return $this->getBuyerItemStatus($status, $history);
-        }
 
         if ($status === self::STATUS_RETURNED_TO_CONSIGNOR) {
             return 'Returned to Consignor';
@@ -600,37 +592,57 @@ class AccountItemService
     }
 
     private function getBuyerItemStatus(
-        string $status,
+        Order $order,
         ?LocationHistory $history
     ): string {
-        if (in_array($status, self::BUYER_READY_STATUSES, true)) {
-            return $this->withHistoryCreatedAt('Ready for Pick-up', $history);
-        }
+        $currentStatus = $this->normalizeHistoryValue($order->current_status);
+        $statusCreatedAt = $this->getOrderStatusCreatedAt(
+            $order,
+            $currentStatus
+        );
+        $label = match ($currentStatus) {
+            'SUBMITTED', 'PROCESSING', 'PENDING' => 'Pending',
+            'READY_TO_PICKUP' => 'Ready for Pick-up',
+            'DELIVERING' => $this->getShippedStatusLabel($history),
+            'COMPLETED', 'CANCELLED' => 'Completed',
+        };
 
-        if (in_array($status, self::BUYER_SHIPPED_STATUSES, true)) {
-            $remarks = $this->getHistoryRemarks(
-                data_get($history, 'status.remarks')
-            );
-            $label = $remarks === '' ? 'Shipped' : "Shipped {$remarks}";
-            return $this->withHistoryCreatedAt($label, $history);
-        }
-
-        if (in_array($status, self::BUYER_COMPLETED_STATUSES, true)) {
-            return $this->withHistoryCreatedAt('Completed', $history);
-        }
-
-        if (in_array($status, self::BUYER_PENDING_STATUSES, true)) {
-            return $this->withHistoryCreatedAt('Pending', $history);
-        }
-
-        return '-';
+        return $this->withStatusCreatedAt($label, $statusCreatedAt);
     }
 
-    private function withHistoryCreatedAt(
-        string $status,
+    private function getShippedStatusLabel(
         ?LocationHistory $history
     ): string {
-        $createdAt = data_get($history, 'created_at');
+        $latestHistoryStatus = $this->normalizeHistoryValue(
+            data_get($history, 'status.status')
+        );
+        $remarks = $latestHistoryStatus === self::STATUS_PACKAGE_HAS_SHIPPED
+            ? $this->getHistoryRemarks(data_get($history, 'status.remarks'))
+            : '';
+
+        return $remarks === '' ? 'Shipped' : "Shipped {$remarks}";
+    }
+
+    private function getOrderStatusCreatedAt(
+        Order $order,
+        string $currentStatus
+    ) {
+        $status = collect($order->statuses ?? [])
+            ->filter(
+                fn($status): bool => $this->normalizeHistoryValue(
+                    data_get($status, 'slug')
+                ) === $currentStatus
+            )
+            ->sortByDesc(fn($status) => data_get($status, 'created_at'))
+            ->first();
+
+        return data_get($status, 'created_at') ?? $order->updated_at;
+    }
+
+    private function withStatusCreatedAt(
+        string $status,
+        $createdAt
+    ): string {
         if (is_null($createdAt) || $createdAt === '') return $status;
 
         try {
