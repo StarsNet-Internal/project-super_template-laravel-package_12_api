@@ -52,6 +52,16 @@ class ShoppingCartController extends Controller
         return Store::find($storeID) ?? Store::find(Alias::getValue($storeID));
     }
 
+    private function normalizeVaultCartQuantities(Store $store, Customer $customer): void
+    {
+        if ($store->slug !== VaultPaymentService::STORE_SLUG) return;
+
+        ShoppingCartItem::where('customer_id', $customer->id)
+            ->where('store_id', $store->id)
+            ->where('qty', '!=', 1)
+            ->update(['qty' => 1]);
+    }
+
     private function getCreditCardCharge(float $totalPrice, ?string $paymentMethod): array
     {
         if ($paymentMethod !== CheckoutType::ONLINE->value) {
@@ -322,6 +332,7 @@ class ShoppingCartController extends Controller
         // Get authenticated User information
         $customer = $this->customer();
         $isVaultStore = $storeID === 'default-main-store' || $store->slug === 'default-main-store';
+        $this->normalizeVaultCartQuantities($store, $customer);
 
         // The legacy retrieval flow uses this endpoint too and must remain zero-priced.
         if (!$isVaultStore) {
@@ -735,6 +746,7 @@ class ShoppingCartController extends Controller
 
         // Get authenticated User information
         $customer = $this->customer();
+        $this->normalizeVaultCartQuantities($store, $customer);
         $checkoutVariantIDs = $request->checkout_product_variant_ids;
 
         // Get ShoppingCartItem(s)
@@ -865,7 +877,6 @@ class ShoppingCartController extends Controller
             ->filter(fn($item) => $item->is_checkout)
             ->values();
 
-        $inventoryDeductions = [];
         foreach ($checkoutItems as $item) {
             $attributes = $item->toArray();
             unset($attributes['_id'], $attributes['is_checkout']);
@@ -875,18 +886,13 @@ class ShoppingCartController extends Controller
             $qty = $attributes['qty'];
             /** @var ProductVariant $variant */
             $variant = ProductVariant::find($variantID);
-            $deductions = $this->deductWarehouseInventoriesByStore(
+            $this->deductWarehouseInventoriesByStore(
                 $store,
                 $variant,
                 $qty
             );
-            $inventoryDeductions = array_merge($inventoryDeductions, $deductions);
 
             $order->createCartItem($attributes);
-        }
-
-        if (!is_null($order->payment_expires_at)) {
-            $order->update(['inventory_deductions' => $inventoryDeductions]);
         }
 
         // Update Order
