@@ -6,7 +6,6 @@ use App\Enums\CheckoutApprovalStatus;
 use App\Enums\ShipmentDeliveryStatus;
 use App\Models\Checkout;
 use App\Models\Order;
-use App\Models\WarehouseInventory;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -111,8 +110,8 @@ class VaultPaymentService
             $this->cancelPaymentIntent($checkout);
         }
 
-        $this->releaseReservedInventory($order);
-
+        // The MongoDB notification listener restores Vault inventory when the
+        // Order enters CANCELLED, covering automatic, customer and admin cancellation.
         $order->update([
             'payment_expired_at' => now(),
         ]);
@@ -189,36 +188,4 @@ class VaultPaymentService
         }
     }
 
-    private function releaseReservedInventory(Order $order): void
-    {
-        if (!is_null($order->inventory_released_at)) {
-            return;
-        }
-
-        $deductions = collect($order->inventory_deductions ?? [])
-            ->filter(fn($deduction) => (int) data_get($deduction, 'qty', 0) > 0)
-            ->groupBy('warehouse_inventory_id')
-            ->map(function ($items, $inventoryID) {
-                return [
-                    'warehouse_inventory_id' => $inventoryID,
-                    'qty' => $items->sum(fn($item) => (int) data_get($item, 'qty', 0)),
-                ];
-            });
-
-        foreach ($deductions as $deduction) {
-            $inventory = WarehouseInventory::find($deduction['warehouse_inventory_id']);
-            if (is_null($inventory)) {
-                Log::warning('Unable to restore expired Vault order inventory', [
-                    'order_id' => (string) $order->_id,
-                    'warehouse_inventory_id' => $deduction['warehouse_inventory_id'],
-                    'qty' => $deduction['qty'],
-                ]);
-                continue;
-            }
-
-            $inventory->incrementQty($deduction['qty']);
-        }
-
-        $order->update(['inventory_released_at' => now()]);
-    }
 }
