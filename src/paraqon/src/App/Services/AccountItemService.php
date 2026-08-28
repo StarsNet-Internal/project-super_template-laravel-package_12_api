@@ -604,7 +604,8 @@ class AccountItemService
             'SUBMITTED', 'PROCESSING', 'PENDING' => 'Pending',
             'READY_TO_PICKUP' => 'Ready for Pick-up',
             'DELIVERING' => $this->getShippedStatusLabel($history),
-            'COMPLETED', 'CANCELLED' => 'Completed',
+            'COMPLETED' => 'Completed',
+            'CANCELLED' => 'Cancelled',
         };
 
         return $this->withStatusCreatedAt($label, $statusCreatedAt);
