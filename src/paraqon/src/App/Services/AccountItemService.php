@@ -483,6 +483,9 @@ class AccountItemService
                 : null
             );
         $agreementReference = data_get($agreement, 'document.statement_no');
+        $agreementContractReference = $this->getAgreementContractReference(
+            $agreement
+        );
         $settlementReference = $settlementDocument?->reference_no;
         if (empty($settlementReference)) {
             $settlementReference = $settlementDocument?->statement_no;
@@ -531,13 +534,13 @@ class AccountItemService
             'reserve_price' => $price,
             'contract_reference' => $includeSettlement
                 ? ($settlementReference ?: $agreementReference)
-                : $agreementReference,
+                : $agreementContractReference,
             'channel' => $channel,
             'sold_price' => $includeSettlement
                 ? ($this->number(data_get($settlementItem, 'price')) ?? $hammerPrice)
                 : null,
             'expected_settlement' => $includeSettlement
-                ? $this->number(data_get($settlementItem, 'total'))
+                ? $this->getExpectedSettlement($settlementItem)
                 : null,
             'hammer_price' => $channel === 'buy' ? $hammerPrice : null,
             'commission' => $channel === 'buy' ? $commission : null,
@@ -842,6 +845,28 @@ class AccountItemService
         return $this->getDocumentEntry($documents, $preferredType);
     }
 
+    private function getAgreementContractReference(?array $agreement): ?array
+    {
+        /** @var ?Document $document */
+        $document = data_get($agreement, 'document');
+        if (is_null($document)) return null;
+
+        $number = trim((string) ($document->statement_no ?? ''));
+        $file = collect($document->documents ?? [])->first(
+            fn($file) =>
+                data_get($file, 'type') === $document->type
+                && !empty(data_get($file, 'url'))
+        );
+        $url = trim((string) data_get($file, 'url', ''));
+
+        if ($number === '' && $url === '') return null;
+
+        return [
+            'number' => $number === '' ? null : $number,
+            'url' => $url === '' ? null : $url,
+        ];
+    }
+
     private function getDocumentEntry(
         Collection $documents,
         string $type
@@ -886,6 +911,23 @@ class AccountItemService
                 ?? data_get($orderItem, 'discounted_price_per_unit')
                 ?? data_get($orderItem, 'original_price_per_unit')
         );
+    }
+
+    private function getExpectedSettlement($settlementItem): ?float
+    {
+        if (is_null($settlementItem)) return null;
+
+        $price = $this->number(data_get($settlementItem, 'price'));
+        if (is_null($price)) return null;
+
+        $commission = $this->number(
+            data_get($settlementItem, 'commission')
+        ) ?? 0.0;
+        $otherCharges = $this->number(
+            data_get($settlementItem, 'other_charges')
+        ) ?? 0.0;
+
+        return $price - $commission - $otherCharges;
     }
 
     private function getPurchasedTotal(
