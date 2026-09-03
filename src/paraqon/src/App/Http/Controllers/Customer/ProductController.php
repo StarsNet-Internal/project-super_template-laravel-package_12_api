@@ -19,20 +19,24 @@ use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 
 class ProductController extends Controller
 {
-    public function getAllOwnedProducts(): Collection
+    public function getAllOwnedProducts(Request $request): Collection
     {
         $customerID = $this->customer()->id;
 
-        $products = Product::statusActive()
+        $query = Product::statusActive()
             ->where(function ($query) use ($customerID) {
                 $query->where('seller_id', $customerID)
                     ->orWhere(function ($legacyQuery) use ($customerID) {
                         $legacyQuery->whereNull('seller_id')
                             ->where('owned_by_customer_id', $customerID);
                     });
-            })
-            ->whereIn('listing_status', ["AVAILABLE", "PENDING_FOR_AUCTION"])
-            ->get();
+            });
+
+        if (!$request->boolean('include_all_active')) {
+            $query->whereIn('listing_status', ["AVAILABLE", "PENDING_FOR_AUCTION"]);
+        }
+
+        $products = $query->get();
 
         foreach ($products as $product) {
             $product->product_variant_id = optional($product->variants()->latest()->first())->_id;
