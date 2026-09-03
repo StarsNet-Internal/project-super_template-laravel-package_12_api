@@ -53,9 +53,17 @@ class CustomerController extends Controller
 
     public function getAllOwnedProducts(Request $request): Collection
     {
+        $customerID = $request->route('customer_id');
+
         /** @var Collection $products */
         $products = Product::where('status', '!=', Status::DELETED->value)
-            ->where('owned_by_customer_id', $request->route('customer_id'))
+            ->where(function ($query) use ($customerID) {
+                $query->where('seller_id', $customerID)
+                    ->orWhere(function ($legacyQuery) use ($customerID) {
+                        $legacyQuery->whereNull('seller_id')
+                            ->where('owned_by_customer_id', $customerID);
+                    });
+            })
             ->get();
 
         foreach ($products as $product) {

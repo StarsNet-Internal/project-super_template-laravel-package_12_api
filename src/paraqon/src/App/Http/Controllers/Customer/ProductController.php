@@ -21,8 +21,16 @@ class ProductController extends Controller
 {
     public function getAllOwnedProducts(): Collection
     {
+        $customerID = $this->customer()->id;
+
         $products = Product::statusActive()
-            ->where('owned_by_customer_id', $this->customer()->id)
+            ->where(function ($query) use ($customerID) {
+                $query->where('seller_id', $customerID)
+                    ->orWhere(function ($legacyQuery) use ($customerID) {
+                        $legacyQuery->whereNull('seller_id')
+                            ->where('owned_by_customer_id', $customerID);
+                    });
+            })
             ->whereIn('listing_status', ["AVAILABLE", "PENDING_FOR_AUCTION"])
             ->get();
 
