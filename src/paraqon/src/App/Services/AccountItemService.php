@@ -482,14 +482,12 @@ class AccountItemService
                 ? data_get($order, 'documents.payment_receipt')
                 : null
             );
-        $agreementReference = data_get($agreement, 'document.statement_no');
         $agreementContractReference = $this->getAgreementContractReference(
             $agreement
         );
-        $settlementReference = $settlementDocument?->reference_no;
-        if (empty($settlementReference)) {
-            $settlementReference = $settlementDocument?->statement_no;
-        }
+        $settlementContractReference = $this->getSettlementContractReference(
+            $settlementDocument
+        );
 
         $stockNumber = $this->getStockNumber($product, $orderItem);
         $auctionPrefix = $purpose === 'AUCTION'
@@ -533,7 +531,7 @@ class AccountItemService
             'price' => $price,
             'reserve_price' => $price,
             'contract_reference' => $includeSettlement
-                ? ($settlementReference ?: $agreementReference)
+                ? ($settlementContractReference ?? $agreementContractReference)
                 : $agreementContractReference,
             'channel' => $channel,
             'sold_price' => $includeSettlement
@@ -851,7 +849,28 @@ class AccountItemService
         $document = data_get($agreement, 'document');
         if (is_null($document)) return null;
 
-        $number = trim((string) ($document->statement_no ?? ''));
+        return $this->getDocumentContractReference(
+            $document,
+            $document->statement_no
+        );
+    }
+
+    private function getSettlementContractReference(
+        ?Document $document
+    ): ?array {
+        if (is_null($document)) return null;
+
+        return $this->getDocumentContractReference(
+            $document,
+            $document->reference_no ?: $document->statement_no
+        );
+    }
+
+    private function getDocumentContractReference(
+        Document $document,
+        $referenceNumber
+    ): ?array {
+        $number = trim((string) ($referenceNumber ?? ''));
         $file = collect($document->documents ?? [])->first(
             fn($file) =>
                 data_get($file, 'type') === $document->type
