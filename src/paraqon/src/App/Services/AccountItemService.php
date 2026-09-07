@@ -24,6 +24,7 @@ class AccountItemService
     private const SELLER_DOCUMENT_TYPES = [
         'CONSIGNMENT_AGREEMENT_FOR_AUCTION',
         'PRIVATE_SALE_AGREEMENT',
+        'THE_VAULT_AGREEMENT',
         'CONSIGNOR_SETTLEMENT',
     ];
 
@@ -836,9 +837,11 @@ class AccountItemService
         Collection $documents,
         string $purpose
     ): ?array {
-        $preferredType = $purpose === 'AUCTION'
-            ? 'CONSIGNMENT_AGREEMENT_FOR_AUCTION'
-            : 'PRIVATE_SALE_AGREEMENT';
+        $preferredType = match ($purpose) {
+            'AUCTION' => 'CONSIGNMENT_AGREEMENT_FOR_AUCTION',
+            'THE_VAULT' => 'THE_VAULT_AGREEMENT',
+            default => 'PRIVATE_SALE_AGREEMENT',
+        };
 
         return $this->getDocumentEntry($documents, $preferredType);
     }
