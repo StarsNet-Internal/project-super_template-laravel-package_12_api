@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AccountController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionLotController;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\LiveSaleController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionRegistrationRequestController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuctionRequestController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuthController;
@@ -105,6 +106,15 @@ Route::group(
     }
 );
 
+Route::group(
+    ['prefix' => 'live-bidding'],
+    function () {
+        Route::get('/{store_id}/book', [LiveSaleController::class, 'show']);
+        Route::group(['middleware' => 'auth:api'], function () {
+            Route::post('/{store_id}/commands', [LiveSaleController::class, 'command']);
+        });
+    }
+);
 
 Route::group(
     ['prefix' => 'auth'],
