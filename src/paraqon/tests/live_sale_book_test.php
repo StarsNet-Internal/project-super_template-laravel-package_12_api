@@ -103,6 +103,7 @@ $sale->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
 expect(fn () => $sale->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't']), 'Another lot');
 $sale->apply('open_lot', ['at' => 't']);
 check($sale->publicPayload('t')['asking_price'] === 800.0, 'opening ask is the starting price');
+check($sale->publicPayload('t')['histories'] === [], 'a lone absentee does not bid on open');
 
 $sale->apply('submit_online_bid', [
     'amount' => 800,
@@ -119,22 +120,19 @@ $sale->apply('accept_pending', [
     'pending_id' => $sale->clerkPayload('t')['pending'][0]['id'],
     'at' => 't2',
 ]);
-check($sale->publicPayload('t')['asking_price'] === 900.0, 'table increment follows an accepted bid');
+check($sale->publicPayload('t')['asking_price'] === 1000.0, 'the absentee answers one increment above the online bid');
 check($sale->publicPayload('t')['histories'][0]['paddle_label'] === 'Paddle #201', 'online bid keeps its paddle');
+check($sale->publicPayload('t')['histories'][0]['current_bid'] === 800.0, 'the online bid stays on the ladder');
+check($sale->publicPayload('t')['histories'][1]['paddle_label'] === 'Paddle #55', 'the room sees the absentee paddle');
+check($sale->publicPayload('t')['histories'][1]['current_bid'] === 900.0, 'the book bids one increment');
 check($sale->publicPayload('t')['has_pending'] === false, 'other waiting bids are cleared');
+check(containsKey($sale->publicPayload('t'), 'customer_id') === false, 'the book bid does not publish a customer id');
+check(containsKey($sale->publicPayload('t'), 'advance') === false, 'the absentee max stays off the public book');
 
-$sale->apply('accept_bid', [
-    'amount' => 900,
-    'source' => 'floor',
-    'paddle_id' => 12,
-    'customer_id' => 'floor-12',
-    'at' => 't3',
-]);
 $clerk = $sale->clerkPayload('t');
-check($clerk['undo']['amount'] === 900.0, 'undo names the latest bid');
-check($clerk['undo']['paddle_label'] === 'Floor bid', 'floor bid is labelled floor');
+check($clerk['undo']['amount'] === 900.0, 'undo names the book bid');
+check($clerk['undo']['paddle_label'] === 'Paddle #55', 'undo names the absentee paddle');
 check($clerk['highest_advanced_bid']['bid'] === 1500.0, 'absentee max stays on the clerk book');
-check($clerk['lots'][0]['reserve_met'] === false, '900 is under a 1000 reserve');
 
 $advanceBefore = $sale->toArray()['lots'][0]['advance'];
 $undoId = $clerk['undo']['bid_id'];
@@ -143,6 +141,7 @@ $sale->apply('undo_latest_bid', ['bid_id' => $undoId, 'at' => 't4']);
 $after = $sale->clerkPayload('t');
 check($after['undo']['paddle_label'] === 'Paddle #201', 'the previous bid becomes the latest');
 check($after['asking_price'] === 900.0, 'asking returns to the bid that was undone');
+check(count($after['histories']) === 1, 'the book bid leaves the ladder');
 check($after['highest_advanced_bid']['bid'] === 1500.0, 'undo does not replay the absentee');
 check($sale->toArray()['lots'][0]['advance'] === $advanceBefore, 'the absentee record is unchanged');
 
@@ -156,6 +155,13 @@ $sale->apply('accept_bid', [
     'source' => 'house',
     'at' => 't6',
 ]);
+check($sale->clerkPayload('t')['undo']['paddle_label'] === 'Paddle #55', 'a house bid under the max draws the absentee');
+check($sale->clerkPayload('t')['undo']['amount'] === 1000.0, 'the book bids the next increment');
+check($sale->clerkPayload('t')['lots'][0]['reserve_met'] === true, 'the book bid meets the reserve');
+$sale->apply('undo_latest_bid', ['at' => 't6b']);
+check($sale->clerkPayload('t')['undo']['paddle_label'] === 'Floor bid', 'undo of the book bid leaves the house bid');
+check($sale->clerkPayload('t')['lots'][0]['reserve_met'] === false, '900 is under a 1000 reserve');
+check($sale->toArray()['lots'][0]['advance'] === $advanceBefore, 'undo still does not replay the absentee');
 expect(fn () => $sale->apply('sell', ['at' => 't']), 'reserve');
 $sale->apply('accept_bid', [
     'amount' => 1000,
@@ -164,17 +170,19 @@ $sale->apply('accept_bid', [
     'customer_id' => 'phone-33',
     'at' => 't7',
 ]);
+check($sale->publicPayload('t')['histories'][count($sale->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Paddle #55', 'the phone bid is answered by the absentee');
 $sale->apply('warn', ['action' => 'FAIR_WARNING', 'at' => 't8']);
 check($sale->publicPayload('t')['warning'] === 'FAIR_WARNING', 'warning is public');
 $sale->apply('sell', ['at' => 't9']);
 expect(fn () => $sale->apply('undo_latest_bid', ['at' => 't']), 'Open the lot');
 check($sale->publicPayload('t')['lots'][0]['is_disabled'] === true, 'sold lot is disabled');
 check($sale->publicPayload('t')['lots'][0]['is_closed'] === false, 'sold is not a pass');
-check($sale->publicPayload('t')['lots'][0]['current_bid'] === 1000.0, 'hammer is the current bid');
+check($sale->publicPayload('t')['lots'][0]['current_bid'] === 1100.0, 'hammer is the absentee answer');
 
 $sale->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't10']);
 $sale->apply('undo_latest_bid', ['at' => 't11']);
-check($sale->clerkPayload('t')['undo']['paddle_label'] === 'Floor bid', 'reopen lets the clerk undo the new latest bid');
+check($sale->clerkPayload('t')['undo']['paddle_label'] === 'Phone #33', 'reopen lets the clerk undo the new latest bid');
+check(count($sale->publicPayload('t')['histories']) === 2, 'undo removes only the book bid');
 
 expect(fn () => $sale->apply('end_sale', ['at' => 't']), 'on the block');
 $sale->apply('pass', ['at' => 't12']);
@@ -197,5 +205,72 @@ expect(fn () => $sale->apply('open_lot', ['at' => 't']), 'ended');
 $restored = LiveSaleBook::fromArray($sale->toArray());
 check($restored->sequence() === $sale->sequence(), 'the book round-trips');
 check($restored->status() === 'ended', 'ended status round-trips');
+
+$duelLots = catalogue();
+$duelLots[0]['advances'] = [
+    [
+        'customer_id' => 'early',
+        'amount' => 1000,
+        'paddle_id' => 1,
+        'placed_at' => '2026-10-01T00:00:00Z',
+    ],
+    [
+        'customer_id' => 'late',
+        'amount' => 1000,
+        'paddle_id' => 2,
+        'placed_at' => '2026-10-02T00:00:00Z',
+    ],
+];
+unset($duelLots[0]['advance']);
+$duel = LiveSaleBook::empty('store-duel');
+$duel->apply('start_sale', ['lots' => $duelLots, 'at' => 't']);
+$duel->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$duel->apply('open_lot', ['at' => 't']);
+$duelLadder = array_map(
+    fn ($row) => [$row['current_bid'], $row['paddle_label']],
+    $duel->publicPayload('t')['histories']
+);
+check($duelLadder === [
+    [800.0, 'Paddle #1'],
+    [900.0, 'Paddle #2'],
+    [1000.0, 'Paddle #1'],
+], 'tied absentees open against each other and the earlier bid takes the maximum');
+check($duel->publicPayload('t')['asking_price'] === 1100.0, 'asking moves past the tied maximum');
+check($duel->clerkPayload('t')['highest_advanced_bid']['paddle_id'] === 1, 'the earlier maximum stays the top absentee');
+$duel->apply('undo_latest_bid', ['at' => 't']);
+check($duel->publicPayload('t')['histories'][count($duel->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Paddle #2', 'undo of the opening duel does not bid the maximum again');
+
+$raceLots = catalogue();
+$raceLots[0]['advances'] = [
+    [
+        'customer_id' => 'high',
+        'amount' => 1500,
+        'paddle_id' => 11,
+        'placed_at' => '2026-10-01T00:00:00Z',
+    ],
+    [
+        'customer_id' => 'low',
+        'amount' => 1200,
+        'paddle_id' => 12,
+        'placed_at' => '2026-10-03T00:00:00Z',
+    ],
+];
+unset($raceLots[0]['advance']);
+$race = LiveSaleBook::empty('store-race');
+$race->apply('start_sale', ['lots' => $raceLots, 'at' => 't']);
+$race->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$race->apply('open_lot', ['at' => 't']);
+$raceLadder = array_map(
+    fn ($row) => [$row['current_bid'], $row['paddle_label']],
+    $race->publicPayload('t')['histories']
+);
+check($raceLadder === [
+    [800.0, 'Paddle #11'],
+    [900.0, 'Paddle #12'],
+    [1000.0, 'Paddle #11'],
+    [1100.0, 'Paddle #12'],
+    [1200.0, 'Paddle #11'],
+], 'unequal absentees stop one step above the lower maximum');
+check($race->publicPayload('t')['asking_price'] === 1300.0, 'the higher absentee does not bid against themselves');
 
 echo "ok\n";

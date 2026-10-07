@@ -177,7 +177,7 @@ class LiveSaleService
                 'is_permission_required' => (bool) $lot->is_permission_required,
                 'permission_requests' => is_array($requests) ? array_values($requests) : [],
                 'created_at' => $this->instant($lot->created_at),
-                'advance' => $advances[$lotId] ?? null,
+                'advances' => $advances[$lotId] ?? [],
             ];
         }
         return $catalogue;
@@ -186,7 +186,7 @@ class LiveSaleService
     /**
      * @param array<string, bool> $lotIds
      * @param array<string, mixed> $paddles
-     * @return array<string, array<string, mixed>>
+     * @return array<string, array<int, array<string, mixed>>>
      */
     private function advances(string $storeId, array $lotIds, array $paddles): array
     {
@@ -208,20 +208,37 @@ class LiveSaleService
                 return is_string($created) ? strtotime($created) : 0;
             });
 
-        $best = [];
+        $byLot = [];
         foreach ($bids as $bid) {
             $lotId = (string) $bid->auction_lot_id;
+            $customerId = (string) $bid->customer_id;
             $amount = (float) $bid->bid;
-            if (!isset($best[$lotId]) || $amount > $best[$lotId]['amount'] + 0.001) {
-                $customerId = (string) $bid->customer_id;
-                $best[$lotId] = [
-                    'customer_id' => $customerId,
-                    'amount' => $amount,
-                    'paddle_id' => $paddles[$customerId] ?? null,
-                ];
+            $placedAt = $this->instant($bid->created_at) ?? '';
+            $row = [
+                'customer_id' => $customerId,
+                'amount' => $amount,
+                'paddle_id' => $paddles[$customerId] ?? null,
+                'placed_at' => $placedAt,
+            ];
+            if (!isset($byLot[$lotId])) {
+                $byLot[$lotId] = [];
+            }
+            $existing = null;
+            foreach ($byLot[$lotId] as $index => $advance) {
+                if ($advance['customer_id'] === $customerId) {
+                    $existing = $index;
+                    break;
+                }
+            }
+            if ($existing === null) {
+                $byLot[$lotId][] = $row;
+                continue;
+            }
+            if ($amount > $byLot[$lotId][$existing]['amount'] + 0.001) {
+                $byLot[$lotId][$existing]['amount'] = $amount;
             }
         }
-        return $best;
+        return $byLot;
     }
 
     /**
