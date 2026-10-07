@@ -57,6 +57,7 @@ class AuctionRegistrationRequestController extends Controller
                 'approved_by_account_id' => null,
                 'status' => Status::ACTIVE->value,
                 'reply_status' => $replyStatus,
+                'bidding_channel' => AuctionRegistrationRequest::channel($oldForm->bidding_channel ?? null),
             ];
 
             // Calculate paddle_id if not exists in original AuctionRegistrationRequest yet
@@ -93,6 +94,7 @@ class AuctionRegistrationRequestController extends Controller
             'status' => Status::ACTIVE->value,
             'paddle_id' => null,
             'reply_status' => $replyStatus,
+            'bidding_channel' => 'online',
         ];
 
         if ($replyStatus === ReplyStatus::APPROVED->value) {

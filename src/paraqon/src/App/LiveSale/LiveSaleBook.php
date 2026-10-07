@@ -105,6 +105,7 @@ class LiveSaleBook
             'submit_online_bid' => $this->submitOnlineBid($payload, $at),
             'accept_pending' => $this->acceptPending($payload, $at),
             'reject_pending' => $this->rejectPending($payload, $at),
+            'take_book' => $this->takeBook($payload, $at),
             'warn' => $this->warn($payload, $at),
             'sell' => $this->sell($at),
             'pass' => $this->pass($at),
@@ -456,6 +457,120 @@ class LiveSaleBook
         return ['lot_id' => $lot['lot_id'], 'bid_id' => $bid['id'], 'amount' => $amount];
     }
 
+    /**
+     * The auctioneer takes the book at the asking price instead of a pending
+     * online bid at that same price. One stack row is written. The online bid
+     * is dropped and is not a second bid at the same amount.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function takeBook(array $payload, string $at): array
+    {
+        $lot = $this->requireOnTheBlock();
+        $advance = $this->absenteeForAsking($lot);
+        if ($advance === null) {
+            throw new LiveSaleException('No absentee bid can take the asking price');
+        }
+        $amount = (float) $lot['asking_price'];
+        $bid = [
+            'id' => $this->newId(),
+            'amount' => $amount,
+            'paddle_id' => $advance['paddle_id'],
+            'customer_id' => $advance['customer_id'],
+            'source' => 'advance',
+            'created_at' => $at,
+        ];
+        $lot['bids'][] = $bid;
+        $lot['pending'] = [];
+        $lot['state'] = 'open';
+        $lot['warning'] = null;
+        $step = $this->incrementFor($lot, $amount);
+        $lot['asking_price'] = $this->greater($step, 0) ? round($amount + $step, 2) : $amount;
+        $this->lots[$lot['lot_id']] = $lot;
+        return [
+            'lot_id' => $lot['lot_id'],
+            'bid_id' => $bid['id'],
+            'amount' => $amount,
+            'preferred_over' => 'online',
+        ];
+    }
+
+    /**
+     * An absentee who can cover the asking price, and who is not already leading.
+     *
+     * @param array<string, mixed> $lot
+     * @return array<string, mixed>|null
+     */
+    private function absenteeForAsking(array $lot): ?array
+    {
+        if (!in_array($lot['state'] ?? '', ['open', 'fair_warning'], true)) {
+            return null;
+        }
+        if (!isset($lot['asking_price']) || $lot['asking_price'] === null) {
+            return null;
+        }
+        $amount = (float) $lot['asking_price'];
+        $current = $this->currentBid($lot);
+        if ($current !== null && !$this->greater($amount, $current)) {
+            return null;
+        }
+        if ($current === null && $amount < 0) {
+            return null;
+        }
+        $leader = $this->latestBid($lot);
+        $leaderId = $leader ? (string) ($leader['customer_id'] ?? '') : '';
+        $candidates = [];
+        foreach ($lot['advances'] ?? [] as $advance) {
+            if ($leaderId !== '' && (string) ($advance['customer_id'] ?? '') === $leaderId) {
+                continue;
+            }
+            if ($this->greater($amount, $this->effectiveMax($advance, $lot))) {
+                continue;
+            }
+            $candidates[] = $advance;
+        }
+        if ($candidates === []) {
+            return null;
+        }
+        usort($candidates, function (array $a, array $b) use ($lot): int {
+            $left = $this->effectiveMax($a, $lot);
+            $right = $this->effectiveMax($b, $lot);
+            if (!$this->same($left, $right)) {
+                return $left < $right ? 1 : -1;
+            }
+            return strcmp((string) ($a['placed_at'] ?? ''), (string) ($b['placed_at'] ?? ''));
+        });
+        return $candidates[0];
+    }
+
+    /**
+     * Final hammers. A passed lot has no buyer. A withdrawn bid is not a hammer.
+     * A lot that was sold, reopened, and then undone is whatever the stack says now.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function settlement(): array
+    {
+        $rows = [];
+        foreach ($this->lots as $lot) {
+            if (!in_array($lot['state'], ['sold', 'passed'], true)) {
+                continue;
+            }
+            $sold = $lot['state'] === 'sold';
+            $rows[] = [
+                'lot_id' => $lot['lot_id'],
+                'lot_number' => $lot['lot_number'],
+                'result' => $sold ? 'sold' : 'passed',
+                'hammer_price' => $sold ? $lot['hammer_price'] : null,
+                'paddle_id' => $sold ? ($lot['hammer_paddle_id'] ?? null) : null,
+                'customer_id' => $sold ? ($lot['hammer_customer_id'] ?? null) : null,
+            ];
+        }
+        usort($rows, fn ($a, $b) => $a['lot_number'] <=> $b['lot_number']);
+        return $rows;
+    }
+
     private function rejectPending(array $payload, string $at): array
     {
         $lot = $this->requireOnTheBlock();
@@ -555,6 +670,9 @@ class LiveSaleBook
             'lot_id' => $lot['lot_id'],
             'bid_id' => $latest['id'],
             'amount' => $latest['amount'],
+            'paddle_id' => $latest['paddle_id'] ?? null,
+            'customer_id' => $latest['customer_id'] ?? null,
+            'withdrawn' => true,
         ];
     }
 
@@ -623,6 +741,9 @@ class LiveSaleBook
                 'leading_paddle_id' => $latest['paddle_id'] ?? null,
                 'live_state' => $lot['state'],
             ];
+            if ($lot['state'] === 'sold' && $latest) {
+                $row['hammer_paddle_label'] = $this->paddleLabel($latest);
+            }
             if ($clerk) {
                 $row['reserve_price'] = $lot['reserve_price'];
                 $row['reserve_met'] = $this->reserveMet($lot);
@@ -705,6 +826,8 @@ class LiveSaleBook
             $body['clerk'] = true;
             $body['pending'] = $pending;
             $body['undo'] = $undo;
+            $body['settlement'] = $this->settlement();
+            $body['book_can_take'] = $current ? $this->absenteeForAsking($current) !== null : false;
             if ($current && !empty($current['advance'])) {
                 $body['highest_advanced_bid'] = [
                     'customer_id' => $current['advance']['customer_id'] ?? null,

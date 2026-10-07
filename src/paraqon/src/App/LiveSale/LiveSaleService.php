@@ -75,6 +75,7 @@ class LiveSaleService
                 return $this->present($book, $at, $clerk, $customerId);
             }
 
+            $ready = $payload;
             try {
                 $ready = $this->preparePayload($storeId, $command, $payload, $customerId);
                 if ($command === 'open_lot') {
@@ -85,6 +86,7 @@ class LiveSaleService
                 }
                 $summary = $book->apply($command, $ready);
             } catch (LiveSaleException $e) {
+                $this->recordRejection($storeId, $command, $ready ?? $payload, $actorId, $e->getMessage(), $book);
                 abort(422, $e->getMessage());
             }
 
@@ -377,6 +379,88 @@ class LiveSaleService
     /**
      * @param array<string, mixed> $summary
      */
+    /**
+     * A rejected bid does not change the book. The row names the clerk and the reason.
+     *
+     * @param array<string, mixed> $payload
+     */
+    private function recordRejection(
+        string $storeId,
+        string $command,
+        array $payload,
+        ?string $actorId,
+        string $message,
+        LiveSaleBook $book
+    ): void {
+        try {
+            LiveSaleEvent::create([
+                'store_id' => $storeId,
+                'sequence' => $book->sequence(),
+                'command' => 'rejected',
+                'actor_id' => $actorId,
+                'at' => gmdate('c'),
+                'lot_id' => $payload['lot_id'] ?? $book->currentLotId(),
+                'summary' => [
+                    'command' => $command,
+                    'message' => $message,
+                    'actor_id' => $actorId,
+                    'amount' => $payload['amount'] ?? null,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Live sale rejection was not recorded', [
+                'store_id' => $storeId,
+                'command' => $command,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Orders and deposits use the ended book. Passed lots have no buyer.
+     * A sale that was reopened and then undone contributes only the final stack.
+     *
+     * @return array{results: array<int, array<string, mixed>>, lots: array<int, array<string, mixed>>}|null
+     */
+    public function settlementForOrders(string $storeId): ?array
+    {
+        $doc = LiveSaleState::where('store_id', $storeId)->first();
+        if ($doc === null) {
+            return null;
+        }
+        $book = $this->bookFromDocument($doc);
+        if ($book->status() !== 'ended') {
+            return null;
+        }
+        $lots = $book->settlement();
+        $grouped = [];
+        foreach ($lots as $lot) {
+            if ($lot['result'] !== 'sold') {
+                continue;
+            }
+            $customerId = $lot['customer_id'] ?? null;
+            if ($customerId === null || $customerId === '') {
+                continue;
+            }
+            $customerId = (string) $customerId;
+            if (!isset($grouped[$customerId])) {
+                $grouped[$customerId] = [
+                    'customer_id' => $customerId,
+                    'lots' => [],
+                ];
+            }
+            $grouped[$customerId]['lots'][] = [
+                'lot_id' => $lot['lot_id'],
+                'price' => $lot['hammer_price'],
+                'sold_price' => $lot['hammer_price'],
+            ];
+        }
+        return [
+            'results' => array_values($grouped),
+            'lots' => $lots,
+        ];
+    }
+
     private function record(string $storeId, array $summary, ?string $actorId): void
     {
         LiveSaleEvent::create([

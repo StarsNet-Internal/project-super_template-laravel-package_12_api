@@ -31,6 +31,7 @@ use Illuminate\Http\Client\Response;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
+use Starsnet\Project\Paraqon\App\LiveSale\LiveSaleService;
 use Starsnet\Project\Paraqon\App\Models\LiveBiddingEvent;
 
 // Controllers
@@ -475,7 +476,8 @@ class ServiceController extends Controller
         // Make lots ACTIVE
         $archivedLots = AuctionLot::where('status', Status::ARCHIVED->value)
             ->whereHas('store', function ($query) {
-                return $query->where('status', Status::ACTIVE->value);
+                return $query->where('status', Status::ACTIVE->value)
+                    ->where('auction_type', '!=', 'LIVE');
             })
             ->get();
 
@@ -491,7 +493,11 @@ class ServiceController extends Controller
         }
 
         // Make lots ARCHIVED
-        $activeLots = AuctionLot::where('status', Status::ACTIVE->value)->get();
+        $activeLots = AuctionLot::where('status', Status::ACTIVE->value)
+            ->whereHas('store', function ($query) {
+                return $query->where('auction_type', '!=', 'LIVE');
+            })
+            ->get();
 
         $activeLotsUpdateCount = 0;
         foreach ($activeLots as $lot) {
@@ -812,6 +818,29 @@ class ServiceController extends Controller
         if ($store->status === Status::ACTIVE->value) abort(200, "Store is still ACTIVE. Skipping generating auction order sequences.");
         if ($store->status === Status::DELETED->value) abort(200, "Store is already DELETED. Skipping generating auction order sequences.");
 
+        // An ended live book is the sale record. Passed lots have no buyer, and a
+        // hammer that was reopened and then undone is not invoiced. Deposit capture
+        // follows those final hammers. This write is once, after the chant, and it
+        // does not touch bid history.
+        $settlement = app(LiveSaleService::class)->settlementForOrders((string) $store->_id);
+        if ($settlement !== null) {
+            foreach ($settlement['lots'] as $lot) {
+                if ($lot['result'] === 'sold') {
+                    AuctionLot::where('_id', $lot['lot_id'])->update([
+                        'winning_bid_customer_id' => $lot['customer_id'],
+                        'current_bid' => $lot['hammer_price'],
+                        'sold_price' => $lot['hammer_price'],
+                    ]);
+                    continue;
+                }
+                AuctionLot::where('_id', $lot['lot_id'])->update([
+                    'winning_bid_customer_id' => null,
+                    'sold_price' => null,
+                ]);
+            }
+            $request->merge(['results' => $settlement['results']]);
+        }
+
         // Get all winning customer ids
         $winningCustomerIDs = collect($request->results)->pluck('customer_id')->filter()->unique()->values()->toArray();
 
@@ -837,16 +866,19 @@ class ServiceController extends Controller
         // Generate OFFLINE order by system
         $generatedOrderCount = 0;
 
-        // Update auction lots with inputted price
-        foreach ($request->results as $result) {
-            foreach ($result['lots'] as $lot) {
-                AuctionLot::where('_id', $lot['lot_id'])
-                    ->update([
-                        'winning_bid_customer_id' => $result['customer_id'],
-                        'current_bid' => $lot['price'],
-                        'sold_price' => $lot['sold_price'],
-                        'commission' => $lot['commission'],
-                    ]);
+        // The book already wrote the hammers. This path is the older sheet,
+        // which still types the buyer and the price.
+        if ($settlement === null) {
+            foreach ($request->results as $result) {
+                foreach ($result['lots'] as $lot) {
+                    AuctionLot::where('_id', $lot['lot_id'])
+                        ->update([
+                            'winning_bid_customer_id' => $result['customer_id'],
+                            'current_bid' => $lot['price'],
+                            'sold_price' => $lot['sold_price'],
+                            'commission' => $lot['commission'],
+                        ]);
+                }
             }
         }
 

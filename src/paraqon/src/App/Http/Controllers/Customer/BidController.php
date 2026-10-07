@@ -53,6 +53,10 @@ class BidController extends Controller
         if ($auctionLot->status == Status::DELETED->value) abort(404, 'AuctionLot not found');
         if ($bid->type == 'ADVANCED') {
             app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id);
+            if (optional($auctionLot->store)->auction_type === 'LIVE') {
+                $bid->update(['is_hidden' => true]);
+                return ['message' => 'Bid cancelled successfully'];
+            }
         }
         if ($auctionLot->status == Status::ACTIVE->value) abort(404, 'You cannot cancel ADVANCED bid when the auction lot is already ACTIVE');
         if ($now >= Carbon::parse($auctionLot->start_datetime)) abort(404, 'You cannot cancel ADVANCED bid when the auction lot is already ACTIVE');
@@ -141,6 +145,10 @@ class BidController extends Controller
         if ($auctionLot->status == Status::DELETED->value) abort(404, 'AuctionLot not found');
         if ($bid->type == 'ADVANCED') {
             app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id);
+            if (optional($auctionLot->store)->auction_type === 'LIVE') {
+                $bid->update(['is_hidden' => true]);
+                return ['message' => 'Bid cancelled successfully'];
+            }
         }
         if ($auctionLot->status == Status::ACTIVE->value) abort(404, 'You cannot cancel ADVANCED bid when the auction lot is already ACTIVE');
 

@@ -16,6 +16,7 @@ use App\Models\Category;
 use App\Models\Customer;
 use App\Models\Product;
 use App\Models\Store;
+use Starsnet\Project\Paraqon\App\LiveSale\LiveSaleService;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Bid;
 use Starsnet\Project\Paraqon\App\Models\BidHistory;
@@ -267,8 +268,14 @@ class AuctionLotController extends Controller
         if (is_null($store)) abort(404, 'Auction not found');
         if ($store->status == Status::DELETED->value) abort(404, 'Auction not found');
 
-        // Get current_bid place
-        $currentBid = $auctionLot->getCurrentBidPrice();
+        $liveSale = ($store->auction_type ?? null) === 'LIVE';
+        if ($liveSale && $bidType !== 'ADVANCED') {
+            abort(422, 'Live bids are taken on the sale book');
+        }
+
+        // A live advance is stored for the book to copy when the lot opens.
+        // It does not move the timed-auction clock or rewrite the ladder.
+        $currentBid = $liveSale ? 0 : $auctionLot->getCurrentBidPrice();
 
         if (in_array($bidType, ['MAX', 'DIRECT'])) {
             if ($auctionLot->status == Status::ARCHIVED->value) abort(404, 'AuctionLot has been archived');
@@ -298,7 +305,11 @@ class AuctionLotController extends Controller
 
         // Hide previous placed ADVANCED bid, if there's any
         if ($bidType == 'ADVANCED') {
-            if ($auctionLot->status == Status::ACTIVE->value) abort(400, 'Auction Lot is now active, no longer accept any ADVANCED bids');
+            if ($liveSale) {
+                app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id);
+            } elseif ($auctionLot->status == Status::ACTIVE->value) {
+                abort(400, 'Auction Lot is now active, no longer accept any ADVANCED bids');
+            }
 
             Bid::where('auction_lot_id', $auctionLotId)
                 ->where('customer_id', $customer->_id)
@@ -407,6 +418,12 @@ class AuctionLotController extends Controller
         }
 
         if ($bidType == 'ADVANCED') {
+            if ($liveSale) {
+                return [
+                    'message' => 'Created New maximum Bid successfully',
+                    '_id' => $bid->id
+                ];
+            }
             $bidHistory = BidHistory::where('auction_lot_id', $auctionLotId)->first();
             if ($bidHistory == null) {
                 $bidHistory = BidHistory::create([
@@ -467,6 +484,9 @@ class AuctionLotController extends Controller
         /** @var AuctionLot $auctionLot */
         $auctionLot = AuctionLot::find($request->route('auction_lot_id'));
         if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
+        if (optional($auctionLot->store)->auction_type === 'LIVE') {
+            abort(422, 'The live sale book is the record of this sale');
+        }
 
         /** @var BidHistory $bidHistory */
         $bidHistory = BidHistory::firstWhere('auction_lot_id', $request->route('auction_lot_id'));
@@ -541,6 +561,9 @@ class AuctionLotController extends Controller
         /** @var AuctionLot $auctionLot */
         $auctionLot = AuctionLot::find($request->route('auction_lot_id'));
         if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
+        if (optional($auctionLot->store)->auction_type === 'LIVE') {
+            abort(422, 'The live sale book is the record of this sale');
+        }
 
         /** @var Customer $customer */
         $customer = Customer::find($request->winning_bid_customer_id);

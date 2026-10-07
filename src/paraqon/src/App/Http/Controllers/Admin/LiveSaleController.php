@@ -28,6 +28,7 @@ class LiveSaleController extends Controller
             'accept_bid',
             'accept_pending',
             'reject_pending',
+            'take_book',
             'warn',
             'sell',
             'pass',

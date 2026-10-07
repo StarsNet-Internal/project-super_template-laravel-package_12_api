@@ -234,6 +234,11 @@ class AuctionLotController extends Controller
         $store = $auctionLot->store;
         if ($store->status === Status::DELETED->value) abort(404, 'Auction not found');
 
+        $liveSale = ($store->auction_type ?? null) === 'LIVE';
+        if ($liveSale && $bidType !== 'ADVANCED') {
+            abort(422, 'Live bids are taken on the sale book');
+        }
+
         // Check winner
         $bidHistory = BidHistory::where('auction_lot_id', $auctionLotId)->first();
         if (!is_null($bidHistory) && $bidType == 'DIRECT') {
@@ -252,7 +257,7 @@ class AuctionLotController extends Controller
 
         // Get current_bid price
         $customer = $this->customer();
-        $currentBid = $auctionLot->getCurrentBidPrice();
+        $currentBid = $liveSale ? 0 : $auctionLot->getCurrentBidPrice();
         $isBidPlaced = $auctionLot->is_bid_placed;
 
         if (in_array($bidType, ['MAX', 'DIRECT'])) {
@@ -328,10 +333,11 @@ class AuctionLotController extends Controller
         // Hide previous placed ADVANCED bid, if there's any
         if ($bidType == 'ADVANCED') {
             app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id);
-            if ($auctionLot->status == Status::ACTIVE->value) abort(404, 'AuctionLot is now status ACTIVE, no longer accept any ADVANCED bids');
+            if (!$liveSale && $auctionLot->status == Status::ACTIVE->value) abort(404, 'AuctionLot is now status ACTIVE, no longer accept any ADVANCED bids');
 
-            // Check if this MAX or DIRECT bid place after start_datetime
-            if ($now >= Carbon::parse($store->start_datetime)) {
+            // Timed auctions close advances when the clock starts. A live advance
+            // stays open until that lot is opened on the book.
+            if (!$liveSale && $now >= Carbon::parse($store->start_datetime)) {
                 return response()->json([
                     'message' => 'Auction has started, no longer accept any ADVANCED bids',
                     'error_status' => 4,
@@ -452,6 +458,12 @@ class AuctionLotController extends Controller
         }
 
         if ($bidType == 'ADVANCED') {
+            if ($liveSale) {
+                return response()->json([
+                    'message' => 'Created New maximum Bid successfully',
+                    '_id' => $bid->_id
+                ], 200);
+            }
             $bidHistory = BidHistory::where('auction_lot_id', $auctionLotId)->first();
             if ($bidHistory == null) {
                 $bidHistory = BidHistory::create([
@@ -535,8 +547,14 @@ class AuctionLotController extends Controller
         if (is_null($store)) abort(404, 'Auction not found');
         if ($store->status == Status::DELETED->value) abort(404, 'Auction not found');
 
-        // Get current_bid place
-        $currentBid = $auctionLot->getCurrentBidPrice();
+        $liveSale = ($store->auction_type ?? null) === 'LIVE';
+        if ($liveSale && $bidType !== 'ADVANCED') {
+            abort(422, 'Live bids are taken on the sale book');
+        }
+
+        // A live advance is stored for the book to copy when the lot opens.
+        // It does not move the timed-auction clock or rewrite the ladder.
+        $currentBid = $liveSale ? 0 : $auctionLot->getCurrentBidPrice();
         $isBidPlaced = $auctionLot->is_bid_placed;
 
         if (in_array($bidType, ['MAX', 'DIRECT'])) {
@@ -590,10 +608,11 @@ class AuctionLotController extends Controller
         // Hide previous placed ADVANCED bid, if there's any
         if ($bidType == 'ADVANCED') {
             app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id);
-            if ($auctionLot->status == Status::ACTIVE->value) abort(403, 'Auction Lot is now active, no longer accept any ADVANCED bids');
+            if (!$liveSale && $auctionLot->status == Status::ACTIVE->value) abort(403, 'Auction Lot is now active, no longer accept any ADVANCED bids');
 
-            // Check if this MAX or DIRECT bid place after start_datetime
-            if ($now >= Carbon::parse($store->start_datetime)) {
+            // Timed auctions close advances when the clock starts. A live advance
+            // stays open until that lot is opened on the book.
+            if (!$liveSale && $now >= Carbon::parse($store->start_datetime)) {
                 return response()->json([
                     'message' => 'Auction has started, no longer accept any ADVANCED bids',
                     'error_status' => 4,
@@ -710,6 +729,12 @@ class AuctionLotController extends Controller
         }
 
         if ($bidType == 'ADVANCED') {
+            if ($liveSale) {
+                return response()->json([
+                    'message' => 'Created New maximum Bid successfully',
+                    '_id' => $bid->_id
+                ], 200);
+            }
             $bidHistory = BidHistory::where('auction_lot_id', $auctionLotId)->first();
             if ($bidHistory == null) {
                 $bidHistory = BidHistory::create([

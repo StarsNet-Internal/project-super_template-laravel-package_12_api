@@ -86,7 +86,11 @@ class AuctionController extends Controller
             ->with(['account.user'])
             ->get()
             ->each(function ($customer) use ($registeredCustomers) {
-                $customer->paddle_id = $registeredCustomers[$customer->id]->paddle_id ?? '';
+                $registration = $registeredCustomers[$customer->id] ?? null;
+                $customer->paddle_id = $registration->paddle_id ?? '';
+                $customer->bidding_channel = AuctionRegistrationRequest::channel(
+                    $registration->bidding_channel ?? null
+                );
             });
     }
 
@@ -115,12 +119,18 @@ class AuctionController extends Controller
             ->where('store_id', $request->route('store_id'))
             ->first();
         if (!is_null($oldForm)) {
-            $oldForm->update([
+            $updates = [
                 'approved_by_account_id' => $this->account()->id,
                 'status' => Status::ACTIVE->value,
                 'paddle_id' => $request->paddle_id ?? $oldForm->paddle_id,
                 'reply_status' => ReplyStatus::APPROVED->value,
-            ]);
+            ];
+            if ($request->exists('bidding_channel')) {
+                $updates['bidding_channel'] = AuctionRegistrationRequest::channel(
+                    $request->input('bidding_channel')
+                );
+            }
+            $oldForm->update($updates);
 
             return [
                 'message' => 'Re-activated previously created AuctionRegistrationRequest successfully',
@@ -146,7 +156,8 @@ class AuctionController extends Controller
                 'store_id' => $request->route('store_id'),
                 'paddle_id' => $newPaddleId,
                 'status' => Status::ACTIVE->value,
-                'reply_status' => ReplyStatus::APPROVED->value
+                'reply_status' => ReplyStatus::APPROVED->value,
+                'bidding_channel' => AuctionRegistrationRequest::channel($request->input('bidding_channel')),
             ]);
 
             return [
@@ -160,7 +171,8 @@ class AuctionController extends Controller
                 'store_id' => $request->route('store_id'),
                 'paddle_id' => $request->paddle_id,
                 'status' => Status::ACTIVE->value,
-                'reply_status' => ReplyStatus::APPROVED->value
+                'reply_status' => ReplyStatus::APPROVED->value,
+                'bidding_channel' => AuctionRegistrationRequest::channel($request->input('bidding_channel')),
             ]);
 
             return [

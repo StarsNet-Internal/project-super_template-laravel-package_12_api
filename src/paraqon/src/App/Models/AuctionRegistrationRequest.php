@@ -46,6 +46,15 @@ class AuctionRegistrationRequest extends Model
     protected $appends = ['_id'];
     protected $hidden = ['id'];
 
+    /**
+     * Room, phone, or online. A missing value is online. The paddle number is not a channel.
+     */
+    public static function channel(mixed $value): string
+    {
+        $value = is_string($value) ? $value : null;
+        return in_array($value, ['online', 'room', 'phone'], true) ? $value : 'online';
+    }
+
     // -----------------------------
     // Relationship Begins
     // -----------------------------

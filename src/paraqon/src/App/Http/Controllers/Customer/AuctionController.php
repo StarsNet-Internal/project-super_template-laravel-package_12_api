@@ -160,7 +160,10 @@ class AuctionController extends Controller
                 function ($item) {
                     return [
                         'customer_id' => $item['requested_by_customer_id'],
-                        'paddle_id' => $item['paddle_id']
+                        'paddle_id' => $item['paddle_id'],
+                        'bidding_channel' => AuctionRegistrationRequest::channel(
+                            $item['bidding_channel'] ?? null
+                        ),
                     ];
                 }
             );

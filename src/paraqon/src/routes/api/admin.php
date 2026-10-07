@@ -16,7 +16,6 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\BidController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\OrderController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\ServiceController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\ShoppingCartController;
-use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\LiveBiddingEventController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\LiveSaleController;
 use StarsNet\Project\Paraqon\App\Http\Controllers\Admin\LocationHistoryController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Admin\NotificationController;
@@ -219,7 +218,7 @@ Route::group(
 
         Route::post('/algolia/stores/{store_id}/products', [ServiceController::class, 'synchronizeAllProductsWithAlgolia']);
 
-        Route::get('/auctions/{store_id}/state', [ServiceController::class, 'getAuctionCurrentState']);
+        Route::get('/auctions/{store_id}/state', [ServiceController::class, 'getAuctionCurrentState'])->middleware('auth:api');
         Route::get('/orders/capture', [ServiceController::class, 'captureOrderPayment']);
 
         Route::post('/users/cleanup', [ServiceController::class, 'deleteAllTemporaryUsers']);
@@ -287,7 +286,6 @@ Route::group(
         Route::group(
             ['middleware' => 'auth:api'],
             function () {
-                Route::post('/{store_id}/events', [LiveBiddingEventController::class, 'createEvent']);
                 Route::get('/{store_id}/book', [LiveSaleController::class, 'show']);
                 Route::post('/{store_id}/commands', [LiveSaleController::class, 'command']);
             }

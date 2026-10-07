@@ -353,4 +353,272 @@ $refresh->apply('open_lot', [
 check($refresh->clerkPayload('t')['highest_advanced_bid']['paddle_id'] === 1, 'open replaces the absentee list from before the lot opened');
 check(count($refresh->publicPayload('t')['histories']) === 3, 'the replacement absentees compete when the lot opens');
 
+$preferLots = catalogue();
+$preferLots[0]['reserve_price'] = 0;
+unset($preferLots[1]);
+$prefer = LiveSaleBook::empty('store-prefer');
+$prefer->apply('start_sale', ['lots' => array_values($preferLots), 'at' => 't']);
+$prefer->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$prefer->apply('open_lot', ['at' => 't']);
+check($prefer->publicPayload('t')['asking_price'] === 800.0, 'a lone absentee still waits at the opening ask');
+check($prefer->publicPayload('t')['histories'] === [], 'the book does not bid until the clerk takes it');
+check($prefer->clerkPayload('t')['book_can_take'] === true, 'the clerk can take the book at the opening ask');
+$prefer->apply('submit_online_bid', [
+    'amount' => 800,
+    'customer_id' => 'online-201',
+    'paddle_id' => 201,
+    'at' => 't',
+]);
+$taken = $prefer->apply('take_book', ['at' => 't']);
+check($taken['amount'] === 800.0, 'the book takes the asking price');
+check($taken['preferred_over'] === 'online', 'the book is preferred over the waiting online bid');
+$preferPublic = $prefer->publicPayload('t');
+check(count($preferPublic['histories']) === 1, 'taking the book writes one stack row');
+check($preferPublic['histories'][0]['current_bid'] === 800.0, 'the book bid is the asking price');
+check($preferPublic['histories'][0]['paddle_label'] === 'Paddle #55', 'the room sees the absentee paddle');
+check($preferPublic['histories'][0]['source'] === 'advance', 'the stack row is the absentee');
+check($preferPublic['asking_price'] === 900.0, 'asking moves one increment and the absentee does not bid again');
+check($preferPublic['has_pending'] === false, 'the waiting online bid is dropped');
+check($prefer->clerkPayload('t')['book_can_take'] === false, 'the leader cannot take the book against themselves');
+check(containsKey($preferPublic, 'customer_id') === false, 'a book take does not publish a customer id');
+check(containsKey($preferPublic, 'settlement') === false, 'settlement stays off the public room');
+check(containsKey($preferPublic, 'book_can_take') === false, 'the public room does not offer the book');
+check(containsKey($preferPublic, 'you') === false, 'a book take does not publish a personal result');
+check(containsKey($preferPublic, 'hammer_customer_id') === false, 'a book take does not publish the hammer customer');
+check(array_key_exists('settlement', $prefer->clerkPayload('t')), 'the clerk book carries settlement');
+
+$jumpedLots = catalogue();
+$jumpedLots[0]['reserve_price'] = 0;
+unset($jumpedLots[1]);
+$jumped = LiveSaleBook::empty('store-jumped');
+$jumped->apply('start_sale', ['lots' => array_values($jumpedLots), 'at' => 't']);
+$jumped->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$jumped->apply('open_lot', ['at' => 't']);
+$jumped->apply('set_asking_price', ['amount' => 1400, 'at' => 't']);
+$jumped->apply('submit_online_bid', [
+    'amount' => 1400,
+    'customer_id' => 'online-201',
+    'paddle_id' => 201,
+    'at' => 't',
+]);
+$jumped->apply('take_book', ['at' => 't']);
+check(count($jumped->publicPayload('t')['histories']) === 1, 'a jumped asking price is one book bid');
+check($jumped->publicPayload('t')['histories'][0]['current_bid'] === 1400.0, 'the book takes the jumped asking price');
+check($jumped->publicPayload('t')['asking_price'] === 1500.0, 'the absentee does not walk past the taken price');
+check($jumped->publicPayload('t')['has_pending'] === false, 'the online bid at the jumped price is dropped');
+
+$coverLots = catalogue();
+$coverLots[0]['advance']['amount'] = 850;
+$coverLots[0]['reserve_price'] = 0;
+unset($coverLots[1]);
+$cover = LiveSaleBook::empty('store-cover');
+$cover->apply('start_sale', ['lots' => array_values($coverLots), 'at' => 't']);
+$cover->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$cover->apply('open_lot', ['at' => 't']);
+$cover->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 2,
+    'customer_id' => 'floor-2',
+    'at' => 't',
+]);
+check(count($cover->publicPayload('t')['histories']) === 1, 'an absentee under the next increment does not answer the floor');
+$cover->apply('set_asking_price', ['amount' => 850, 'at' => 't']);
+$cover->apply('submit_online_bid', [
+    'amount' => 850,
+    'customer_id' => 'online-201',
+    'paddle_id' => 201,
+    'at' => 't',
+]);
+check($cover->clerkPayload('t')['book_can_take'] === true, 'the absentee can take a jumped ask inside the maximum');
+$cover->apply('take_book', ['at' => 't']);
+$coverLadder = array_map(
+    fn ($row) => [$row['current_bid'], $row['source']],
+    $cover->publicPayload('t')['histories']
+);
+check($coverLadder === [
+    [800.0, 'floor'],
+    [850.0, 'advance'],
+], 'the book adds one row and leaves the floor bid');
+check($cover->publicPayload('t')['has_pending'] === false, 'the online bidder is not on the stack');
+foreach ($cover->clerkPayload('t')['histories'] as $row) {
+    check(($row['winning_bid_customer_id'] ?? null) !== 'online-201', 'the online bidder was not accepted');
+}
+
+$sameLots = catalogue();
+unset($sameLots[0]['advance']);
+$sameLots[0]['advances'] = [];
+$sameLots[0]['reserve_price'] = 0;
+unset($sameLots[1]);
+$same = LiveSaleBook::empty('store-same');
+$same->apply('start_sale', ['lots' => array_values($sameLots), 'at' => 't']);
+$same->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$same->apply('open_lot', ['at' => 't', 'advances' => []]);
+$same->apply('submit_online_bid', [
+    'amount' => 800,
+    'customer_id' => 'online-201',
+    'paddle_id' => 201,
+    'at' => 't',
+]);
+$same->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 4,
+    'customer_id' => 'floor-4',
+    'at' => 't',
+]);
+check(count($same->publicPayload('t')['histories']) === 1, 'a floor bid at the asking price is not a second bid');
+check($same->publicPayload('t')['histories'][0]['source'] === 'floor', 'the floor bid is the stack row');
+check($same->publicPayload('t')['histories'][0]['current_bid'] === 800.0, 'the floor bid takes the asking price');
+check($same->publicPayload('t')['has_pending'] === false, 'the pending online bid is cleared');
+
+$shortLots = catalogue();
+$shortLots[0]['advance']['amount'] = 700;
+unset($shortLots[1]);
+$short = LiveSaleBook::empty('store-short');
+$short->apply('start_sale', ['lots' => array_values($shortLots), 'at' => 't']);
+$short->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$short->apply('open_lot', ['at' => 't']);
+expect(fn () => $short->apply('take_book', ['at' => 't']), 'No absentee bid can take the asking price');
+check($short->clerkPayload('t')['book_can_take'] === false, 'a short absentee cannot take the asking price');
+
+$phoneLots = catalogue();
+unset($phoneLots[0]['advance']);
+$phoneLots[0]['advances'] = [];
+$phoneLots[0]['reserve_price'] = 0;
+unset($phoneLots[1]);
+$phone = LiveSaleBook::empty('store-phone');
+$phone->apply('start_sale', ['lots' => array_values($phoneLots), 'at' => 't']);
+$phone->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$phone->apply('open_lot', ['at' => 't', 'advances' => []]);
+$phone->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'phone',
+    'paddle_id' => 33,
+    'customer_id' => 'phone-33',
+    'at' => 't',
+]);
+check($phone->publicPayload('t')['histories'][0]['source'] === 'phone', 'a phone bid keeps its source');
+check($phone->publicPayload('t')['histories'][0]['paddle_label'] === 'Phone #33', 'the room sees the phone paddle');
+
+$settleLots = [
+    [
+        'lot_id' => 'lot-1',
+        'lot_number' => 1,
+        'starting_price' => 800,
+        'reserve_price' => 0,
+        'bid_incremental_settings' => ['increments' => [['from' => 0, 'to' => 10000, 'increment' => 100]]],
+        'created_at' => '2026-10-07T00:00:00Z',
+    ],
+    [
+        'lot_id' => 'lot-2',
+        'lot_number' => 2,
+        'starting_price' => 500,
+        'reserve_price' => 0,
+        'bid_incremental_settings' => ['increments' => [['from' => 0, 'to' => 10000, 'increment' => 100]]],
+        'created_at' => '2026-10-07T00:00:00Z',
+    ],
+    [
+        'lot_id' => 'lot-3',
+        'lot_number' => 3,
+        'starting_price' => 400,
+        'reserve_price' => 0,
+        'bid_incremental_settings' => ['increments' => [['from' => 0, 'to' => 10000, 'increment' => 100]]],
+        'created_at' => '2026-10-07T00:00:00Z',
+    ],
+    [
+        'lot_id' => 'lot-4',
+        'lot_number' => 4,
+        'starting_price' => 200,
+        'reserve_price' => 0,
+        'bid_incremental_settings' => ['increments' => [['from' => 0, 'to' => 10000, 'increment' => 50]]],
+        'created_at' => '2026-10-07T00:00:00Z',
+    ],
+];
+$settle = LiveSaleBook::empty('store-settle');
+$settle->apply('start_sale', ['lots' => $settleLots, 'at' => 't']);
+$settle->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$settle->apply('open_lot', ['at' => 't']);
+$settle->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 10,
+    'customer_id' => 'buyer-10',
+    'at' => 't',
+]);
+$settle->apply('sell', ['at' => 't']);
+$settle->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't']);
+$settle->apply('open_lot', ['at' => 't']);
+$settle->apply('pass', ['at' => 't']);
+$settle->apply('prepare_lot', ['lot_id' => 'lot-3', 'at' => 't']);
+$settle->apply('open_lot', ['at' => 't']);
+$settle->apply('accept_bid', [
+    'amount' => 400,
+    'source' => 'floor',
+    'paddle_id' => 11,
+    'customer_id' => 'buyer-11',
+    'at' => 't',
+]);
+$settle->apply('sell', ['at' => 't']);
+$settle->apply('reopen', ['lot_id' => 'lot-3', 'at' => 't']);
+$settle->apply('undo_latest_bid', ['at' => 't']);
+$settle->apply('pass', ['at' => 't']);
+$settle->apply('prepare_lot', ['lot_id' => 'lot-4', 'at' => 't']);
+$settle->apply('open_lot', ['at' => 't']);
+$settle->apply('accept_bid', [
+    'amount' => 200,
+    'source' => 'floor',
+    'paddle_id' => 7,
+    'at' => 't',
+]);
+$settle->apply('sell', ['at' => 't']);
+$settle->apply('end_sale', ['at' => 't']);
+$settlement = $settle->settlement();
+check(array_map(fn ($row) => $row['lot_id'], $settlement) === ['lot-1', 'lot-2', 'lot-3', 'lot-4'], 'settlement follows lot number');
+check($settlement[0]['result'] === 'sold' && $settlement[0]['hammer_price'] === 800.0, 'a sold lot keeps the hammer');
+check($settlement[0]['paddle_id'] === 10 && $settlement[0]['customer_id'] === 'buyer-10', 'a sold lot keeps the paddle and buyer');
+check($settlement[1]['result'] === 'passed' && $settlement[1]['hammer_price'] === null, 'a passed lot has no hammer');
+check($settlement[1]['customer_id'] === null && $settlement[1]['paddle_id'] === null, 'a passed lot has no buyer');
+check($settlement[2]['result'] === 'passed' && $settlement[2]['hammer_price'] === null, 'a sold lot that is reopened and undone is not a hammer');
+check($settlement[3]['result'] === 'sold' && $settlement[3]['customer_id'] === null, 'a floor hammer without a customer stays empty');
+check($settlement[3]['paddle_id'] === 7, 'that hammer still names the paddle');
+check($settle->publicPayload('t')['lots'][0]['hammer_paddle_label'] === 'Floor bid', 'the room sees the hammer label');
+check(containsKey($settle->publicPayload('t'), 'settlement') === false, 'the ended public room has no settlement');
+check(containsKey($settle->publicPayload('t'), 'book_can_take') === false, 'the ended public room has no book offer');
+check(count($settle->clerkPayload('t')['settlement']) === 4, 'the clerk reviews the ended settlement');
+
+$loadLots = [];
+for ($i = 1; $i <= 180; $i++) {
+    $loadLots[] = [
+        'lot_id' => 'lot-' . $i,
+        'lot_number' => $i,
+        'starting_price' => 100,
+        'reserve_price' => 0,
+        'bid_incremental_settings' => [
+            'increments' => [['from' => 0, 'to' => 100000, 'increment' => 10]],
+        ],
+        'created_at' => '2026-10-07T00:00:00Z',
+    ];
+}
+$load = LiveSaleBook::empty('store-load');
+$loadSequence = $load->sequence();
+$loadStarted = microtime(true);
+$load->apply('start_sale', ['lots' => $loadLots, 'at' => 't']);
+$loadElapsed = microtime(true) - $loadStarted;
+check($load->sequence() === $loadSequence + 1, 'starting a long catalogue is one sequence step');
+check(count($load->publicPayload('t')['lots']) === 180, 'the catalogue is one snapshot');
+check($loadElapsed < 2.0, 'a sale command does not dump the catalogue on a timer');
+$load->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+check($load->sequence() === $loadSequence + 2, 'prepare is one sequence step');
+$load->apply('open_lot', ['at' => 't']);
+check($load->sequence() === $loadSequence + 3, 'open is one sequence step');
+$load->apply('accept_bid', [
+    'amount' => 100,
+    'source' => 'floor',
+    'paddle_id' => 1,
+    'customer_id' => 'floor-1',
+    'at' => 't',
+]);
+check($load->sequence() === $loadSequence + 4, 'a bid is one sequence step');
+
 echo "ok\n";
