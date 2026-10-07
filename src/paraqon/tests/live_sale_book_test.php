@@ -273,4 +273,84 @@ check($raceLadder === [
 ], 'unequal absentees stop one step above the lower maximum');
 check($race->publicPayload('t')['asking_price'] === 1300.0, 'the higher absentee does not bid against themselves');
 
+$youLots = catalogue();
+unset($youLots[0]['advance']);
+$youLots[0]['advances'] = [];
+$youLots[0]['reserve_price'] = 0;
+$you = LiveSaleBook::empty('store-you');
+$you->apply('start_sale', ['lots' => $youLots, 'at' => 't0']);
+$you->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't0']);
+$you->apply('open_lot', ['at' => 't0', 'advances' => []]);
+check($you->publicPayload('t')['histories'] === [], 'opening with no absentees leaves the ladder empty');
+$you->apply('submit_online_bid', [
+    'amount' => 800,
+    'customer_id' => 'online-a',
+    'paddle_id' => 201,
+    'at' => 't1',
+]);
+$waiting = $you->viewer('online-a');
+check($waiting['result'] === 'pending', 'the bidder is told the bid is waiting');
+check($waiting['pending']['amount'] === 800.0, 'the waiting bid keeps its amount');
+check($you->viewer('someone-else')['result'] === null, 'another customer has no result');
+check(containsKey($you->publicPayload('t'), 'you') === false, 'the public room does not carry a personal result');
+$you->apply('accept_pending', [
+    'pending_id' => $you->clerkPayload('t')['pending'][0]['id'],
+    'at' => 't2',
+]);
+check($you->viewer('online-a')['result'] === 'with_you', 'an accepted bid is with that customer');
+$you->apply('accept_bid', [
+    'amount' => 900,
+    'source' => 'floor',
+    'paddle_id' => 12,
+    'customer_id' => 'floor-12',
+    'at' => 't3',
+]);
+check($you->viewer('online-a')['result'] === 'outbid', 'the earlier bidder has been outbid');
+check($you->viewer('floor-12')['result'] === 'with_you', 'the floor bid is with that paddle');
+$you->apply('undo_latest_bid', ['at' => 't4']);
+check($you->viewer('floor-12')['result'] === 'removed', 'the undone bidder is told the bid was removed');
+check($you->viewer('online-a')['result'] === 'with_you', 'undo puts the previous bidder back with the bid');
+check(containsKey($you->publicPayload('t'), 'customer_id') === false, 'a withdrawn bid stays off the public room');
+$you->apply('accept_bid', [
+    'amount' => 900,
+    'source' => 'floor',
+    'paddle_id' => 12,
+    'customer_id' => 'floor-12',
+    'at' => 't5',
+]);
+$you->apply('sell', ['at' => 't6']);
+check($you->viewer('floor-12')['result'] === 'won', 'the hammer winner is told they won');
+check($you->viewer('online-a')['result'] === null, 'a losing bidder is not told they won');
+
+$refreshLots = catalogue();
+$refreshLots[0]['advances'] = [[
+    'customer_id' => 'old',
+    'amount' => 900,
+    'paddle_id' => 9,
+    'placed_at' => '2026-10-01T00:00:00Z',
+]];
+unset($refreshLots[0]['advance']);
+$refresh = LiveSaleBook::empty('store-refresh');
+$refresh->apply('start_sale', ['lots' => $refreshLots, 'at' => 't']);
+$refresh->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$refresh->apply('open_lot', [
+    'at' => 't',
+    'advances' => [
+        [
+            'customer_id' => 'early',
+            'amount' => 1000,
+            'paddle_id' => 1,
+            'placed_at' => '2026-10-01T00:00:00Z',
+        ],
+        [
+            'customer_id' => 'late',
+            'amount' => 1000,
+            'paddle_id' => 2,
+            'placed_at' => '2026-10-02T00:00:00Z',
+        ],
+    ],
+]);
+check($refresh->clerkPayload('t')['highest_advanced_bid']['paddle_id'] === 1, 'open replaces the absentee list from before the lot opened');
+check(count($refresh->publicPayload('t')['histories']) === 3, 'the replacement absentees compete when the lot opens');
+
 echo "ok\n";

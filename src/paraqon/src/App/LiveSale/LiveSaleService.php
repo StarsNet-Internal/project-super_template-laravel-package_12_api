@@ -77,6 +77,12 @@ class LiveSaleService
 
             try {
                 $ready = $this->preparePayload($storeId, $command, $payload, $customerId);
+                if ($command === 'open_lot') {
+                    $lotId = (string) ($ready['lot_id'] ?? $book->currentLotId() ?? '');
+                    if ($lotId !== '') {
+                        $ready['advances'] = $this->advancesForLot($storeId, $lotId);
+                    }
+                }
                 $summary = $book->apply($command, $ready);
             } catch (LiveSaleException $e) {
                 abort(422, $e->getMessage());
@@ -239,6 +245,37 @@ class LiveSaleService
             }
         }
         return $byLot;
+    }
+
+    /**
+     * Advances placed or raised before the lot opens. Opening the lot copies this list onto the book.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function advancesForLot(string $storeId, string $lotId): array
+    {
+        $byLot = $this->advances($storeId, [$lotId => true], $this->paddleByCustomer($storeId));
+        return $byLot[$lotId] ?? [];
+    }
+
+    /**
+     * An absentee can change until the lot is opened. After that the book copy is the one that runs.
+     */
+    public function assertAdvanceEditable(string $storeId, string $lotId): void
+    {
+        $doc = LiveSaleState::where('store_id', $storeId)->first();
+        if ($doc === null) {
+            return;
+        }
+        $book = $this->bookFromDocument($doc);
+        if ($book->status() !== 'running') {
+            return;
+        }
+        $state = $book->lotState($lotId);
+        if ($state === null || in_array($state, ['upcoming', 'preparing'], true)) {
+            return;
+        }
+        abort(422, 'This lot is open. The absentee bid can no longer be changed');
     }
 
     /**
@@ -418,6 +455,9 @@ class LiveSaleService
             return $book->clerkPayload($at);
         }
         $payload = $book->publicPayload($at);
+        if ($customerId !== null && $customerId !== '') {
+            $payload['you'] = $book->viewer($customerId);
+        }
         $saved = [];
         foreach ($book->toArray()['lots'] as $lot) {
             $requests = $lot['permission_requests'] ?? [];

@@ -75,6 +75,19 @@ class LiveSaleBook
         return $this->status;
     }
 
+    public function currentLotId(): ?string
+    {
+        return $this->currentLotId;
+    }
+
+    public function lotState(string $lotId): ?string
+    {
+        if (!isset($this->lots[$lotId])) {
+            return null;
+        }
+        return (string) ($this->lots[$lotId]['state'] ?? '');
+    }
+
     /**
      * @param array<string, mixed> $payload
      * @return array<string, mixed>
@@ -116,6 +129,66 @@ class LiveSaleBook
     public function clerkPayload(string $at): array
     {
         return $this->payload(true, $at);
+    }
+
+    /**
+     * This customer's own result. It is not part of the public room payload.
+     *
+     * @return array{lot_id: ?string, paddle_id: mixed, result: ?string, pending: ?array{id: string, amount: float}}
+     */
+    public function viewer(string $customerId): array
+    {
+        $customerId = (string) $customerId;
+        $lot = $this->currentLotId ? ($this->lots[$this->currentLotId] ?? null) : null;
+        $empty = [
+            'lot_id' => null,
+            'paddle_id' => null,
+            'result' => null,
+            'pending' => null,
+        ];
+        if ($customerId === '' || $lot === null) {
+            return $empty;
+        }
+
+        $pending = null;
+        foreach ($lot['pending'] ?? [] as $item) {
+            if ((string) ($item['customer_id'] ?? '') === $customerId) {
+                $pending = [
+                    'id' => (string) $item['id'],
+                    'amount' => (float) $item['amount'],
+                ];
+            }
+        }
+        $accepted = false;
+        foreach ($lot['bids'] ?? [] as $bid) {
+            if ((string) ($bid['customer_id'] ?? '') === $customerId) {
+                $accepted = true;
+                break;
+            }
+        }
+        $latest = $this->latestBid($lot);
+        $leading = $latest !== null && (string) ($latest['customer_id'] ?? '') === $customerId;
+        $result = null;
+        if ($lot['state'] === 'sold' && (string) ($lot['hammer_customer_id'] ?? '') === $customerId) {
+            $result = 'won';
+        } elseif (in_array($lot['state'], ['open', 'fair_warning'], true)) {
+            if ($pending !== null) {
+                $result = 'pending';
+            } elseif ($leading) {
+                $result = 'with_you';
+            } elseif ($this->removalStillCurrent($lot, $customerId)) {
+                $result = 'removed';
+            } elseif ($accepted) {
+                $result = 'outbid';
+            }
+        }
+
+        return [
+            'lot_id' => (string) $lot['lot_id'],
+            'paddle_id' => $this->paddleFor($lot, $customerId),
+            'result' => $result,
+            'pending' => $result === 'pending' ? $pending : null,
+        ];
     }
 
     /**
@@ -179,6 +252,7 @@ class LiveSaleBook
                 'bids' => [],
                 'pending' => [],
                 'notices' => [],
+                'withdrawn' => [],
                 'hammer_price' => null,
                 'hammer_paddle_id' => null,
                 'hammer_customer_id' => null,
@@ -213,6 +287,11 @@ class LiveSaleBook
             throw new LiveSaleException('Prepare the lot before opening it');
         }
         $this->requireNoLotOnTheBlock($lotId);
+        if (array_key_exists('advances', $payload) && is_array($payload['advances'])) {
+            $lot['advances'] = $payload['advances'];
+            $lot['advance'] = null;
+            $lot = $this->attachAdvances($lot);
+        }
         $opening = $lot['starting_price'];
         $lot['state'] = 'open';
         $lot['opening_asking'] = $opening;
@@ -461,6 +540,9 @@ class LiveSaleBook
             throw new LiveSaleException('That bid is no longer the latest');
         }
         array_pop($lot['bids']);
+        $latest['withdrawn_at'] = $at;
+        $lot['withdrawn'] = array_values($lot['withdrawn'] ?? []);
+        $lot['withdrawn'][] = $latest;
         $lot['pending'] = [];
         $lot['state'] = 'open';
         $lot['warning'] = null;
@@ -749,10 +831,48 @@ class LiveSaleBook
      */
     private function latestBid(array $lot): ?array
     {
-        if ($lot['bids'] === []) {
+        if (($lot['bids'] ?? []) === []) {
             return null;
         }
         return $lot['bids'][count($lot['bids']) - 1];
+    }
+
+    /**
+     * @param array<string, mixed> $lot
+     */
+    private function removalStillCurrent(array $lot, string $customerId): bool
+    {
+        $withdrawn = $lot['withdrawn'] ?? [];
+        if ($withdrawn === []) {
+            return false;
+        }
+        $last = $withdrawn[count($withdrawn) - 1];
+        if ((string) ($last['customer_id'] ?? '') !== $customerId) {
+            return false;
+        }
+        $latest = $this->latestBid($lot);
+        if ($latest === null) {
+            return true;
+        }
+        return strcmp((string) ($latest['created_at'] ?? ''), (string) ($last['withdrawn_at'] ?? '')) < 0;
+    }
+
+    /**
+     * @param array<string, mixed> $lot
+     */
+    private function paddleFor(array $lot, string $customerId): mixed
+    {
+        foreach (['pending', 'bids', 'withdrawn', 'advances'] as $key) {
+            foreach ($lot[$key] ?? [] as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                if ((string) ($row['customer_id'] ?? '') === $customerId && array_key_exists('paddle_id', $row)) {
+                    return $row['paddle_id'];
+                }
+            }
+        }
+        return null;
     }
 
     /**
