@@ -321,6 +321,19 @@ $you->apply('accept_bid', [
 $you->apply('sell', ['at' => 't6']);
 check($you->viewer('floor-12')['result'] === 'won', 'the hammer winner is told they won');
 check($you->viewer('online-a')['result'] === null, 'a losing bidder is not told they won');
+$you->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't7']);
+$you->apply('open_lot', ['at' => 't7', 'advances' => []]);
+$marked = $you->forViewer($you->publicPayload('t'), 'floor-12');
+$lot1 = null;
+foreach ($marked['lots'] as $row) {
+    if ($row['_id'] === 'lot-1') {
+        $lot1 = $row;
+    }
+}
+check(($lot1['winning_bid_customer_id'] ?? null) === 'floor-12', 'a sold lot keeps the winner on that customer book after the sale moves on');
+check($lot1['status'] === 'ACTIVE' && $lot1['is_disabled'] === true && $lot1['is_closed'] === false, 'a sold lot stays in the past-lot shape');
+check(containsKey($you->publicPayload('t'), 'winning_bid_customer_id') === false, 'the public room does not name the winner');
+check(containsKey($you->forViewer($you->publicPayload('t'), 'online-a'), 'winning_bid_customer_id') === false, 'another customer is not told they won that lot');
 
 $refreshLots = catalogue();
 $refreshLots[0]['advances'] = [[

@@ -541,6 +541,7 @@ class LiveSaleService
         $payload = $book->publicPayload($at);
         if ($customerId !== null && $customerId !== '') {
             $payload['you'] = $book->viewer($customerId);
+            $payload = $book->forViewer($payload, $customerId);
         }
         $saved = [];
         foreach ($book->toArray()['lots'] as $lot) {

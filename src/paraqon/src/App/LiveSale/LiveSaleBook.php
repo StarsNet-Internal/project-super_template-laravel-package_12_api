@@ -127,6 +127,36 @@ class LiveSaleBook
         return $this->payload(false, $at);
     }
 
+    /**
+     * The public room never names a buyer. A signed-in customer still needs
+     * their own id on each sold lot so the console can list what they won.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    public function forViewer(array $payload, string $customerId): array
+    {
+        $customerId = (string) $customerId;
+        if ($customerId === '' || !isset($payload['lots']) || !is_array($payload['lots'])) {
+            return $payload;
+        }
+        $won = [];
+        foreach ($this->lots as $lot) {
+            if (($lot['state'] ?? '') === 'sold' && (string) ($lot['hammer_customer_id'] ?? '') === $customerId) {
+                $won[(string) $lot['lot_id']] = true;
+            }
+        }
+        foreach ($payload['lots'] as $index => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            if (!empty($won[(string) ($row['_id'] ?? '')])) {
+                $payload['lots'][$index]['winning_bid_customer_id'] = $customerId;
+            }
+        }
+        return $payload;
+    }
+
     public function clerkPayload(string $at): array
     {
         return $this->payload(true, $at);
