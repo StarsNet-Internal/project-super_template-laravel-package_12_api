@@ -20,6 +20,9 @@ class LiveSaleBook
     /** @var array<string, array<string, mixed>> */
     private array $lots = [];
 
+    /** @var array<string, array<string, mixed>> */
+    private array $removed = [];
+
     public static function empty(string $storeId): self
     {
         $book = new self();
@@ -33,6 +36,19 @@ class LiveSaleBook
         $book->sequence = (int) ($data['sequence'] ?? 0);
         $book->status = (string) ($data['status'] ?? 'idle');
         $book->currentLotId = $data['current_lot_id'] ?? null;
+        $book->removed = [];
+        foreach ($data['removed'] ?? [] as $row) {
+            $row = (array) self::plain($row);
+            $customerId = (string) ($row['customer_id'] ?? '');
+            if ($customerId === '') {
+                continue;
+            }
+            $book->removed[$customerId] = [
+                'customer_id' => $customerId,
+                'paddle_id' => $row['paddle_id'] ?? null,
+                'removed_at' => (string) ($row['removed_at'] ?? ''),
+            ];
+        }
         foreach ($data['lots'] ?? [] as $lot) {
             $lot = (array) self::plain($lot);
             $lot = $book->attachAdvances($lot);
@@ -62,6 +78,7 @@ class LiveSaleBook
             'status' => $this->status,
             'current_lot_id' => $this->currentLotId,
             'lots' => array_values($this->lots),
+            'removed' => array_values($this->removed),
         ];
     }
 
@@ -110,6 +127,8 @@ class LiveSaleBook
             'sell' => $this->sell($at),
             'pass' => $this->pass($at),
             'undo_latest_bid' => $this->undoLatestBid($payload, $at),
+            'undo_all_bids' => $this->undoAllBids($payload, $at),
+            'remove_participant' => $this->removeParticipant($payload, $at),
             'reopen' => $this->reopen($payload, $at),
             'end_sale' => $this->endSale($at),
             default => throw new LiveSaleException('Unknown live sale command'),
@@ -202,6 +221,8 @@ class LiveSaleBook
         $result = null;
         if ($lot['state'] === 'sold' && (string) ($lot['hammer_customer_id'] ?? '') === $customerId) {
             $result = 'won';
+        } elseif ($this->isRemoved($customerId) && in_array($lot['state'], ['open', 'fair_warning'], true)) {
+            $result = 'out';
         } elseif (in_array($lot['state'], ['open', 'fair_warning'], true)) {
             if ($pending !== null) {
                 $result = 'pending';
@@ -397,6 +418,10 @@ class LiveSaleBook
         if (in_array($source, ['floor', 'phone'], true) && ($paddleId === null || $paddleId === '')) {
             throw new LiveSaleException('A floor or phone bid needs a paddle');
         }
+        $bidderId = (string) ($payload['customer_id'] ?? '');
+        if ($bidderId !== '' && $this->isRemoved($bidderId)) {
+            throw new LiveSaleException('That paddle is out of this sale');
+        }
         $bid = [
             'id' => $this->newId(),
             'amount' => $amount,
@@ -430,6 +455,9 @@ class LiveSaleBook
         $customerId = (string) ($payload['customer_id'] ?? '');
         if ($customerId === '') {
             throw new LiveSaleException('Register for a paddle before bidding');
+        }
+        if ($this->isRemoved($customerId)) {
+            throw new LiveSaleException('You are out of this sale');
         }
         $latest = $this->latestBid($lot);
         if ($latest && (string) ($latest['customer_id'] ?? '') === $customerId) {
@@ -552,6 +580,9 @@ class LiveSaleBook
         $leaderId = $leader ? (string) ($leader['customer_id'] ?? '') : '';
         $candidates = [];
         foreach ($lot['advances'] ?? [] as $advance) {
+            if ($this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
+                continue;
+            }
             if ($leaderId !== '' && (string) ($advance['customer_id'] ?? '') === $leaderId) {
                 continue;
             }
@@ -703,6 +734,79 @@ class LiveSaleBook
             'paddle_id' => $latest['paddle_id'] ?? null,
             'customer_id' => $latest['customer_id'] ?? null,
             'withdrawn' => true,
+        ];
+    }
+
+    /**
+     * Withdraws every bid on the lot on the block in one step.
+     * The asking price returns to the opening price. Absentee bids are not placed again.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function undoAllBids(array $payload, string $at): array
+    {
+        $lot = $this->requireOnTheBlock();
+        if (($lot['bids'] ?? []) === []) {
+            throw new LiveSaleException('There is no bid to undo');
+        }
+        $lot['withdrawn'] = array_values($lot['withdrawn'] ?? []);
+        $count = 0;
+        while ($lot['bids'] !== []) {
+            $latest = array_pop($lot['bids']);
+            $latest['withdrawn_at'] = $at;
+            $lot['withdrawn'][] = $latest;
+            $count++;
+        }
+        $lot['pending'] = [];
+        $lot['state'] = 'open';
+        $lot['warning'] = null;
+        $lot['asking_price'] = $lot['opening_asking'] !== null
+            ? (float) $lot['opening_asking']
+            : (float) $lot['starting_price'];
+        $this->lots[$lot['lot_id']] = $lot;
+        return [
+            'lot_id' => $lot['lot_id'],
+            'count' => $count,
+            'withdrawn' => true,
+        ];
+    }
+
+    /**
+     * Takes one customer out of the rest of this sale.
+     * Accepted bids stay. Waiting bids from this customer are dropped.
+     * Their absentee maximum stays on the lot and is not bid again.
+     * The registration document is not changed.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function removeParticipant(array $payload, string $at): array
+    {
+        $this->requireRunning();
+        $customerId = (string) ($payload['customer_id'] ?? '');
+        if ($customerId === '') {
+            throw new LiveSaleException('Choose a participant');
+        }
+        if (isset($this->removed[$customerId])) {
+            throw new LiveSaleException('That participant is already out of this sale');
+        }
+        $this->removed[$customerId] = [
+            'customer_id' => $customerId,
+            'paddle_id' => $payload['paddle_id'] ?? null,
+            'removed_at' => $at,
+        ];
+        foreach ($this->lots as $lotId => $lot) {
+            $lot['pending'] = array_values(array_filter(
+                $lot['pending'] ?? [],
+                fn ($item) => (string) ($item['customer_id'] ?? '') !== $customerId
+            ));
+            $this->lots[$lotId] = $lot;
+        }
+        return [
+            'lot_id' => $this->currentLotId,
+            'customer_id' => $customerId,
+            'paddle_id' => $payload['paddle_id'] ?? null,
         ];
     }
 
@@ -858,11 +962,30 @@ class LiveSaleBook
             $body['undo'] = $undo;
             $body['settlement'] = $this->settlement();
             $body['book_can_take'] = $current ? $this->absenteeForAsking($current) !== null : false;
-            if ($current && !empty($current['advance'])) {
+            $body['removed'] = array_values(array_map(function (array $row): array {
+                return [
+                    'customer_id' => $row['customer_id'],
+                    'paddle_id' => $row['paddle_id'] ?? null,
+                ];
+            }, $this->removed));
+            $visibleAdvance = null;
+            if ($current) {
+                foreach ($current['advances'] ?? [] as $advance) {
+                    if (!is_array($advance)) {
+                        continue;
+                    }
+                    if ($this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
+                        continue;
+                    }
+                    $visibleAdvance = $advance;
+                    break;
+                }
+            }
+            if ($visibleAdvance) {
                 $body['highest_advanced_bid'] = [
-                    'customer_id' => $current['advance']['customer_id'] ?? null,
-                    'bid' => $current['advance']['amount'] ?? null,
-                    'paddle_id' => $current['advance']['paddle_id'] ?? null,
+                    'customer_id' => $visibleAdvance['customer_id'] ?? null,
+                    'bid' => $visibleAdvance['amount'] ?? null,
+                    'paddle_id' => $visibleAdvance['paddle_id'] ?? null,
                 ];
             }
         }
@@ -1008,6 +1131,11 @@ class LiveSaleBook
             return true;
         }
         return strcmp((string) ($latest['created_at'] ?? ''), (string) ($last['withdrawn_at'] ?? '')) < 0;
+    }
+
+    private function isRemoved(string $customerId): bool
+    {
+        return $customerId !== '' && isset($this->removed[$customerId]);
     }
 
     /**
@@ -1158,6 +1286,9 @@ class LiveSaleBook
         $leaderId = $leader ? (string) ($leader['customer_id'] ?? '') : '';
         $candidates = [];
         foreach ($lot['advances'] as $advance) {
+            if ($this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
+                continue;
+            }
             if ($leaderId !== '' && (string) ($advance['customer_id'] ?? '') === $leaderId) {
                 continue;
             }
@@ -1229,6 +1360,9 @@ class LiveSaleBook
      */
     private function placeAbsenteeBid(array &$lot, array $advance, string $at): void
     {
+        if ($this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
+            return;
+        }
         $amount = $this->nextAbsenteeAmount($lot);
         if ($amount === null) {
             return;
@@ -1276,7 +1410,7 @@ class LiveSaleBook
                 break;
             }
         }
-        if ($advance === null) {
+        if ($advance === null || $this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
             return;
         }
         $sharesMaximumWithLaterBidder = false;

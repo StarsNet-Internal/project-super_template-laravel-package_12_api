@@ -33,6 +33,8 @@ class LiveSaleController extends Controller
             'sell',
             'pass',
             'undo_latest_bid',
+            'undo_all_bids',
+            'remove_participant',
             'reopen',
             'end_sale',
         ];

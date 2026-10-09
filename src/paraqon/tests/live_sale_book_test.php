@@ -634,4 +634,153 @@ $load->apply('accept_bid', [
 ]);
 check($load->sequence() === $loadSequence + 4, 'a bid is one sequence step');
 
+$clear = book();
+$clear->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$clear->apply('open_lot', ['at' => 't']);
+$clear->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 41,
+    'customer_id' => 'floor-41',
+    'at' => 't1',
+]);
+check($clear->publicPayload('t')['asking_price'] === 1000.0, 'the absentee answers the floor bid before undo all');
+$advanceBeforeClear = $clear->toArray()['lots'][0]['advance'];
+$clear->apply('warn', ['action' => 'FAIR_WARNING', 'at' => 't2']);
+$beforeUndoAll = $clear->sequence();
+$clear->apply('undo_all_bids', ['at' => 't3']);
+check($clear->sequence() === $beforeUndoAll + 1, 'undo all is one sequence step');
+check($clear->publicPayload('t')['histories'] === [], 'undo all clears the ladder');
+check($clear->publicPayload('t')['asking_price'] === 800.0, 'undo all returns to the opening price');
+check($clear->publicPayload('t')['warning'] === null, 'undo all clears the warning');
+check($clear->clerkPayload('t')['undo'] === null, 'undo all leaves nothing to undo');
+check($clear->toArray()['lots'][0]['advance'] === $advanceBeforeClear, 'undo all does not change the absentee record');
+check($clear->publicPayload('t')['lots'][0]['live_state'] === 'open', 'the lot stays open after undo all');
+expect(fn () => $clear->apply('undo_all_bids', ['at' => 't']), 'no bid to undo');
+$clearedAgain = LiveSaleBook::fromArray($clear->toArray());
+expect(fn () => $clearedAgain->apply('undo_all_bids', ['at' => 't']), 'no bid to undo');
+
+$drop = book();
+expect(fn () => $drop->apply('remove_participant', ['at' => 't']), 'Choose a participant');
+$drop->apply('remove_participant', [
+    'customer_id' => 'absentee-55',
+    'paddle_id' => 55,
+    'at' => 't',
+]);
+check($drop->clerkPayload('t')['removed'][0]['customer_id'] === 'absentee-55', 'the clerk sees who left');
+check($drop->clerkPayload('t')['removed'][0]['paddle_id'] === 55, 'the clerk sees the removed paddle');
+check(containsKey($drop->publicPayload('t'), 'removed') === false, 'the public room does not list removed participants');
+check(containsKey($drop->publicPayload('t'), 'customer_id') === false, 'removing a participant does not publish a customer id');
+$drop->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$drop->apply('open_lot', [
+    'at' => 't',
+    'advances' => [[
+        'customer_id' => 'absentee-55',
+        'amount' => 1500,
+        'paddle_id' => 55,
+        'placed_at' => '2026-10-01T00:00:00Z',
+    ]],
+]);
+check($drop->publicPayload('t')['histories'] === [], 'a removed absentee does not bid when the lot opens');
+check($drop->clerkPayload('t')['highest_advanced_bid'] === null, 'a removed absentee is not shown as the book');
+check($drop->clerkPayload('t')['book_can_take'] === false, 'the book cannot take a removed absentee');
+$drop->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 70,
+    'customer_id' => 'floor-70',
+    'at' => 't2',
+]);
+check(count($drop->publicPayload('t')['histories']) === 1, 'a removed absentee does not answer a floor bid');
+check($drop->publicPayload('t')['histories'][0]['paddle_label'] === 'Floor bid', 'the floor bid stays on the ladder');
+expect(fn () => $drop->apply('accept_bid', [
+    'amount' => 900,
+    'source' => 'floor',
+    'paddle_id' => 55,
+    'customer_id' => 'absentee-55',
+    'at' => 't3',
+]), 'out of this sale');
+expect(fn () => $drop->apply('submit_online_bid', [
+    'amount' => 900,
+    'customer_id' => 'absentee-55',
+    'paddle_id' => 55,
+    'at' => 't4',
+]), 'out of this sale');
+check($drop->viewer('absentee-55')['result'] === 'out', 'the removed customer is told they are out');
+check($drop->viewer('floor-70')['result'] === 'with_you', 'another paddle still holds the bid');
+$dropAgain = LiveSaleBook::fromArray($drop->toArray());
+expect(fn () => $dropAgain->apply('submit_online_bid', [
+    'amount' => 900,
+    'customer_id' => 'absentee-55',
+    'paddle_id' => 55,
+    'at' => 't5',
+]), 'out of this sale');
+
+$kept = book();
+$kept->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$kept->apply('open_lot', ['at' => 't', 'advances' => []]);
+$kept->apply('submit_online_bid', [
+    'amount' => 800,
+    'customer_id' => 'online-a',
+    'paddle_id' => 201,
+    'at' => 't1',
+]);
+$kept->apply('submit_online_bid', [
+    'amount' => 800,
+    'customer_id' => 'online-b',
+    'paddle_id' => 202,
+    'at' => 't1',
+]);
+$kept->apply('remove_participant', [
+    'customer_id' => 'online-a',
+    'paddle_id' => 201,
+    'at' => 't2',
+]);
+$pendingLeft = $kept->clerkPayload('t')['pending'];
+check(count($pendingLeft) === 1 && $pendingLeft[0]['customer_id'] === 'online-b', 'removing a participant drops only their waiting bid');
+$kept->apply('accept_pending', [
+    'pending_id' => $pendingLeft[0]['id'],
+    'at' => 't3',
+]);
+check($kept->publicPayload('t')['histories'][0]['paddle_label'] === 'Paddle #202', 'an accepted bid from someone else stays');
+$kept->apply('remove_participant', [
+    'customer_id' => 'online-b',
+    'paddle_id' => 202,
+    'at' => 't4',
+]);
+check(count($kept->publicPayload('t')['histories']) === 1, 'removing a participant leaves the accepted bid');
+check($kept->viewer('online-b')['result'] === 'out', 'the leader who was removed cannot bid again');
+expect(fn () => $kept->apply('remove_participant', [
+    'customer_id' => 'online-b',
+    'at' => 't5',
+]), 'already out');
+
+$rankLots = catalogue();
+$rankLots[0]['advances'] = [
+    [
+        'customer_id' => 'high',
+        'amount' => 1500,
+        'paddle_id' => 11,
+        'placed_at' => '2026-10-01T00:00:00Z',
+    ],
+    [
+        'customer_id' => 'low',
+        'amount' => 1200,
+        'paddle_id' => 12,
+        'placed_at' => '2026-10-03T00:00:00Z',
+    ],
+];
+unset($rankLots[0]['advance']);
+$rank = LiveSaleBook::empty('store-rank');
+$rank->apply('start_sale', ['lots' => $rankLots, 'at' => 't']);
+$rank->apply('remove_participant', ['customer_id' => 'high', 'paddle_id' => 11, 'at' => 't']);
+$rank->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$rank->apply('open_lot', ['at' => 't']);
+check($rank->publicPayload('t')['histories'] === [], 'one remaining absentee does not bid on open');
+check($rank->clerkPayload('t')['highest_advanced_bid']['customer_id'] === 'low', 'the clerk book skips a removed absentee');
+check($rank->clerkPayload('t')['highest_advanced_bid']['bid'] === 1200.0, 'the next absentee maximum is shown');
+$rank->apply('pass', ['at' => 't']);
+$rank->apply('end_sale', ['at' => 't']);
+expect(fn () => $rank->apply('remove_participant', ['customer_id' => 'low', 'at' => 't']), 'ended');
+
 echo "ok\n";
