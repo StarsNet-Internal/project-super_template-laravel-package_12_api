@@ -894,4 +894,114 @@ $rank->apply('pass', ['at' => 't']);
 $rank->apply('end_sale', ['at' => 't']);
 expect(fn () => $rank->apply('remove_participant', ['customer_id' => 'low', 'at' => 't']), 'ended');
 
+$again = book();
+$again->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$again->apply('open_lot', ['at' => 't', 'advances' => []]);
+$again->apply('set_asking_price', ['amount' => 3100, 'at' => 't']);
+$again->apply('pass', ['at' => 't']);
+$again->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$again->apply('open_lot', ['at' => 't']);
+check($again->publicPayload('t')['asking_price'] === 3100.0, 'opening a closed lot keeps a raised asking price');
+$again->apply('accept_bid', [
+    'amount' => 3100,
+    'source' => 'floor',
+    'paddle_id' => 7,
+    'customer_id' => 'floor-7',
+    'at' => 't',
+]);
+$beforeClose = $again->publicPayload('t');
+$again->apply('pass', ['at' => 't']);
+$again->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$again->apply('open_lot', ['at' => 't']);
+$reopened = $again->publicPayload('t');
+check($reopened['asking_price'] === $beforeClose['asking_price'], 'opening a closed lot keeps the asking price');
+check($reopened['asking_price'] === 3200.0, 'the asking price stays one increment above the last bid');
+check($reopened['lots'][0]['current_bid'] === 3100.0, 'the last bid stays on the reopened lot');
+check(count($reopened['histories']) === count($beforeClose['histories']), 'opening a closed lot does not replay bids');
+$again->apply('pass', ['at' => 't']);
+$again->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't']);
+$again->apply('open_lot', ['at' => 't']);
+check($again->publicPayload('t')['asking_price'] === 500.0, 'a lot opened for the first time still starts at its opening price');
+
+$returnLots = catalogue();
+unset($returnLots[0]['advance']);
+$returnLots[0]['advances'] = [];
+$returnLots[0]['reserve_price'] = 0;
+$return = LiveSaleBook::empty('store-return');
+$return->apply('start_sale', ['lots' => $returnLots, 'at' => 't']);
+$return->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$return->apply('open_lot', ['at' => 't', 'advances' => []]);
+$return->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 7,
+    'customer_id' => 'floor-7',
+    'at' => 't',
+]);
+$return->apply('warn', ['action' => 'FAIR_WARNING', 'at' => 't']);
+$return->apply('pass', ['at' => 't']);
+$closed = $return->publicPayload('t');
+expect(fn () => $return->apply('open_lot', ['lot_id' => 'lot-1', 'at' => 't']), 'Prepare the lot');
+expect(fn () => $return->apply('undo_latest_bid', ['at' => 't']), 'Open the lot');
+check($return->publicPayload('t')['asking_price'] === $closed['asking_price'], 'a refused open leaves the asking price');
+check($return->publicPayload('t')['lots'][0]['current_bid'] === 800.0, 'a refused open leaves the bid');
+check($return->publicPayload('t')['lots'][0]['live_state'] === 'passed', 'a refused open leaves the lot closed');
+$return->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$return->apply('open_lot', ['at' => 't']);
+$back = $return->publicPayload('t');
+check($back['asking_price'] === 900.0, 'opening after a warning keeps the asking price');
+check($back['warning'] === null, 'opening a closed lot clears the warning');
+check($back['lots'][0]['current_bid'] === 800.0 && $back['lots'][0]['live_state'] === 'open', 'opening a closed lot keeps the bid');
+expect(fn () => $return->apply('submit_online_bid', [
+    'amount' => 800,
+    'customer_id' => 'online-a',
+    'paddle_id' => 201,
+    'at' => 't',
+]), 'asking price');
+$return->apply('submit_online_bid', [
+    'amount' => 900,
+    'customer_id' => 'online-a',
+    'paddle_id' => 201,
+    'at' => 't',
+]);
+check($return->publicPayload('t')['lots'][0]['current_bid'] === 900.0, 'the continued asking price can be bid');
+$return->apply('pass', ['at' => 't']);
+$return->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't']);
+$return->apply('open_lot', ['at' => 't']);
+check($return->publicPayload('t')['asking_price'] === 500.0, 'the next lot still opens at its starting price');
+check($return->publicPayload('t')['lots'][0]['current_bid'] === 900.0, 'the closed lot keeps its bid while another lot is open');
+$return->apply('accept_bid', [
+    'amount' => 500,
+    'source' => 'floor',
+    'paddle_id' => 8,
+    'customer_id' => 'floor-8',
+    'at' => 't',
+]);
+$return->apply('pass', ['at' => 't']);
+$return->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$return->apply('open_lot', ['at' => 't']);
+$home = $return->publicPayload('t');
+check($home['current_lot_id'] === 'lot-1' && $home['asking_price'] === 1000.0, 'coming back continues the closed lot');
+check($home['lots'][0]['current_bid'] === 900.0, 'coming back keeps that lot bid');
+check($home['lots'][1]['current_bid'] === 500.0 && $home['lots'][1]['live_state'] === 'passed', 'the lot left behind stays closed at its bid');
+
+$soldLots = catalogue();
+unset($soldLots[0]['advance']);
+$soldLots[0]['reserve_price'] = 0;
+$sold = LiveSaleBook::empty('store-sold-open');
+$sold->apply('start_sale', ['lots' => $soldLots, 'at' => 't']);
+$sold->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$sold->apply('open_lot', ['at' => 't', 'advances' => []]);
+$sold->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 7,
+    'customer_id' => 'floor-7',
+    'at' => 't',
+]);
+$sold->apply('sell', ['at' => 't']);
+expect(fn () => $sold->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']), 'cannot be prepared');
+check($sold->publicPayload('t')['lots'][0]['live_state'] === 'sold', 'prepare does not reopen a sold lot');
+check($sold->publicPayload('t')['lots'][0]['current_bid'] === 800.0, 'a refused prepare leaves the hammer');
+
 echo "ok\n";

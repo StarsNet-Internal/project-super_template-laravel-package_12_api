@@ -355,12 +355,32 @@ class LiveSaleBook
             $lot['advance'] = null;
             $lot = $this->attachAdvances($lot);
         }
-        $opening = $lot['starting_price'];
+        $current = $this->currentBid($lot);
+        $previousAsk = isset($lot['asking_price']) && $lot['asking_price'] !== null
+            ? (float) $lot['asking_price']
+            : null;
+        // A closed lot already has a price. Opening it again continues that
+        // price. The starting price is only for the first open, and absentee
+        // bids are not placed a second time.
+        $continuing = $current !== null || $previousAsk !== null;
         $lot['state'] = 'open';
-        $lot['opening_asking'] = $opening;
-        $lot['asking_price'] = $opening;
         $lot['warning'] = null;
-        $this->answerWithAbsentee($lot, $at, false);
+        if ($continuing) {
+            if ($current !== null) {
+                $next = round($current + $this->incrementFor($lot, $current), 2);
+                $lot['asking_price'] = $previousAsk !== null && $this->greater($previousAsk, $current)
+                    ? $previousAsk
+                    : $next;
+            }
+            if ($lot['opening_asking'] === null) {
+                $lot['opening_asking'] = (float) $lot['starting_price'];
+            }
+        } else {
+            $opening = $lot['starting_price'];
+            $lot['opening_asking'] = $opening;
+            $lot['asking_price'] = $opening;
+            $this->answerWithAbsentee($lot, $at, false);
+        }
         $this->lots[$lotId] = $lot;
         $this->currentLotId = $lotId;
         return ['lot_id' => $lotId];
