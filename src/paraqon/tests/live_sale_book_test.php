@@ -1,9 +1,11 @@
 <?php
 
+use Starsnet\Project\Paraqon\App\LiveSale\CurrentBidCalculation;
 use Starsnet\Project\Paraqon\App\LiveSale\LiveSaleBook;
 use Starsnet\Project\Paraqon\App\LiveSale\LiveSaleException;
 
 require __DIR__ . '/../src/App/LiveSale/LiveSaleException.php';
+require __DIR__ . '/../src/App/LiveSale/CurrentBidCalculation.php';
 require __DIR__ . '/../src/App/LiveSale/LiveSaleBook.php';
 
 function check(bool $condition, string $message): void
@@ -85,6 +87,37 @@ function containsKey(array $value, string $key): bool
     return false;
 }
 
+$tieRules = [['from' => 0, 'to' => 2147483647, 'increment' => 10000]];
+$tieBids = [
+    ['customer_id' => '103', 'bid' => 150000, 'type' => 'DIRECT', 'created_at' => '2026-10-09T10:31:00Z'],
+    ['customer_id' => '102', 'bid' => 120000, 'type' => 'ADVANCED', 'created_at' => '2026-10-07T04:00:02Z'],
+    ['customer_id' => '101', 'bid' => 150000, 'type' => 'ADVANCED', 'created_at' => '2026-10-07T03:59:50Z'],
+];
+$tieHistory = ['winning_bid_customer_id' => '101', 'current_bid' => 140000];
+check(
+    CurrentBidCalculation::price($tieBids, 80000, 100000, $tieRules, '103', 150000, 'DIRECT', $tieHistory) == 150000,
+    'a direct bid that ties an earlier advance stays at that amount'
+);
+check(CurrentBidCalculation::winnerId($tieBids) === '101', 'the earlier of the equal highest bids wins');
+$overBids = $tieBids;
+$overBids[0]['bid'] = 160000;
+check(
+    CurrentBidCalculation::price($overBids, 80000, 100000, $tieRules, '103', 160000, 'DIRECT', $tieHistory) == 160000,
+    'a direct bid above every maximum is the price'
+);
+check(CurrentBidCalculation::winnerId($overBids) === '103', 'the higher direct bidder wins');
+$stepRules = [['from' => 0, 'to' => 10000, 'increment' => 100]];
+check(CurrentBidCalculation::price([
+    ['customer_id' => 'high', 'bid' => 1500, 'type' => 'ADVANCED', 'created_at' => '2026-10-01'],
+    ['customer_id' => 'low', 'bid' => 1200, 'type' => 'ADVANCED', 'created_at' => '2026-10-03'],
+], 800, 1000, $stepRules, 'high', 1500, 'ADVANCED', null) == 1300, 'two maxima price one increment above the second');
+check(CurrentBidCalculation::price([
+    ['customer_id' => 'only', 'bid' => 1500, 'type' => 'ADVANCED', 'created_at' => 't'],
+], 800, 1000, $stepRules, 'only', 1500, 'ADVANCED', null) == 1000, 'one maximum that meets the reserve prices the reserve');
+check(CurrentBidCalculation::price([
+    ['customer_id' => 'only', 'bid' => 900, 'type' => 'ADVANCED', 'created_at' => 't'],
+], 800, 1000, $stepRules, 'only', 900, 'ADVANCED', null) == 800, 'one maximum under the reserve prices the opening');
+
 $preview = LiveSaleBook::empty('store-1');
 $preview->loadPreview(catalogue());
 check($preview->sequence() === 0, 'preview does not start the sale');
@@ -111,15 +144,11 @@ $sale->apply('submit_online_bid', [
     'paddle_id' => 201,
     'at' => 't',
 ]);
-check($sale->publicPayload('t')['has_pending'] === true, 'online bid waits');
+check($sale->publicPayload('t')['has_pending'] === false, 'an online bid is accepted');
+check($sale->clerkPayload('t')['pending'] === [], 'an accepted online bid is not left waiting');
+check($sale->viewer('online-201')['result'] === 'outbid', 'the book answers and the online bidder is outbid');
 check(containsKey($sale->publicPayload('t'), 'customer_id') === false, 'public payload hides customer ids');
 check(containsKey($sale->publicPayload('t'), 'reserve_price') === false, 'public payload hides the reserve');
-check($sale->clerkPayload('t')['pending'][0]['customer_id'] === 'online-201', 'clerk sees the pending bidder');
-
-$sale->apply('accept_pending', [
-    'pending_id' => $sale->clerkPayload('t')['pending'][0]['id'],
-    'at' => 't2',
-]);
 check($sale->publicPayload('t')['asking_price'] === 1000.0, 'the absentee answers one increment above the online bid');
 check($sale->publicPayload('t')['histories'][0]['paddle_label'] === 'Paddle #201', 'online bid keeps its paddle');
 check($sale->publicPayload('t')['histories'][0]['current_bid'] === 800.0, 'the online bid stays on the ladder');
@@ -273,11 +302,100 @@ check($raceLadder === [
 ], 'unequal absentees stop one step above the lower maximum');
 check($race->publicPayload('t')['asking_price'] === 1300.0, 'the higher absentee does not bid against themselves');
 
+$matchLots = catalogue();
+unset($matchLots[0]['advance']);
+$matchLots[0]['advances'] = [[
+    'customer_id' => 'early',
+    'amount' => 1000,
+    'paddle_id' => 101,
+    'placed_at' => '2026-10-01T00:00:00Z',
+]];
+$match = LiveSaleBook::empty('store-match');
+$match->apply('start_sale', ['lots' => $matchLots, 'at' => 't']);
+$match->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$match->apply('open_lot', ['at' => 't']);
+$match->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 103,
+    'customer_id' => 'floor-103',
+    'at' => 't1',
+]);
+check($match->publicPayload('t')['histories'][count($match->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Paddle #101', 'an advance still answers one step above a lower bid');
+$match->apply('submit_online_bid', [
+    'amount' => 1000,
+    'customer_id' => 'online-103',
+    'paddle_id' => 103,
+    'at' => 't2',
+]);
+$matchLadder = array_map(
+    fn ($row) => [$row['current_bid'], $row['paddle_label']],
+    $match->publicPayload('t')['histories']
+);
+check($matchLadder === [
+    [800.0, 'Floor bid'],
+    [900.0, 'Paddle #101'],
+    [1000.0, 'Paddle #103'],
+    [1000.0, 'Paddle #101'],
+], 'an outside bid on the advance maximum is taken by that advance');
+check($match->publicPayload('t')['asking_price'] === 1100.0, 'asking moves one step above the tied maximum');
+check($match->viewer('early')['result'] === 'with_you', 'the earlier advance is the leader');
+check($match->viewer('online-103')['result'] === 'outbid', 'the matching outside bid is outbid');
+$match->apply('accept_bid', [
+    'amount' => 1100,
+    'source' => 'floor',
+    'paddle_id' => 103,
+    'customer_id' => 'floor-103',
+    'at' => 't4',
+]);
+check($match->publicPayload('t')['histories'][count($match->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Floor bid', 'a bid above the maximum is not covered');
+
+$autoLots = catalogue();
+unset($autoLots[0]['advance']);
+$autoLots[0]['advances'] = [];
+$autoLots[0]['reserve_price'] = 0;
+$auto = LiveSaleBook::empty('store-auto');
+$auto->apply('start_sale', ['lots' => $autoLots, 'at' => 't0']);
+$auto->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't0']);
+$auto->apply('open_lot', ['at' => 't0', 'advances' => []]);
+$auto->apply('submit_online_bid', [
+    'amount' => 800,
+    'customer_id' => 'online-a',
+    'paddle_id' => 201,
+    'at' => 't1',
+]);
+check($auto->publicPayload('t')['has_pending'] === false, 'auto accept does not leave the bid waiting');
+check($auto->clerkPayload('t')['pending'] === [], 'auto accept clears the waiting list');
+check($auto->viewer('online-a')['result'] === 'with_you', 'an auto-accepted bid is with that customer');
+check($auto->publicPayload('t')['histories'][0]['current_bid'] === 800.0, 'auto accept places the online bid');
+check($auto->publicPayload('t')['histories'][0]['paddle_label'] === 'Paddle #201', 'auto accept keeps the paddle');
+check($auto->publicPayload('t')['asking_price'] === 900.0, 'auto accept raises the asking price');
+$autoAgain = LiveSaleBook::fromArray($auto->toArray());
+$autoAgain->apply('submit_online_bid', [
+    'amount' => 900,
+    'customer_id' => 'online-b',
+    'paddle_id' => 202,
+    'at' => 't2',
+]);
+check($autoAgain->viewer('online-b')['result'] === 'with_you', 'a reloaded book still auto-accepts');
+check($autoAgain->viewer('online-a')['result'] === 'outbid', 'the earlier auto-accepted bidder is outbid');
+$autoAgain->setAutoAcceptOnlineBids(false);
+$autoAgain->apply('submit_online_bid', [
+    'amount' => 1000,
+    'customer_id' => 'online-c',
+    'paddle_id' => 203,
+    'at' => 't3',
+]);
+check($autoAgain->viewer('online-c')['result'] === 'pending', 'turning auto accept off leaves the bid waiting');
+check($autoAgain->clerkPayload('t')['pending'][0]['customer_id'] === 'online-c', 'the clerk still sees a waiting bid');
+check(count($autoAgain->publicPayload('t')['histories']) === 2, 'a waiting bid is not on the ladder');
+
 $youLots = catalogue();
 unset($youLots[0]['advance']);
 $youLots[0]['advances'] = [];
 $youLots[0]['reserve_price'] = 0;
 $you = LiveSaleBook::empty('store-you');
+$you->setAutoAcceptOnlineBids(false);
 $you->apply('start_sale', ['lots' => $youLots, 'at' => 't0']);
 $you->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't0']);
 $you->apply('open_lot', ['at' => 't0', 'advances' => []]);
@@ -370,6 +488,7 @@ $preferLots = catalogue();
 $preferLots[0]['reserve_price'] = 0;
 unset($preferLots[1]);
 $prefer = LiveSaleBook::empty('store-prefer');
+$prefer->setAutoAcceptOnlineBids(false);
 $prefer->apply('start_sale', ['lots' => array_values($preferLots), 'at' => 't']);
 $prefer->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
 $prefer->apply('open_lot', ['at' => 't']);
@@ -404,6 +523,7 @@ $jumpedLots = catalogue();
 $jumpedLots[0]['reserve_price'] = 0;
 unset($jumpedLots[1]);
 $jumped = LiveSaleBook::empty('store-jumped');
+$jumped->setAutoAcceptOnlineBids(false);
 $jumped->apply('start_sale', ['lots' => array_values($jumpedLots), 'at' => 't']);
 $jumped->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
 $jumped->apply('open_lot', ['at' => 't']);
@@ -435,16 +555,6 @@ $cover->apply('accept_bid', [
     'customer_id' => 'floor-2',
     'at' => 't',
 ]);
-check(count($cover->publicPayload('t')['histories']) === 1, 'an absentee under the next increment does not answer the floor');
-$cover->apply('set_asking_price', ['amount' => 850, 'at' => 't']);
-$cover->apply('submit_online_bid', [
-    'amount' => 850,
-    'customer_id' => 'online-201',
-    'paddle_id' => 201,
-    'at' => 't',
-]);
-check($cover->clerkPayload('t')['book_can_take'] === true, 'the absentee can take a jumped ask inside the maximum');
-$cover->apply('take_book', ['at' => 't']);
 $coverLadder = array_map(
     fn ($row) => [$row['current_bid'], $row['source']],
     $cover->publicPayload('t')['histories']
@@ -452,11 +562,10 @@ $coverLadder = array_map(
 check($coverLadder === [
     [800.0, 'floor'],
     [850.0, 'advance'],
-], 'the book adds one row and leaves the floor bid');
-check($cover->publicPayload('t')['has_pending'] === false, 'the online bidder is not on the stack');
-foreach ($cover->clerkPayload('t')['histories'] as $row) {
-    check(($row['winning_bid_customer_id'] ?? null) !== 'online-201', 'the online bidder was not accepted');
-}
+], 'an advance maximum inside the next increment becomes the current bid');
+check($cover->publicPayload('t')['asking_price'] === 950.0, 'asking moves one increment above that maximum');
+check($cover->viewer('absentee-55')['result'] === 'with_you', 'the advance leads at its maximum');
+check($cover->viewer('floor-2')['result'] === 'outbid', 'the lower floor bid is outbid');
 
 $sameLots = catalogue();
 unset($sameLots[0]['advance']);
@@ -464,6 +573,7 @@ $sameLots[0]['advances'] = [];
 $sameLots[0]['reserve_price'] = 0;
 unset($sameLots[1]);
 $same = LiveSaleBook::empty('store-same');
+$same->setAutoAcceptOnlineBids(false);
 $same->apply('start_sale', ['lots' => array_values($sameLots), 'at' => 't']);
 $same->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
 $same->apply('open_lot', ['at' => 't', 'advances' => []]);
@@ -717,6 +827,7 @@ expect(fn () => $dropAgain->apply('submit_online_bid', [
 ]), 'out of this sale');
 
 $kept = book();
+$kept->setAutoAcceptOnlineBids(false);
 $kept->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
 $kept->apply('open_lot', ['at' => 't', 'advances' => []]);
 $kept->apply('submit_online_bid', [

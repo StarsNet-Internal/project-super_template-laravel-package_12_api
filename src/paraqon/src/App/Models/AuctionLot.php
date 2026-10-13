@@ -21,6 +21,7 @@ use App\Models\Customer;
 use App\Models\Product;
 use App\Models\ProductVariant;
 use App\Models\Store;
+use Starsnet\Project\Paraqon\App\LiveSale\CurrentBidCalculation;
 use Starsnet\Project\Paraqon\App\Models\Bid;
 use Starsnet\Project\Paraqon\App\Models\BidHistory;
 
@@ -173,73 +174,16 @@ class AuctionLot extends Model
         $newBidValue = null,
         $bidType = null
     ) {
-        $startingPrice = $this->starting_price;
-        $reservePrice = $this->reserve_price;
-
-        // If customer place an ADVANCED bid, skip filtering from Case 0s
-        if (is_null($bidType) || $bidType != 'ADVANCED') {
-            if (count($allBids) > 2 && !is_null($newBidCustomerID)) {
-                $winningBid = $bidHistory->histories()->last();
-                if ($winningBid->winning_bid_customer_id == $newBidCustomerID) {
-                    $currentBid = $winningBid->current_bid;
-                    if ($currentBid < $newBidValue && $newBidValue < $reservePrice) return $currentBid; // Case 0A
-                    if ($newBidValue > $currentBid && $currentBid > $reservePrice) return $currentBid; // Case 0B
-                    if ($newBidValue >= $reservePrice && $reservePrice > $currentBid) return $reservePrice; // Case 0C
-                }
-            }
-        }
-
-        // Get all highest maximum bids per customer_id
-        $allCustomerHighestBids = $allBids
-            ->groupBy('customer_id')
-            ->map(function ($item) {
-                return $item->sortByDesc('bid')->first();
-            })
-            ->sortByDesc('bid')
-            ->values();
-
-        // Case 1: If 0 bids
-        $allCustomerHighestBidsCount = $allCustomerHighestBids->count();
-
-        if ($allCustomerHighestBidsCount === 0) return $startingPrice; // Case 1
-
-        // If 1 bids
-        $maxBidValue = $allCustomerHighestBids->max('bid');
-        $isReservedPriceMet = $maxBidValue >= $reservePrice;
-
-        if ($allCustomerHighestBidsCount === 1) {
-            return $isReservedPriceMet ?
-                $reservePrice : // Case 3A
-                $startingPrice; // Case 2A
-        }
-
-        // If more than 1 bids
-        $maxBidCount = $allCustomerHighestBids->where('bid', $maxBidValue)->count();
-        if ($maxBidCount >= 2) return $maxBidValue; // Case 2B (ii) & 3B (ii)
-
-        // For Case 2B(i) & 3B (i) Calculations
-        $incrementRules = optional($this->bid_incremental_settings)['increments'];
-
-        $maxBidValues = $allCustomerHighestBids->sortByDesc('bid')->pluck('bid')->values()->all();
-        $secondHighestBidValue = $maxBidValues[1];
-
-        $incrementalBid = 0;
-        if (!is_null($incrementRules)) {
-            foreach ($incrementRules as $interval) {
-                if ($secondHighestBidValue >= $interval['from'] && $secondHighestBidValue < $interval['to']) {
-                    $incrementalBid = $interval['increment'];
-                    break;
-                }
-            }
-        }
-
-        if ($isReservedPriceMet) {
-            // Case 3B (i)
-            return max($reservePrice, min($maxBidValue, $secondHighestBidValue + $incrementalBid));
-        } else {
-            // Case 2B (i)
-            return min($maxBidValue, $secondHighestBidValue + $incrementalBid);
-        }
+        return CurrentBidCalculation::maximumValue(
+            CurrentBidCalculation::rowsFromBids($allBids),
+            $this->starting_price,
+            $this->reserve_price,
+            CurrentBidCalculation::incrementsFrom($this->bid_incremental_settings),
+            $newBidCustomerID,
+            $newBidValue,
+            $bidType,
+            $this->lastHistoryRow($bidHistory)
+        );
     }
 
     public function getCurrentBidPrice(
@@ -267,60 +211,41 @@ class AuctionLot extends Model
             return $bidHistory->current_bid;
         }
 
-        // Get all bids 
+        // Get all bids
         $allBids = $this->bids()
             ->where('is_hidden', false)
             ->orderByDesc('bid')
             ->orderBy('created_at')
             ->get();
 
-
-        if (in_array($bidType, ['MAX', 'ADVANCED'])) {
-            $maximumMaxBidValue = $this->getCurrentMaximumBidValue(
-                $allBids,
-                $bidHistory,
-                $newBidCustomerID,
-                $newBidValue,
-                $bidType
-            );
-            return $maximumMaxBidValue;
-        }
-
-        // get maximum Bids value
-        $maximumDirectBid = $allBids
-            ->first(function ($value) {
-                return $value->type == 'DIRECT';
-            });
-        $maximumDirectBidValue = optional($maximumDirectBid)->bid;
-
-        $maximumMaxBid = $allBids
-            ->first(function ($value) {
-                return in_array($value->type, ['MAX', 'ADVANCED']);
-                // return $value->type == 'MAX';
-            });
-        $maximumMaxBidValue = optional($maximumMaxBid)->bid;
-
-        // Validations
-        if (is_null($maximumDirectBidValue) && is_null($maximumMaxBidValue)) return $this->starting_price;
-        if (is_null($maximumMaxBidValue)) return $maximumDirectBidValue;
-        if ($maximumDirectBidValue > $maximumMaxBidValue) return $maximumDirectBidValue; // Case 5
-
-        if ($maximumDirectBidValue <= $maximumMaxBidValue) {
-            $winningBid = $bidHistory->histories()->last();
-            $winningCustomerID = $winningBid->winning_bid_customer_id;
-
-            if ($winningCustomerID == $newBidCustomerID) return $maximumDirectBidValue; // Case 4A, 6A
-        }
-
-        // Case 4B, 6B
-        $maximumMaxBidValue = $this->getCurrentMaximumBidValue(
-            $allBids,
-            $bidHistory,
+        return CurrentBidCalculation::price(
+            CurrentBidCalculation::rowsFromBids($allBids),
+            $this->starting_price,
+            $this->reserve_price,
+            CurrentBidCalculation::incrementsFrom($this->bid_incremental_settings),
             $newBidCustomerID,
             $newBidValue,
-            $bidType
+            $bidType,
+            $this->lastHistoryRow($bidHistory)
         );
-        return $maximumMaxBidValue;
+    }
+
+    /**
+     * @return array{winning_bid_customer_id: mixed, current_bid: mixed}|null
+     */
+    private function lastHistoryRow(mixed $bidHistory): ?array
+    {
+        if ($bidHistory === null || $bidHistory->histories()->count() === 0) {
+            return null;
+        }
+        $winningBid = $bidHistory->histories()->last();
+        if ($winningBid === null) {
+            return null;
+        }
+        return [
+            'winning_bid_customer_id' => $winningBid->winning_bid_customer_id,
+            'current_bid' => $winningBid->current_bid,
+        ];
     }
 
     // -----------------------------

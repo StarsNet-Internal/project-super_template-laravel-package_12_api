@@ -23,6 +23,12 @@ class LiveSaleBook
     /** @var array<string, array<string, mixed>> */
     private array $removed = [];
 
+    /**
+     * Customer bids are accepted in the same command. Call
+     * setAutoAcceptOnlineBids(false) to leave them waiting for the clerk.
+     */
+    private bool $autoAcceptOnlineBids = true;
+
     public static function empty(string $storeId): self
     {
         $book = new self();
@@ -80,6 +86,11 @@ class LiveSaleBook
             'lots' => array_values($this->lots),
             'removed' => array_values($this->removed),
         ];
+    }
+
+    public function setAutoAcceptOnlineBids(bool $enabled): void
+    {
+        $this->autoAcceptOnlineBids = $enabled;
     }
 
     public function sequence(): int
@@ -476,7 +487,10 @@ class LiveSaleBook
         ));
         $lot['pending'][] = $pending;
         $this->lots[$lot['lot_id']] = $lot;
-        return ['lot_id' => $lot['lot_id'], 'pending_id' => $pending['id']];
+        if (!$this->autoAcceptOnlineBids) {
+            return ['lot_id' => $lot['lot_id'], 'pending_id' => $pending['id']];
+        }
+        return $this->acceptPending(['pending_id' => $pending['id']], $at);
     }
 
     private function acceptPending(array $payload, string $at): array
@@ -1252,7 +1266,9 @@ class LiveSaleBook
      * Absentees bid one increment at a time, up to their max.
      * On open they compete only with each other. A bid from the room draws one
      * answer, and any other absentee who can still bid then answers that.
-     * Undo does not call this, so a withdrawn book bid is not placed again.
+     * When an outside bid is left on top, the timed current-bid cases decide
+     * whether an absentee takes that price. Undo does not call this, so a
+     * withdrawn book bid is not placed again.
      *
      * @param array<string, mixed> $lot
      */
@@ -1262,6 +1278,7 @@ class LiveSaleBook
             $candidates = $this->absenteeCandidates($lot);
             if ($candidates === []) {
                 $this->coverTiedAbsentee($lot, $at);
+                $this->coverFromTimedCalculation($lot, $at);
                 return;
             }
             if (!$outsideBid && $guard === 0 && count($candidates) < 2) {
@@ -1358,13 +1375,15 @@ class LiveSaleBook
      * @param array<string, mixed> $lot
      * @param array<string, mixed> $advance
      */
-    private function placeAbsenteeBid(array &$lot, array $advance, string $at): void
+    private function placeAbsenteeBid(array &$lot, array $advance, string $at, ?float $amount = null): void
     {
         if ($this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
             return;
         }
-        $amount = $this->nextAbsenteeAmount($lot);
         if ($amount === null) {
+            $amount = $this->nextAbsenteeAmount($lot);
+        }
+        if ($amount === null || $this->greater($amount, $this->effectiveMax($advance, $lot))) {
             return;
         }
         $bid = [
@@ -1434,6 +1453,115 @@ class LiveSaleBook
             return;
         }
         $this->placeAbsenteeBid($lot, $advance, $at);
+    }
+
+    /**
+     * Price and winner follow CurrentBidCalculation, the same cases timed
+     * auctions use. getCurrentBidPrice is not called: it creates a bid history.
+     * An absentee takes that price when it is the amount just bid, or a maximum
+     * that falls between that bid and the next increment.
+     *
+     * @param array<string, mixed> $lot
+     */
+    private function coverFromTimedCalculation(array &$lot, string $at): void
+    {
+        $leader = $this->latestBid($lot);
+        if ($leader === null || ($leader['source'] ?? '') === 'advance') {
+            return;
+        }
+        $rows = $this->timedBidRows($lot);
+        $hasDirect = false;
+        foreach ($rows as $row) {
+            if (($row['type'] ?? '') === 'DIRECT') {
+                $hasDirect = true;
+                break;
+            }
+        }
+        if (!$hasDirect) {
+            return;
+        }
+        $previous = $lot['bids'][count($lot['bids']) - 2] ?? null;
+        $lastHistory = null;
+        if (is_array($previous)) {
+            $lastHistory = [
+                'winning_bid_customer_id' => $previous['customer_id'] ?? null,
+                'current_bid' => (float) $previous['amount'],
+            ];
+        }
+        $settings = $lot['bid_incremental_settings'] ?? null;
+        $increments = is_array($settings) ? ($settings['increments'] ?? null) : null;
+        $price = CurrentBidCalculation::price(
+            $rows,
+            (float) $lot['starting_price'],
+            (float) ($lot['reserve_price'] ?? 0),
+            $increments,
+            $leader['customer_id'] ?? null,
+            (float) $leader['amount'],
+            'DIRECT',
+            $lastHistory
+        );
+        $winnerId = CurrentBidCalculation::winnerId($rows);
+        if ($winnerId === null || (string) $winnerId === '') {
+            return;
+        }
+        $winnerId = (string) $winnerId;
+        if ($this->isRemoved($winnerId) || (string) ($leader['customer_id'] ?? '') === $winnerId) {
+            return;
+        }
+        $advance = null;
+        foreach ($lot['advances'] as $row) {
+            if ((string) ($row['customer_id'] ?? '') === $winnerId) {
+                $advance = $row;
+                break;
+            }
+        }
+        if ($advance === null) {
+            return;
+        }
+        $current = (float) $leader['amount'];
+        if ($this->greater($current, $price)) {
+            return;
+        }
+        $step = $this->incrementFor($lot, $current);
+        $nextAsk = $this->greater($step, 0) ? round($current + $step, 2) : $current;
+        if ($this->greater($price, $nextAsk)) {
+            return;
+        }
+        $this->placeAbsenteeBid($lot, $advance, $at, $price);
+    }
+
+    /**
+     * Advances are maximum bids. Floor, phone, house, and online bids are direct.
+     *
+     * @param array<string, mixed> $lot
+     * @return array<int, array{customer_id: mixed, bid: float, type: string, created_at: string}>
+     */
+    private function timedBidRows(array $lot): array
+    {
+        $rows = [];
+        foreach ($lot['advances'] as $advance) {
+            if ($this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
+                continue;
+            }
+            $rows[] = [
+                'customer_id' => $advance['customer_id'],
+                'bid' => (float) $advance['amount'],
+                'type' => 'ADVANCED',
+                'created_at' => (string) ($advance['placed_at'] ?? ''),
+            ];
+        }
+        foreach ($lot['bids'] as $bid) {
+            if (($bid['source'] ?? '') === 'advance') {
+                continue;
+            }
+            $rows[] = [
+                'customer_id' => $bid['customer_id'] ?? null,
+                'bid' => (float) $bid['amount'],
+                'type' => 'DIRECT',
+                'created_at' => (string) ($bid['created_at'] ?? ''),
+            ];
+        }
+        return $rows;
     }
 
     private static function plain(mixed $value): mixed
