@@ -777,6 +777,8 @@ $drop->apply('remove_participant', [
     'paddle_id' => 55,
     'at' => 't',
 ]);
+check($drop->viewer('absentee-55')['removed'] === true, 'a removed customer stays out of later lots');
+check($drop->viewer('floor-70')['removed'] === false, 'another customer is not removed');
 check($drop->clerkPayload('t')['removed'][0]['customer_id'] === 'absentee-55', 'the clerk sees who left');
 check($drop->clerkPayload('t')['removed'][0]['paddle_id'] === 55, 'the clerk sees the removed paddle');
 check(containsKey($drop->publicPayload('t'), 'removed') === false, 'the public room does not list removed participants');

@@ -263,13 +263,16 @@ class LiveSaleService
     /**
      * An absentee can change until the lot is opened. After that the book copy is the one that runs.
      */
-    public function assertAdvanceEditable(string $storeId, string $lotId): void
+    public function assertAdvanceEditable(string $storeId, string $lotId, ?string $customerId = null): void
     {
         $doc = LiveSaleState::where('store_id', $storeId)->first();
         if ($doc === null) {
             return;
         }
         $book = $this->bookFromDocument($doc);
+        if ($customerId !== null && $customerId !== '' && $book->isParticipantRemoved($customerId)) {
+            abort(422, 'You are out of this sale');
+        }
         if ($book->status() !== 'running') {
             return;
         }

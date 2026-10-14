@@ -141,7 +141,7 @@ class BidController extends Controller
         // Hide previous placed ADVANCED bid, if there's any
         if ($bidType == 'ADVANCED') {
             if ($liveSale) {
-                app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id);
+                app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id, (string) $customer->_id);
             } elseif ($auctionLot->status == Status::ACTIVE->value) {
                 abort(403, 'AuctionLot is now status ACTIVE, no longer accept any ADVANCED bids');
             }

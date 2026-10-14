@@ -192,10 +192,15 @@ class LiveSaleBook
         return $this->payload(true, $at);
     }
 
+    public function isParticipantRemoved(string $customerId): bool
+    {
+        return $this->isRemoved($customerId);
+    }
+
     /**
      * This customer's own result. It is not part of the public room payload.
      *
-     * @return array{lot_id: ?string, paddle_id: mixed, result: ?string, pending: ?array{id: string, amount: float}}
+     * @return array{lot_id: ?string, paddle_id: mixed, result: ?string, pending: ?array{id: string, amount: float}, removed: bool}
      */
     public function viewer(string $customerId): array
     {
@@ -206,6 +211,7 @@ class LiveSaleBook
             'paddle_id' => null,
             'result' => null,
             'pending' => null,
+            'removed' => $this->isRemoved($customerId),
         ];
         if ($customerId === '' || $lot === null) {
             return $empty;
@@ -251,6 +257,7 @@ class LiveSaleBook
             'paddle_id' => $this->paddleFor($lot, $customerId),
             'result' => $result,
             'pending' => $result === 'pending' ? $pending : null,
+            'removed' => $this->isRemoved($customerId),
         ];
     }
 

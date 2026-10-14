@@ -332,7 +332,7 @@ class AuctionLotController extends Controller
 
         // Hide previous placed ADVANCED bid, if there's any
         if ($bidType == 'ADVANCED') {
-            app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id);
+            app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id, (string) $customer->_id);
             if (!$liveSale && $auctionLot->status == Status::ACTIVE->value) abort(404, 'AuctionLot is now status ACTIVE, no longer accept any ADVANCED bids');
 
             // Timed auctions close advances when the clock starts. A live advance
@@ -607,7 +607,7 @@ class AuctionLotController extends Controller
 
         // Hide previous placed ADVANCED bid, if there's any
         if ($bidType == 'ADVANCED') {
-            app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id);
+            app(LiveSaleService::class)->assertAdvanceEditable((string) $auctionLot->store_id, (string) $auctionLot->_id, (string) $customer->_id);
             if (!$liveSale && $auctionLot->status == Status::ACTIVE->value) abort(403, 'Auction Lot is now active, no longer accept any ADVANCED bids');
 
             // Timed auctions close advances when the clock starts. A live advance
