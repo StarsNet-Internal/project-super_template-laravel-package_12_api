@@ -73,24 +73,26 @@ class WatchlistItemController extends Controller
         // Get auction_lots with their product_ids to create mapping
         $auctionLots = AuctionLot::whereIn('_id', $watchingAuctionLotIDs)->get();
 
-        // Create mapping: auction_lot_id => product_id
+        // Create mapping: auction_lot_id => product_id.
+        // Collection::get() passes the key to array_key_exists(), and PHP 8.4 rejects ObjectId.
         $auctionLotToProductMap = [];
         foreach ($auctionLots as $auctionLot) {
-            $auctionLotToProductMap[$auctionLot->_id] = $auctionLot->product_id;
+            $auctionLotToProductMap[(string) $auctionLot->_id] = (string) $auctionLot->product_id;
         }
 
         // Get unique product IDs for aggregation
-        $productIDs = array_unique(array_values($auctionLotToProductMap));
+        $productIDs = array_values(array_unique(array_filter($auctionLotToProductMap)));
 
         // Get Products from aggregation (one product per product_id)
         $productsMap = $this->getProductsInfoByAggregation($productIDs)
-            ->keyBy('id');
+            ->keyBy(fn ($product) => (string) $product->id);
 
         // Build results: one entry per watched auction_lot
         $results = collect();
         foreach ($watchingAuctionLotIDs as $auctionLotID) {
+            $auctionLotID = (string) $auctionLotID;
             $productID = $auctionLotToProductMap[$auctionLotID] ?? null;
-            if (!$productID) continue;
+            if ($productID === null || $productID === '') continue;
 
             $product = $productsMap->get($productID);
             if (!$product) continue;
@@ -167,7 +169,11 @@ class WatchlistItemController extends Controller
 
     private function getProductsInfoByAggregation(array $productIDs): Collection
     {
-        $productIDs = array_values($productIDs);
+        // The pipeline stringifies _id before $match, so $in must be strings too.
+        $productIDs = array_values(array_filter(array_map(
+            fn ($id) => (string) $id,
+            $productIDs
+        )));
 
         // Get Products 
         if (count($productIDs) == 0) return new Collection();
