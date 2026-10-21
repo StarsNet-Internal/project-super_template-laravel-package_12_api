@@ -25,6 +25,7 @@ class LiveSaleController extends Controller
             'open_lot',
             'set_asking_price',
             'set_increment',
+            'set_starting_price',
             'accept_bid',
             'accept_pending',
             'reject_pending',

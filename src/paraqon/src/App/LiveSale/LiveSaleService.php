@@ -42,7 +42,7 @@ class LiveSaleService
                 // An empty catalogue still returns a blank book.
             }
         }
-        return $this->present($book, gmdate('c'), $clerk, $customerId);
+        return $this->withDeadline($this->present($book, gmdate('c'), $clerk, $customerId), $storeId);
     }
 
     /**
@@ -72,7 +72,7 @@ class LiveSaleService
             if ($command === 'start_sale' && $book->status() === 'running') {
                 $at = gmdate('c');
                 $this->publish($storeId, $book, $at);
-                return $this->present($book, $at, $clerk, $customerId);
+                return $this->withDeadline($this->present($book, $at, $clerk, $customerId), $storeId);
             }
 
             $ready = $payload;
@@ -96,8 +96,11 @@ class LiveSaleService
 
             $this->record($storeId, $summary, $actorId);
             $this->markStoreFor($store, $command);
+            if ($command === 'set_starting_price') {
+                $this->writeStartingPrice($summary);
+            }
             $this->publish($storeId, $book, $summary['at']);
-            return $this->present($book, $summary['at'], $clerk, $customerId);
+            return $this->withDeadline($this->present($book, $summary['at'], $clerk, $customerId), $storeId);
         }
 
         abort(409, 'The sale changed. Try again');
@@ -146,6 +149,29 @@ class LiveSaleService
             }
         }
 
+        if ($command === 'sell') {
+            return $this->attachSoldPaddle($storeId, $payload);
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function attachSoldPaddle(string $storeId, array $payload): array
+    {
+        $paddleId = $payload['paddle_id'] ?? null;
+        if ($paddleId === null || $paddleId === '') {
+            return $payload;
+        }
+        $registration = $this->registrationForPaddle($storeId, $paddleId);
+        if ($registration === null) {
+            throw new LiveSaleException('That paddle is not registered for this sale');
+        }
+        $payload['customer_id'] = (string) $registration->requested_by_customer_id;
+        $payload['paddle_id'] = $registration->paddle_id;
         return $payload;
     }
 
@@ -265,6 +291,7 @@ class LiveSaleService
      */
     public function assertAdvanceEditable(string $storeId, string $lotId, ?string $customerId = null): void
     {
+        $this->assertAdvanceOpen($storeId);
         $doc = LiveSaleState::where('store_id', $storeId)->first();
         if ($doc === null) {
             return;
@@ -503,8 +530,8 @@ class LiveSaleService
     {
         $url = env('PARAQON_SOCKET_BASE_URL', 'https://socket.paraqon.starsnet.hk') . '/api/publish';
         $messages = [
-            ['room' => 'live-' . $storeId, 'data' => $book->publicPayload($at)],
-            ['room' => 'live-' . $storeId . '-clerk', 'data' => $book->clerkPayload($at)],
+            ['room' => 'live-' . $storeId, 'data' => $this->withDeadline($book->publicPayload($at), $storeId)],
+            ['room' => 'live-' . $storeId . '-clerk', 'data' => $this->withDeadline($book->clerkPayload($at), $storeId)],
         ];
         foreach ($messages as $message) {
             try {
@@ -531,6 +558,52 @@ class LiveSaleService
                 ]);
             }
         }
+    }
+
+    /**
+     * Advance bids close at the sale's deadline. A live sale with no deadline stays open until the lot opens.
+     */
+    private function assertAdvanceOpen(string $storeId): void
+    {
+        $store = Store::find($storeId);
+        if ($store === null || ($store->auction_type ?? null) !== 'LIVE') {
+            return;
+        }
+        $deadline = $store->advanced_bid_end_datetime ?? null;
+        if (!is_string($deadline) || $deadline === '') {
+            return;
+        }
+        try {
+            if (now()->greaterThan(\Carbon\Carbon::parse($deadline))) {
+                abort(422, 'Advance bids are closed');
+            }
+        } catch (\Carbon\Exceptions\InvalidFormatException $e) {
+            return;
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $summary
+     */
+    private function writeStartingPrice(array $summary): void
+    {
+        $lotId = (string) ($summary['lot_id'] ?? '');
+        if ($lotId === '' || !isset($summary['amount']) || !is_numeric($summary['amount'])) {
+            return;
+        }
+        AuctionLot::where('_id', $lotId)->update(['starting_price' => $summary['amount']]);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function withDeadline(array $payload, string $storeId): array
+    {
+        $store = Store::find($storeId);
+        $deadline = $store->advanced_bid_end_datetime ?? null;
+        $payload['advance_deadline'] = is_string($deadline) && $deadline !== '' ? $deadline : null;
+        return $payload;
     }
 
     /**

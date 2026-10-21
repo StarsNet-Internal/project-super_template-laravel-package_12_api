@@ -146,37 +146,34 @@ $sale->apply('submit_online_bid', [
 ]);
 check($sale->publicPayload('t')['has_pending'] === false, 'an online bid is accepted');
 check($sale->clerkPayload('t')['pending'] === [], 'an accepted online bid is not left waiting');
-check($sale->viewer('online-201')['result'] === 'outbid', 'the book answers and the online bidder is outbid');
+check($sale->viewer('online-201')['result'] === 'with_you', 'an advance is not bid over the online bidder');
 check(containsKey($sale->publicPayload('t'), 'customer_id') === false, 'public payload hides customer ids');
 check(containsKey($sale->publicPayload('t'), 'reserve_price') === false, 'public payload hides the reserve');
-check($sale->publicPayload('t')['asking_price'] === 1000.0, 'the absentee answers one increment above the online bid');
+check(containsKey($sale->publicPayload('t'), 'advances') === false, 'the book stays off the public room');
+check($sale->publicPayload('t')['asking_price'] === 850.0, 'the next ask is the next ladder price');
 check($sale->publicPayload('t')['histories'][0]['paddle_label'] === 'Paddle #201', 'online bid keeps its paddle');
 check($sale->publicPayload('t')['histories'][0]['current_bid'] === 800.0, 'the online bid stays on the ladder');
-check($sale->publicPayload('t')['histories'][1]['paddle_label'] === 'Paddle #55', 'the room sees the absentee paddle');
-check($sale->publicPayload('t')['histories'][1]['current_bid'] === 900.0, 'the book bids one increment');
-check($sale->publicPayload('t')['has_pending'] === false, 'other waiting bids are cleared');
-check(containsKey($sale->publicPayload('t'), 'customer_id') === false, 'the book bid does not publish a customer id');
+check(count($sale->publicPayload('t')['histories']) === 1, 'an advance is not bid for the customer');
 check(containsKey($sale->publicPayload('t'), 'advance') === false, 'the absentee max stays off the public book');
 
 $clerk = $sale->clerkPayload('t');
-check($clerk['undo']['amount'] === 900.0, 'undo names the book bid');
-check($clerk['undo']['paddle_label'] === 'Paddle #55', 'undo names the absentee paddle');
+check($clerk['undo']['amount'] === 800.0, 'undo names the online bid');
+check($clerk['undo']['paddle_label'] === 'Paddle #201', 'undo names the online paddle');
 check($clerk['highest_advanced_bid']['bid'] === 1500.0, 'absentee max stays on the clerk book');
+check($clerk['advances'][0]['paddle_id'] === 55, 'the book lists the advance for the auctioneer');
+check($clerk['advances'][0]['amount'] === 1500.0, 'the book lists the advance amount');
 
 $advanceBefore = $sale->toArray()['lots'][0]['advance'];
 $undoId = $clerk['undo']['bid_id'];
 expect(fn () => $sale->apply('undo_latest_bid', ['bid_id' => 'someone-else', 'at' => 't']), 'no longer the latest');
 $sale->apply('undo_latest_bid', ['bid_id' => $undoId, 'at' => 't4']);
 $after = $sale->clerkPayload('t');
-check($after['undo']['paddle_label'] === 'Paddle #201', 'the previous bid becomes the latest');
-check($after['asking_price'] === 900.0, 'asking returns to the bid that was undone');
-check(count($after['histories']) === 1, 'the book bid leaves the ladder');
+check($after['undo'] === null, 'undo of the only bid leaves nothing to undo');
+check($after['asking_price'] === 800.0, 'asking returns to the opening price');
+check(count($after['histories']) === 0, 'the online bid leaves the ladder');
 check($after['highest_advanced_bid']['bid'] === 1500.0, 'undo does not replay the absentee');
 check($sale->toArray()['lots'][0]['advance'] === $advanceBefore, 'the absentee record is unchanged');
 
-$sale->apply('undo_latest_bid', ['at' => 't5']);
-check($sale->clerkPayload('t')['undo'] === null, 'undo stops when the book is empty');
-check($sale->publicPayload('t')['asking_price'] === 800.0, 'asking returns to the opening price');
 expect(fn () => $sale->apply('undo_latest_bid', ['at' => 't']), 'no bid to undo');
 
 $sale->apply('accept_bid', [
@@ -184,34 +181,41 @@ $sale->apply('accept_bid', [
     'source' => 'house',
     'at' => 't6',
 ]);
-check($sale->clerkPayload('t')['undo']['paddle_label'] === 'Paddle #55', 'a house bid under the max draws the absentee');
-check($sale->clerkPayload('t')['undo']['amount'] === 1000.0, 'the book bids the next increment');
-check($sale->clerkPayload('t')['lots'][0]['reserve_met'] === true, 'the book bid meets the reserve');
-$sale->apply('undo_latest_bid', ['at' => 't6b']);
-check($sale->clerkPayload('t')['undo']['paddle_label'] === 'Floor bid', 'undo of the book bid leaves the house bid');
+check($sale->clerkPayload('t')['undo']['paddle_label'] === 'Absentee bid', 'an absentee bid is not covered by the book');
+check($sale->clerkPayload('t')['undo']['amount'] === 900.0, 'the absentee bid stays at the spoken price');
+check($sale->publicPayload('t')['asking_price'] === 950.0, 'the next ask is the next ladder price');
 check($sale->clerkPayload('t')['lots'][0]['reserve_met'] === false, '900 is under a 1000 reserve');
-check($sale->toArray()['lots'][0]['advance'] === $advanceBefore, 'undo still does not replay the absentee');
+check($sale->toArray()['lots'][0]['advance'] === $advanceBefore, 'an absentee bid does not spend the advance');
 expect(fn () => $sale->apply('sell', ['at' => 't']), 'reserve');
+expect(fn () => $sale->apply('sell', ['paddle_id' => 33, 'customer_id' => 'phone-33', 'at' => 't']), 'reserve');
+$sale->apply('accept_bid', [
+    'amount' => 1200,
+    'source' => 'house',
+    'at' => 't6b',
+]);
+check($sale->clerkPayload('t')['lots'][0]['reserve_met'] === true, 'an absentee bid may go above the reserve');
+$sale->apply('undo_latest_bid', ['at' => 't6c']);
 $sale->apply('accept_bid', [
     'amount' => 1000,
     'source' => 'phone',
-    'paddle_id' => 33,
-    'customer_id' => 'phone-33',
     'at' => 't7',
 ]);
-check($sale->publicPayload('t')['histories'][count($sale->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Paddle #55', 'the phone bid is answered by the absentee');
+check($sale->publicPayload('t')['histories'][count($sale->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Phone', 'a phone bid does not need a paddle');
+expect(fn () => $sale->apply('sell', ['at' => 't']), 'paddle number');
 $sale->apply('warn', ['action' => 'FAIR_WARNING', 'at' => 't8']);
 check($sale->publicPayload('t')['warning'] === 'FAIR_WARNING', 'warning is public');
-$sale->apply('sell', ['at' => 't9']);
+expect(fn () => $sale->apply('warn', ['action' => 'LAST_WARNING', 'at' => 't8b']), 'Unknown warning');
+$sale->apply('sell', ['paddle_id' => 33, 'customer_id' => 'phone-33', 'at' => 't9']);
 expect(fn () => $sale->apply('undo_latest_bid', ['at' => 't']), 'Open the lot');
 check($sale->publicPayload('t')['lots'][0]['is_disabled'] === true, 'sold lot is disabled');
 check($sale->publicPayload('t')['lots'][0]['is_closed'] === false, 'sold is not a pass');
-check($sale->publicPayload('t')['lots'][0]['current_bid'] === 1100.0, 'hammer is the absentee answer');
+check($sale->publicPayload('t')['lots'][0]['current_bid'] === 1000.0, 'hammer is the phone bid');
+check($sale->publicPayload('t')['lots'][0]['hammer_paddle_label'] === 'Paddle #33', 'the paddle is recorded when the lot is sold');
 
 $sale->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't10']);
 $sale->apply('undo_latest_bid', ['at' => 't11']);
-check($sale->clerkPayload('t')['undo']['paddle_label'] === 'Phone #33', 'reopen lets the clerk undo the new latest bid');
-check(count($sale->publicPayload('t')['histories']) === 2, 'undo removes only the book bid');
+check($sale->clerkPayload('t')['undo']['paddle_label'] === 'Absentee bid', 'reopen lets the clerk undo the new latest bid');
+check(count($sale->publicPayload('t')['histories']) === 1, 'undo removes only the latest bid');
 
 expect(fn () => $sale->apply('end_sale', ['at' => 't']), 'on the block');
 $sale->apply('pass', ['at' => 't12']);
@@ -259,15 +263,15 @@ $duelLadder = array_map(
     fn ($row) => [$row['current_bid'], $row['paddle_label']],
     $duel->publicPayload('t')['histories']
 );
-check($duelLadder === [
-    [800.0, 'Paddle #1'],
-    [900.0, 'Paddle #2'],
-    [1000.0, 'Paddle #1'],
-], 'tied absentees open against each other and the earlier bid takes the maximum');
-check($duel->publicPayload('t')['asking_price'] === 1100.0, 'asking moves past the tied maximum');
+check($duelLadder === [], 'opening does not bid the advances against each other');
+check($duel->publicPayload('t')['asking_price'] === 800.0, 'opening stays at the starting price');
 check($duel->clerkPayload('t')['highest_advanced_bid']['paddle_id'] === 1, 'the earlier maximum stays the top absentee');
+check(count($duel->clerkPayload('t')['advances']) === 2, 'the book lists every advance');
+$duel->apply('take_book', ['at' => 't']);
+check($duel->publicPayload('t')['histories'][0]['paddle_label'] === 'Paddle #1', 'the clerk takes one advance from the book');
+check(count($duel->publicPayload('t')['histories']) === 1, 'taking the book places one bid');
 $duel->apply('undo_latest_bid', ['at' => 't']);
-check($duel->publicPayload('t')['histories'][count($duel->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Paddle #2', 'undo of the opening duel does not bid the maximum again');
+check($duel->publicPayload('t')['histories'] === [], 'undo of a taken advance does not bid the book again');
 
 $raceLots = catalogue();
 $raceLots[0]['advances'] = [
@@ -293,14 +297,9 @@ $raceLadder = array_map(
     fn ($row) => [$row['current_bid'], $row['paddle_label']],
     $race->publicPayload('t')['histories']
 );
-check($raceLadder === [
-    [800.0, 'Paddle #11'],
-    [900.0, 'Paddle #12'],
-    [1000.0, 'Paddle #11'],
-    [1100.0, 'Paddle #12'],
-    [1200.0, 'Paddle #11'],
-], 'unequal absentees stop one step above the lower maximum');
-check($race->publicPayload('t')['asking_price'] === 1300.0, 'the higher absentee does not bid against themselves');
+check($raceLadder === [], 'unequal advances are not bid when the lot opens');
+check($race->publicPayload('t')['asking_price'] === 800.0, 'the higher advance does not bid against the lower one');
+check($race->clerkPayload('t')['advances'][0]['paddle_id'] === 11, 'the book lists the higher advance first');
 
 $matchLots = catalogue();
 unset($matchLots[0]['advance']);
@@ -321,9 +320,10 @@ $match->apply('accept_bid', [
     'customer_id' => 'floor-103',
     'at' => 't1',
 ]);
-check($match->publicPayload('t')['histories'][count($match->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Paddle #101', 'an advance still answers one step above a lower bid');
+check($match->publicPayload('t')['histories'][count($match->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Floor bid', 'a floor bid is not answered by an advance');
+check($match->publicPayload('t')['asking_price'] === 850.0, 'the next ask is the next ladder price');
 $match->apply('submit_online_bid', [
-    'amount' => 1000,
+    'amount' => 850,
     'customer_id' => 'online-103',
     'paddle_id' => 103,
     'at' => 't2',
@@ -334,21 +334,18 @@ $matchLadder = array_map(
 );
 check($matchLadder === [
     [800.0, 'Floor bid'],
-    [900.0, 'Paddle #101'],
-    [1000.0, 'Paddle #103'],
-    [1000.0, 'Paddle #101'],
-], 'an outside bid on the advance maximum is taken by that advance');
-check($match->publicPayload('t')['asking_price'] === 1100.0, 'asking moves one step above the tied maximum');
-check($match->viewer('early')['result'] === 'with_you', 'the earlier advance is the leader');
-check($match->viewer('online-103')['result'] === 'outbid', 'the matching outside bid is outbid');
+    [850.0, 'Paddle #103'],
+], 'an online bid is not taken over by an advance');
+check($match->viewer('early')['result'] === null, 'an unused advance is not the leader');
+check($match->viewer('online-103')['result'] === 'with_you', 'the online bid stays with that paddle');
 $match->apply('accept_bid', [
-    'amount' => 1100,
+    'amount' => 2050,
     'source' => 'floor',
-    'paddle_id' => 103,
-    'customer_id' => 'floor-103',
     'at' => 't4',
 ]);
-check($match->publicPayload('t')['histories'][count($match->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Floor bid', 'a bid above the maximum is not covered');
+check($match->publicPayload('t')['histories'][count($match->publicPayload('t')['histories']) - 1]['current_bid'] === 2050.0, 'an off-ladder floor bid is taken at the spoken price');
+check($match->publicPayload('t')['asking_price'] === 2200.0, 'the next ask is the next on-ladder price');
+check($match->publicPayload('t')['histories'][count($match->publicPayload('t')['histories']) - 1]['paddle_label'] === 'Floor bid', 'a floor bid above the book does not need a paddle');
 
 $autoLots = catalogue();
 unset($autoLots[0]['advance']);
@@ -369,10 +366,10 @@ check($auto->clerkPayload('t')['pending'] === [], 'auto accept clears the waitin
 check($auto->viewer('online-a')['result'] === 'with_you', 'an auto-accepted bid is with that customer');
 check($auto->publicPayload('t')['histories'][0]['current_bid'] === 800.0, 'auto accept places the online bid');
 check($auto->publicPayload('t')['histories'][0]['paddle_label'] === 'Paddle #201', 'auto accept keeps the paddle');
-check($auto->publicPayload('t')['asking_price'] === 900.0, 'auto accept raises the asking price');
+check($auto->publicPayload('t')['asking_price'] === 850.0, 'auto accept raises the asking price to the next ladder price');
 $autoAgain = LiveSaleBook::fromArray($auto->toArray());
 $autoAgain->apply('submit_online_bid', [
-    'amount' => 900,
+    'amount' => 850,
     'customer_id' => 'online-b',
     'paddle_id' => 202,
     'at' => 't2',
@@ -381,7 +378,7 @@ check($autoAgain->viewer('online-b')['result'] === 'with_you', 'a reloaded book 
 check($autoAgain->viewer('online-a')['result'] === 'outbid', 'the earlier auto-accepted bidder is outbid');
 $autoAgain->setAutoAcceptOnlineBids(false);
 $autoAgain->apply('submit_online_bid', [
-    'amount' => 1000,
+    'amount' => 900,
     'customer_id' => 'online-c',
     'paddle_id' => 203,
     'at' => 't3',
@@ -482,7 +479,8 @@ $refresh->apply('open_lot', [
     ],
 ]);
 check($refresh->clerkPayload('t')['highest_advanced_bid']['paddle_id'] === 1, 'open replaces the absentee list from before the lot opened');
-check(count($refresh->publicPayload('t')['histories']) === 3, 'the replacement absentees compete when the lot opens');
+check($refresh->publicPayload('t')['histories'] === [], 'opening does not bid the replacement advances');
+check(count($refresh->clerkPayload('t')['advances']) === 2, 'the book lists the advances copied at open');
 
 $preferLots = catalogue();
 $preferLots[0]['reserve_price'] = 0;
@@ -509,7 +507,7 @@ check(count($preferPublic['histories']) === 1, 'taking the book writes one stack
 check($preferPublic['histories'][0]['current_bid'] === 800.0, 'the book bid is the asking price');
 check($preferPublic['histories'][0]['paddle_label'] === 'Paddle #55', 'the room sees the absentee paddle');
 check($preferPublic['histories'][0]['source'] === 'advance', 'the stack row is the absentee');
-check($preferPublic['asking_price'] === 900.0, 'asking moves one increment and the absentee does not bid again');
+check($preferPublic['asking_price'] === 850.0, 'asking moves to the next ladder price and the absentee does not bid again');
 check($preferPublic['has_pending'] === false, 'the waiting online bid is dropped');
 check($prefer->clerkPayload('t')['book_can_take'] === false, 'the leader cannot take the book against themselves');
 check(containsKey($preferPublic, 'customer_id') === false, 'a book take does not publish a customer id');
@@ -537,7 +535,7 @@ $jumped->apply('submit_online_bid', [
 $jumped->apply('take_book', ['at' => 't']);
 check(count($jumped->publicPayload('t')['histories']) === 1, 'a jumped asking price is one book bid');
 check($jumped->publicPayload('t')['histories'][0]['current_bid'] === 1400.0, 'the book takes the jumped asking price');
-check($jumped->publicPayload('t')['asking_price'] === 1500.0, 'the absentee does not walk past the taken price');
+check($jumped->publicPayload('t')['asking_price'] === 1500.0, 'the next ask is the next ladder price and the absentee does not walk further');
 check($jumped->publicPayload('t')['has_pending'] === false, 'the online bid at the jumped price is dropped');
 
 $coverLots = catalogue();
@@ -561,11 +559,11 @@ $coverLadder = array_map(
 );
 check($coverLadder === [
     [800.0, 'floor'],
-    [850.0, 'advance'],
-], 'an advance maximum inside the next increment becomes the current bid');
-check($cover->publicPayload('t')['asking_price'] === 950.0, 'asking moves one increment above that maximum');
-check($cover->viewer('absentee-55')['result'] === 'with_you', 'the advance leads at its maximum');
-check($cover->viewer('floor-2')['result'] === 'outbid', 'the lower floor bid is outbid');
+], 'an advance inside the next rung is not bid for the customer');
+check($cover->publicPayload('t')['asking_price'] === 850.0, 'the next ask is the advance maximum, and the book is not taken');
+check($cover->clerkPayload('t')['book_can_take'] === true, 'the clerk can still choose to take that advance');
+check($cover->viewer('absentee-55')['result'] === null, 'the unused advance is not the leader');
+check($cover->viewer('floor-2')['result'] === 'with_you', 'the floor bid stays in the lead');
 
 $sameLots = catalogue();
 unset($sameLots[0]['advance']);
@@ -705,7 +703,7 @@ check($settlement[1]['customer_id'] === null && $settlement[1]['paddle_id'] === 
 check($settlement[2]['result'] === 'passed' && $settlement[2]['hammer_price'] === null, 'a sold lot that is reopened and undone is not a hammer');
 check($settlement[3]['result'] === 'sold' && $settlement[3]['customer_id'] === null, 'a floor hammer without a customer stays empty');
 check($settlement[3]['paddle_id'] === 7, 'that hammer still names the paddle');
-check($settle->publicPayload('t')['lots'][0]['hammer_paddle_label'] === 'Floor bid', 'the room sees the hammer label');
+check($settle->publicPayload('t')['lots'][0]['hammer_paddle_label'] === 'Paddle #10', 'the room sees the paddle recorded at the hammer');
 check(containsKey($settle->publicPayload('t'), 'settlement') === false, 'the ended public room has no settlement');
 check(containsKey($settle->publicPayload('t'), 'book_can_take') === false, 'the ended public room has no book offer');
 check(count($settle->clerkPayload('t')['settlement']) === 4, 'the clerk reviews the ended settlement');
@@ -754,7 +752,8 @@ $clear->apply('accept_bid', [
     'customer_id' => 'floor-41',
     'at' => 't1',
 ]);
-check($clear->publicPayload('t')['asking_price'] === 1000.0, 'the absentee answers the floor bid before undo all');
+check($clear->publicPayload('t')['asking_price'] === 850.0, 'an advance does not answer the floor bid');
+check(count($clear->publicPayload('t')['histories']) === 1, 'undo all still has one floor bid to clear');
 $advanceBeforeClear = $clear->toArray()['lots'][0]['advance'];
 $clear->apply('warn', ['action' => 'FAIR_WARNING', 'at' => 't2']);
 $beforeUndoAll = $clear->sequence();
@@ -813,7 +812,7 @@ expect(fn () => $drop->apply('accept_bid', [
     'at' => 't3',
 ]), 'out of this sale');
 expect(fn () => $drop->apply('submit_online_bid', [
-    'amount' => 900,
+    'amount' => 850,
     'customer_id' => 'absentee-55',
     'paddle_id' => 55,
     'at' => 't4',
@@ -822,7 +821,7 @@ check($drop->viewer('absentee-55')['result'] === 'out', 'the removed customer is
 check($drop->viewer('floor-70')['result'] === 'with_you', 'another paddle still holds the bid');
 $dropAgain = LiveSaleBook::fromArray($drop->toArray());
 expect(fn () => $dropAgain->apply('submit_online_bid', [
-    'amount' => 900,
+    'amount' => 850,
     'customer_id' => 'absentee-55',
     'paddle_id' => 55,
     'at' => 't5',
@@ -951,7 +950,7 @@ check($return->publicPayload('t')['lots'][0]['live_state'] === 'passed', 'a refu
 $return->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
 $return->apply('open_lot', ['at' => 't']);
 $back = $return->publicPayload('t');
-check($back['asking_price'] === 900.0, 'opening after a warning keeps the asking price');
+check($back['asking_price'] === 850.0, 'opening after a warning keeps the asking price');
 check($back['warning'] === null, 'opening a closed lot clears the warning');
 check($back['lots'][0]['current_bid'] === 800.0 && $back['lots'][0]['live_state'] === 'open', 'opening a closed lot keeps the bid');
 expect(fn () => $return->apply('submit_online_bid', [
@@ -961,17 +960,17 @@ expect(fn () => $return->apply('submit_online_bid', [
     'at' => 't',
 ]), 'asking price');
 $return->apply('submit_online_bid', [
-    'amount' => 900,
+    'amount' => 850,
     'customer_id' => 'online-a',
     'paddle_id' => 201,
     'at' => 't',
 ]);
-check($return->publicPayload('t')['lots'][0]['current_bid'] === 900.0, 'the continued asking price can be bid');
+check($return->publicPayload('t')['lots'][0]['current_bid'] === 850.0, 'the continued asking price can be bid');
 $return->apply('pass', ['at' => 't']);
 $return->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't']);
 $return->apply('open_lot', ['at' => 't']);
 check($return->publicPayload('t')['asking_price'] === 500.0, 'the next lot still opens at its starting price');
-check($return->publicPayload('t')['lots'][0]['current_bid'] === 900.0, 'the closed lot keeps its bid while another lot is open');
+check($return->publicPayload('t')['lots'][0]['current_bid'] === 850.0, 'the closed lot keeps its bid while another lot is open');
 $return->apply('accept_bid', [
     'amount' => 500,
     'source' => 'floor',
@@ -983,8 +982,8 @@ $return->apply('pass', ['at' => 't']);
 $return->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
 $return->apply('open_lot', ['at' => 't']);
 $home = $return->publicPayload('t');
-check($home['current_lot_id'] === 'lot-1' && $home['asking_price'] === 1000.0, 'coming back continues the closed lot');
-check($home['lots'][0]['current_bid'] === 900.0, 'coming back keeps that lot bid');
+check($home['current_lot_id'] === 'lot-1' && $home['asking_price'] === 900.0, 'coming back continues the closed lot');
+check($home['lots'][0]['current_bid'] === 850.0, 'coming back keeps that lot bid');
 check($home['lots'][1]['current_bid'] === 500.0 && $home['lots'][1]['live_state'] === 'passed', 'the lot left behind stays closed at its bid');
 
 $soldLots = catalogue();
@@ -1005,5 +1004,60 @@ $sold->apply('sell', ['at' => 't']);
 expect(fn () => $sold->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']), 'cannot be prepared');
 check($sold->publicPayload('t')['lots'][0]['live_state'] === 'sold', 'prepare does not reopen a sold lot');
 check($sold->publicPayload('t')['lots'][0]['current_bid'] === 800.0, 'a refused prepare leaves the hammer');
+
+
+$steps = book();
+$steps->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't']);
+$steps->apply('open_lot', ['at' => 't', 'advances' => []]);
+check($steps->publicPayload('t')['asking_price'] === 500.0, 'lot 2 opens at its starting price');
+$steps->apply('set_starting_price', ['lot_id' => 'lot-1', 'amount' => 700, 'at' => 't']);
+check($steps->toArray()['lots'][0]['starting_price'] === 700.0, 'the starting price of an upcoming lot can be updated');
+check($steps->toArray()['lots'][0]['asking_price'] === null, 'an upcoming lot keeps a null asking price');
+$steps->apply('set_starting_price', ['amount' => 1000, 'at' => 't']);
+check($steps->publicPayload('t')['asking_price'] === 1000.0, 'updating the opening price moves the ask when no bid has been taken');
+check($steps->toArray()['lots'][1]['opening_asking'] === 1000.0, 'the recorded opening ask follows the new starting price');
+expect(fn () => $steps->apply('set_starting_price', ['amount' => -1, 'at' => 't']), 'zero or more');
+$ladder = [
+    1000 => 1100.0,
+    2000 => 2200.0,
+    2800 => 3000.0,
+    3000 => 3200.0,
+    3200 => 3500.0,
+    3500 => 3800.0,
+    3800 => 4000.0,
+    4000 => 4200.0,
+    4800 => 5000.0,
+    5000 => 5500.0,
+    9500 => 10000.0,
+    80000 => 85000.0,
+    1000000 => 1050000.0,
+    1500000 => 1550000.0,
+    2000000 => 2050000.0,
+];
+foreach ($ladder as $bid => $ask) {
+    $steps->apply('accept_bid', [
+        'amount' => $bid,
+        'source' => 'floor',
+        'at' => 't',
+    ]);
+    check(
+        $steps->publicPayload('t')['asking_price'] === $ask,
+        'a bid of ' . $bid . ' asks ' . $ask . ' got ' . $steps->publicPayload('t')['asking_price']
+    );
+}
+expect(fn () => $steps->apply('sell', ['at' => 't']), 'paddle number');
+$steps->apply('sell', ['paddle_id' => 33, 'customer_id' => 'phone-33', 'at' => 't']);
+check($steps->publicPayload('t')['lots'][1]['hammer_paddle_label'] === 'Paddle #33', 'selling records the paddle');
+expect(fn () => $steps->apply('set_starting_price', ['amount' => 1, 'at' => 't']), 'no longer on the block');
+
+$small = book();
+$small->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't']);
+$small->apply('open_lot', ['at' => 't', 'advances' => []]);
+$small->apply('set_starting_price', ['amount' => 5, 'at' => 't']);
+check($small->publicPayload('t')['asking_price'] === 5.0, 'a starting price below 10 is kept');
+$small->apply('accept_bid', ['amount' => 5, 'source' => 'floor', 'at' => 't']);
+check($small->publicPayload('t')['asking_price'] === 6.0, 'below 10 the ladder steps by 1');
+$small->apply('accept_bid', ['amount' => 9, 'source' => 'floor', 'at' => 't']);
+check($small->publicPayload('t')['asking_price'] === 10.0, 'the step below 10 reaches 10');
 
 echo "ok\n";

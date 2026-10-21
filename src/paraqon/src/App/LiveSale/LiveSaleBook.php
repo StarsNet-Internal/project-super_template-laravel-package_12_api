@@ -129,13 +129,14 @@ class LiveSaleBook
             'open_lot' => $this->openLot($payload, $at),
             'set_asking_price' => $this->setAskingPrice($payload, $at),
             'set_increment' => $this->setIncrement($payload, $at),
+            'set_starting_price' => $this->setStartingPrice($payload, $at),
             'accept_bid' => $this->acceptBid($payload, $at),
             'submit_online_bid' => $this->submitOnlineBid($payload, $at),
             'accept_pending' => $this->acceptPending($payload, $at),
             'reject_pending' => $this->rejectPending($payload, $at),
             'take_book' => $this->takeBook($payload, $at),
             'warn' => $this->warn($payload, $at),
-            'sell' => $this->sell($at),
+            'sell' => $this->sell($payload, $at),
             'pass' => $this->pass($at),
             'undo_latest_bid' => $this->undoLatestBid($payload, $at),
             'undo_all_bids' => $this->undoAllBids($payload, $at),
@@ -386,7 +387,6 @@ class LiveSaleBook
             $opening = $lot['starting_price'];
             $lot['opening_asking'] = $opening;
             $lot['asking_price'] = $opening;
-            $this->answerWithAbsentee($lot, $at, false);
         }
         $this->lots[$lotId] = $lot;
         $this->currentLotId = $lotId;
@@ -431,13 +431,44 @@ class LiveSaleBook
         return ['lot_id' => $lot['lot_id'], 'increment' => $increment];
     }
 
+    /**
+     * The opening figure. A lot that already has a bid keeps that ladder.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function setStartingPrice(array $payload, string $at): array
+    {
+        $this->requireRunning();
+        $lotId = (string) ($payload['lot_id'] ?? $this->currentLotId ?? '');
+        $lot = $this->requireLot($lotId);
+        if (in_array($lot['state'], ['sold', 'passed'], true)) {
+            throw new LiveSaleException('That lot is no longer on the block');
+        }
+        $amount = $this->money($payload['amount'] ?? null);
+        if ($amount < 0) {
+            throw new LiveSaleException('The starting price has to be zero or more');
+        }
+        $previous = (float) $lot['starting_price'];
+        $lot['starting_price'] = $amount;
+        $noBids = ($lot['bids'] ?? []) === [];
+        if ($noBids && $lot['asking_price'] !== null && $this->same((float) $lot['asking_price'], $previous)) {
+            $lot['asking_price'] = $amount;
+        }
+        if ($noBids && $lot['opening_asking'] !== null && $this->same((float) $lot['opening_asking'], $previous)) {
+            $lot['opening_asking'] = $amount;
+        }
+        $this->lots[$lotId] = $lot;
+        return ['lot_id' => $lotId, 'amount' => $amount];
+    }
+
     private function acceptBid(array $payload, string $at): array
     {
         $lot = $this->requireOnTheBlock();
         $amount = $this->money($payload['amount'] ?? null);
         $source = (string) ($payload['source'] ?? '');
         if (!in_array($source, ['floor', 'phone', 'house'], true)) {
-            throw new LiveSaleException('Choose a floor, phone, or house bid');
+            throw new LiveSaleException('Choose a floor, phone, or absentee bid');
         }
         $current = $this->currentBid($lot);
         if ($current !== null && !$this->greater($amount, $current)) {
@@ -446,15 +477,9 @@ class LiveSaleBook
         if ($current === null && $amount < 0) {
             throw new LiveSaleException('The bid has to be above the current bid');
         }
-        if ($source === 'house') {
-            $reserve = (float) $lot['reserve_price'];
-            if ($reserve <= 0 || !$this->greater($reserve, $amount)) {
-                throw new LiveSaleException('A house bid has to stay under the reserve');
-            }
-        }
         $paddleId = $payload['paddle_id'] ?? null;
-        if (in_array($source, ['floor', 'phone'], true) && ($paddleId === null || $paddleId === '')) {
-            throw new LiveSaleException('A floor or phone bid needs a paddle');
+        if ($paddleId === '') {
+            $paddleId = null;
         }
         $bidderId = (string) ($payload['customer_id'] ?? '');
         if ($bidderId !== '' && $this->isRemoved($bidderId)) {
@@ -463,8 +488,8 @@ class LiveSaleBook
         $bid = [
             'id' => $this->newId(),
             'amount' => $amount,
-            'paddle_id' => $paddleId,
-            'customer_id' => $payload['customer_id'] ?? null,
+            'paddle_id' => $source === 'house' ? null : $paddleId,
+            'customer_id' => $source === 'house' ? null : ($payload['customer_id'] ?? null),
             'source' => $source,
             'created_at' => $at,
         ];
@@ -473,7 +498,6 @@ class LiveSaleBook
         $lot['state'] = 'open';
         $lot['warning'] = null;
         $lot['asking_price'] = round($amount + $this->incrementFor($lot, $amount), 2);
-        $this->answerWithAbsentee($lot, $at, true);
         $this->lots[$lot['lot_id']] = $lot;
         return ['lot_id' => $lot['lot_id'], 'bid_id' => $bid['id'], 'amount' => $amount];
     }
@@ -551,7 +575,6 @@ class LiveSaleBook
         $lot['state'] = 'open';
         $lot['warning'] = null;
         $lot['asking_price'] = round($amount + $this->incrementFor($lot, $amount), 2);
-        $this->answerWithAbsentee($lot, $at, true);
         $this->lots[$lot['lot_id']] = $lot;
         return ['lot_id' => $lot['lot_id'], 'bid_id' => $bid['id'], 'amount' => $amount];
     }
@@ -593,6 +616,36 @@ class LiveSaleBook
             'amount' => $amount,
             'preferred_over' => 'online',
         ];
+    }
+
+    /**
+     * Two absentees who share a maximum: the later one can be taken only up to
+     * one step below that figure, so the earlier one can still take the maximum.
+     *
+     * @param array<string, mixed> $advance
+     * @param array<string, mixed> $lot
+     */
+    private function effectiveMax(array $advance, array $lot): float
+    {
+        $amount = (float) $advance['amount'];
+        foreach ($lot['advances'] as $other) {
+            if ((string) ($other['customer_id'] ?? '') === (string) ($advance['customer_id'] ?? '')) {
+                continue;
+            }
+            if (!$this->same((float) $other['amount'], $amount)) {
+                continue;
+            }
+            if (strcmp((string) $other['placed_at'], (string) $advance['placed_at']) < 0) {
+                $step = $this->incrementFor($lot, max(0, $amount - 0.01));
+                if (!$this->greater($step, 0)) {
+                    $step = $this->incrementFor($lot, $amount);
+                }
+                if ($this->greater($step, 0)) {
+                    return round($amount - $step, 2);
+                }
+            }
+        }
+        return $amount;
     }
 
     /**
@@ -693,7 +746,7 @@ class LiveSaleBook
     {
         $lot = $this->requireOnTheBlock();
         $action = (string) ($payload['action'] ?? '');
-        if (!in_array($action, ['FAIR_WARNING', 'LAST_WARNING', 'LAST_CHANCE'], true)) {
+        if (!in_array($action, ['FAIR_WARNING', 'LAST_CHANCE'], true)) {
             throw new LiveSaleException('Unknown warning');
         }
         if ($lot['state'] === 'fair_warning' || $lot['state'] === 'open') {
@@ -706,7 +759,14 @@ class LiveSaleBook
         throw new LiveSaleException('Open the lot before giving a warning');
     }
 
-    private function sell(string $at): array
+    /**
+     * The paddle is recorded here. A bid that already names a paddle keeps it
+     * unless the clerk sends a different one.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function sell(array $payload, string $at): array
     {
         $lot = $this->requireOnTheBlock();
         $latest = $this->latestBid($lot);
@@ -717,14 +777,36 @@ class LiveSaleBook
         if ($reserve > 0 && $this->greater($reserve, (float) $latest['amount'])) {
             throw new LiveSaleException('The reserve has not been met');
         }
+        $paddleId = $payload['paddle_id'] ?? null;
+        if ($paddleId === '') {
+            $paddleId = null;
+        }
+        $customerId = $payload['customer_id'] ?? null;
+        if ($customerId === '') {
+            $customerId = null;
+        }
+        if ($paddleId === null) {
+            $paddleId = $latest['paddle_id'] ?? null;
+            $customerId = $latest['customer_id'] ?? null;
+        }
+        if ($paddleId === null || $paddleId === '') {
+            throw new LiveSaleException('Enter the paddle number to sell the lot');
+        }
+        $index = count($lot['bids']) - 1;
+        $lot['bids'][$index]['paddle_id'] = $paddleId;
+        if ($customerId !== null) {
+            $lot['bids'][$index]['customer_id'] = $customerId;
+        } else {
+            $customerId = $lot['bids'][$index]['customer_id'] ?? null;
+        }
         $lot['state'] = 'sold';
         $lot['warning'] = null;
         $lot['pending'] = [];
         $lot['hammer_price'] = $latest['amount'];
-        $lot['hammer_paddle_id'] = $latest['paddle_id'];
-        $lot['hammer_customer_id'] = $latest['customer_id'];
+        $lot['hammer_paddle_id'] = $paddleId;
+        $lot['hammer_customer_id'] = $customerId;
         $this->lots[$lot['lot_id']] = $lot;
-        return ['lot_id' => $lot['lot_id'], 'amount' => $latest['amount']];
+        return ['lot_id' => $lot['lot_id'], 'amount' => $latest['amount'], 'paddle_id' => $paddleId];
     }
 
     private function pass(string $at): array
@@ -917,12 +999,16 @@ class LiveSaleBook
                 'live_state' => $lot['state'],
             ];
             if ($lot['state'] === 'sold' && $latest) {
-                $row['hammer_paddle_label'] = $this->paddleLabel($latest);
+                $paddle = $lot['hammer_paddle_id'] ?? ($latest['paddle_id'] ?? null);
+                $row['hammer_paddle_label'] = $paddle
+                    ? 'Paddle #' . $paddle
+                    : $this->paddleLabel($latest);
             }
             if ($clerk) {
                 $row['reserve_price'] = $lot['reserve_price'];
                 $row['reserve_met'] = $this->reserveMet($lot);
                 $row['advance'] = $lot['advance'];
+                $row['advances'] = $this->bookLines($lot);
                 $row['hammer_customer_id'] = $lot['hammer_customer_id'];
             }
             $publicLots[] = $row;
@@ -993,6 +1079,7 @@ class LiveSaleBook
             'events' => $events,
             'asking_price' => $current['asking_price'] ?? null,
             'increment' => $current ? $this->incrementFor($current, (float) ($latest['amount'] ?? $current['starting_price'])) : null,
+            'increment_override' => $current['increment_override'] ?? null,
             'has_pending' => $current ? count($current['pending']) > 0 : false,
             'warning' => $current['warning'] ?? null,
             'highest_advanced_bid' => null,
@@ -1029,8 +1116,35 @@ class LiveSaleBook
                     'paddle_id' => $visibleAdvance['paddle_id'] ?? null,
                 ];
             }
+            $body['advances'] = $current ? $this->bookLines($current) : [];
         }
         return $body;
+    }
+
+    /**
+     * Advance bids for the auctioneer's book. Removed paddles are left out.
+     * The amounts stay off the public payload.
+     *
+     * @param array<string, mixed> $lot
+     * @return array<int, array{paddle_id: mixed, amount: mixed, customer_id: mixed}>
+     */
+    private function bookLines(array $lot): array
+    {
+        $lines = [];
+        foreach ($lot['advances'] ?? [] as $advance) {
+            if (!is_array($advance)) {
+                continue;
+            }
+            if ($this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
+                continue;
+            }
+            $lines[] = [
+                'paddle_id' => $advance['paddle_id'] ?? null,
+                'amount' => $advance['amount'] ?? null,
+                'customer_id' => $advance['customer_id'] ?? null,
+            ];
+        }
+        return $lines;
     }
 
     /**
@@ -1057,6 +1171,7 @@ class LiveSaleBook
         return match ($bid['source'] ?? '') {
             'phone' => $paddle ? 'Phone #' . $paddle : 'Phone',
             'online', 'advance' => $paddle ? 'Paddle #' . $paddle : 'Online',
+            'house' => 'Absentee bid',
             default => 'Floor bid',
         };
     }
@@ -1069,15 +1184,75 @@ class LiveSaleBook
         if ($lot['increment_override'] !== null) {
             return (float) $lot['increment_override'];
         }
-        foreach ($lot['bid_incremental_settings']['increments'] as $rule) {
-            $rule = (array) $rule;
-            $from = (float) ($rule['from'] ?? 0);
-            $to = (float) ($rule['to'] ?? 0);
-            if ($price >= $from && $price < $to) {
-                return (float) ($rule['increment'] ?? 0);
+        $next = $this->nextLadderPrice($price);
+        $step = round($next - $price, 2);
+        return $step > 0 ? $step : 0.0;
+    }
+
+    /**
+     * The next shared-ladder rung strictly above $price.
+     * Leading 1 steps by one unit, leading 2 by two units, leading 3 and 4
+     * land on 0, 2, 5 and 8, and leading 5 to 9 step by five units.
+     * The unit is 10^(digits-2). Below 10 the step is 1.
+     * From 1,000,000 the rung stays on a 50,000 grid, the same step the
+     * shared timed-auction table keeps through seven-digit prices.
+     */
+    private function nextLadderPrice(float $price): float
+    {
+        if ($price >= 1000000) {
+            $step = 50000;
+            $next = floor($price / $step) * $step + $step;
+            if ($next <= $price) {
+                $next += $step;
+            }
+            return (float) $next;
+        }
+        if ($price < 10) {
+            $next = floor($price) + 1;
+            if ($next <= $price) {
+                $next += 1;
+            }
+            return (float) $next;
+        }
+        $digits = strlen((string) (int) floor($price));
+        $magnitude = 10 ** max(1, $digits - 1);
+        for ($guard = 0; $guard < 12; $guard++) {
+            foreach ($this->ladderRungs((int) $magnitude) as $rung) {
+                if ($rung > $price + 0.001) {
+                    return (float) $rung;
+                }
+            }
+            $magnitude *= 10;
+        }
+        return round($price + $magnitude, 2);
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function ladderRungs(int $magnitude): array
+    {
+        $unit = intdiv($magnitude, 10);
+        if ($unit < 1) {
+            $unit = 1;
+        }
+        $rungs = [];
+        for ($i = 0; $i < 10; $i++) {
+            $rungs[] = $magnitude + $i * $unit;
+        }
+        for ($i = 0; $i < 5; $i++) {
+            $rungs[] = 2 * $magnitude + (2 * $i) * $unit;
+        }
+        foreach ([3, 4] as $lead) {
+            foreach ([0, 2, 5, 8] as $step) {
+                $rungs[] = $lead * $magnitude + $step * $unit;
             }
         }
-        return 0.0;
+        for ($lead = 5; $lead <= 9; $lead++) {
+            $rungs[] = $lead * $magnitude;
+            $rungs[] = $lead * $magnitude + 5 * $unit;
+        }
+        return $rungs;
     }
 
     /**
@@ -1289,307 +1464,6 @@ class LiveSaleBook
         ];
     }
 
-    /**
-     * Absentees bid one increment at a time, up to their max.
-     * On open they compete only with each other. A bid from the room draws one
-     * answer, and any other absentee who can still bid then answers that.
-     * When an outside bid is left on top, the timed current-bid cases decide
-     * whether an absentee takes that price. Undo does not call this, so a
-     * withdrawn book bid is not placed again.
-     *
-     * @param array<string, mixed> $lot
-     */
-    private function answerWithAbsentee(array &$lot, string $at, bool $outsideBid): void
-    {
-        for ($guard = 0; $guard < 500; $guard++) {
-            $candidates = $this->absenteeCandidates($lot);
-            if ($candidates === []) {
-                $this->coverTiedAbsentee($lot, $at);
-                $this->coverFromTimedCalculation($lot, $at);
-                return;
-            }
-            if (!$outsideBid && $guard === 0 && count($candidates) < 2) {
-                return;
-            }
-            $this->placeAbsenteeBid($lot, $candidates[0], $at);
-            $outsideBid = true;
-        }
-    }
-
-    /**
-     * @param array<string, mixed> $lot
-     * @return array<int, array<string, mixed>>
-     */
-    private function absenteeCandidates(array $lot): array
-    {
-        $next = $this->nextAbsenteeAmount($lot);
-        if ($next === null) {
-            return [];
-        }
-        $leader = $this->latestBid($lot);
-        $leaderId = $leader ? (string) ($leader['customer_id'] ?? '') : '';
-        $candidates = [];
-        foreach ($lot['advances'] as $advance) {
-            if ($this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
-                continue;
-            }
-            if ($leaderId !== '' && (string) ($advance['customer_id'] ?? '') === $leaderId) {
-                continue;
-            }
-            if ($this->greater($next, $this->effectiveMax($advance, $lot))) {
-                continue;
-            }
-            $candidates[] = $advance;
-        }
-        usort($candidates, function (array $a, array $b) use ($lot): int {
-            $left = $this->effectiveMax($a, $lot);
-            $right = $this->effectiveMax($b, $lot);
-            if (!$this->same($left, $right)) {
-                return $left < $right ? 1 : -1;
-            }
-            return strcmp((string) $a['placed_at'], (string) $b['placed_at']);
-        });
-        return $candidates;
-    }
-
-    /**
-     * @param array<string, mixed> $lot
-     */
-    private function nextAbsenteeAmount(array $lot): ?float
-    {
-        $current = $this->currentBid($lot);
-        if ($current === null) {
-            return (float) $lot['asking_price'];
-        }
-        $step = $this->incrementFor($lot, $current);
-        if (!$this->greater($step, 0)) {
-            return null;
-        }
-        return round($current + $step, 2);
-    }
-
-    /**
-     * A later absentee does not take an amount that an earlier absentee
-     * bid at the same maximum. Their ceiling is one increment lower.
-     *
-     * @param array<string, mixed> $advance
-     * @param array<string, mixed> $lot
-     */
-    private function effectiveMax(array $advance, array $lot): float
-    {
-        $amount = (float) $advance['amount'];
-        foreach ($lot['advances'] as $other) {
-            if ((string) ($other['customer_id'] ?? '') === (string) ($advance['customer_id'] ?? '')) {
-                continue;
-            }
-            if (!$this->same((float) $other['amount'], $amount)) {
-                continue;
-            }
-            if (strcmp((string) $other['placed_at'], (string) $advance['placed_at']) < 0) {
-                $step = $this->incrementFor($lot, max(0, $amount - 0.01));
-                if (!$this->greater($step, 0)) {
-                    $step = $this->incrementFor($lot, $amount);
-                }
-                if ($this->greater($step, 0)) {
-                    return round($amount - $step, 2);
-                }
-            }
-        }
-        return $amount;
-    }
-
-    /**
-     * @param array<string, mixed> $lot
-     * @param array<string, mixed> $advance
-     */
-    private function placeAbsenteeBid(array &$lot, array $advance, string $at, ?float $amount = null): void
-    {
-        if ($this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
-            return;
-        }
-        if ($amount === null) {
-            $amount = $this->nextAbsenteeAmount($lot);
-        }
-        if ($amount === null || $this->greater($amount, $this->effectiveMax($advance, $lot))) {
-            return;
-        }
-        $bid = [
-            'id' => $this->newId(),
-            'amount' => $amount,
-            'paddle_id' => $advance['paddle_id'],
-            'customer_id' => $advance['customer_id'],
-            'source' => 'advance',
-            'created_at' => $at,
-        ];
-        $lot['bids'][] = $bid;
-        $lot['pending'] = [];
-        $lot['state'] = 'open';
-        $lot['warning'] = null;
-        $step = $this->incrementFor($lot, (float) $amount);
-        $lot['asking_price'] = $this->greater($step, 0) ? round((float) $amount + $step, 2) : (float) $amount;
-    }
-
-    /**
-     * When two absentees share a maximum, the earlier one may take that figure
-     * after the later one has bid the step below it. A higher maximum does not
-     * bid against itself once the other absentee is finished.
-     *
-     * @param array<string, mixed> $lot
-     */
-    private function coverTiedAbsentee(array &$lot, string $at): void
-    {
-        $leader = $this->latestBid($lot);
-        if ($leader === null || ($leader['source'] ?? '') !== 'advance') {
-            return;
-        }
-        $previous = $lot['bids'][count($lot['bids']) - 2] ?? null;
-        if (!is_array($previous) || ($previous['source'] ?? '') !== 'advance') {
-            return;
-        }
-        if ((string) ($previous['customer_id'] ?? '') === (string) ($leader['customer_id'] ?? '')) {
-            return;
-        }
-        $advance = null;
-        foreach ($lot['advances'] as $row) {
-            if ((string) ($row['customer_id'] ?? '') === (string) ($leader['customer_id'] ?? '')) {
-                $advance = $row;
-                break;
-            }
-        }
-        if ($advance === null || $this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
-            return;
-        }
-        $sharesMaximumWithLaterBidder = false;
-        foreach ($lot['advances'] as $other) {
-            if ((string) ($other['customer_id'] ?? '') === (string) ($advance['customer_id'] ?? '')) {
-                continue;
-            }
-            if (!$this->same((float) $other['amount'], (float) $advance['amount'])) {
-                continue;
-            }
-            if (strcmp((string) $advance['placed_at'], (string) $other['placed_at']) < 0) {
-                $sharesMaximumWithLaterBidder = true;
-                break;
-            }
-        }
-        if (!$sharesMaximumWithLaterBidder) {
-            return;
-        }
-        $next = $this->nextAbsenteeAmount($lot);
-        if ($next === null || $this->greater($next, (float) $advance['amount'])) {
-            return;
-        }
-        $this->placeAbsenteeBid($lot, $advance, $at);
-    }
-
-    /**
-     * Price and winner follow CurrentBidCalculation, the same cases timed
-     * auctions use. getCurrentBidPrice is not called: it creates a bid history.
-     * An absentee takes that price when it is the amount just bid, or a maximum
-     * that falls between that bid and the next increment.
-     *
-     * @param array<string, mixed> $lot
-     */
-    private function coverFromTimedCalculation(array &$lot, string $at): void
-    {
-        $leader = $this->latestBid($lot);
-        if ($leader === null || ($leader['source'] ?? '') === 'advance') {
-            return;
-        }
-        $rows = $this->timedBidRows($lot);
-        $hasDirect = false;
-        foreach ($rows as $row) {
-            if (($row['type'] ?? '') === 'DIRECT') {
-                $hasDirect = true;
-                break;
-            }
-        }
-        if (!$hasDirect) {
-            return;
-        }
-        $previous = $lot['bids'][count($lot['bids']) - 2] ?? null;
-        $lastHistory = null;
-        if (is_array($previous)) {
-            $lastHistory = [
-                'winning_bid_customer_id' => $previous['customer_id'] ?? null,
-                'current_bid' => (float) $previous['amount'],
-            ];
-        }
-        $settings = $lot['bid_incremental_settings'] ?? null;
-        $increments = is_array($settings) ? ($settings['increments'] ?? null) : null;
-        $price = CurrentBidCalculation::price(
-            $rows,
-            (float) $lot['starting_price'],
-            (float) ($lot['reserve_price'] ?? 0),
-            $increments,
-            $leader['customer_id'] ?? null,
-            (float) $leader['amount'],
-            'DIRECT',
-            $lastHistory
-        );
-        $winnerId = CurrentBidCalculation::winnerId($rows);
-        if ($winnerId === null || (string) $winnerId === '') {
-            return;
-        }
-        $winnerId = (string) $winnerId;
-        if ($this->isRemoved($winnerId) || (string) ($leader['customer_id'] ?? '') === $winnerId) {
-            return;
-        }
-        $advance = null;
-        foreach ($lot['advances'] as $row) {
-            if ((string) ($row['customer_id'] ?? '') === $winnerId) {
-                $advance = $row;
-                break;
-            }
-        }
-        if ($advance === null) {
-            return;
-        }
-        $current = (float) $leader['amount'];
-        if ($this->greater($current, $price)) {
-            return;
-        }
-        $step = $this->incrementFor($lot, $current);
-        $nextAsk = $this->greater($step, 0) ? round($current + $step, 2) : $current;
-        if ($this->greater($price, $nextAsk)) {
-            return;
-        }
-        $this->placeAbsenteeBid($lot, $advance, $at, $price);
-    }
-
-    /**
-     * Advances are maximum bids. Floor, phone, house, and online bids are direct.
-     *
-     * @param array<string, mixed> $lot
-     * @return array<int, array{customer_id: mixed, bid: float, type: string, created_at: string}>
-     */
-    private function timedBidRows(array $lot): array
-    {
-        $rows = [];
-        foreach ($lot['advances'] as $advance) {
-            if ($this->isRemoved((string) ($advance['customer_id'] ?? ''))) {
-                continue;
-            }
-            $rows[] = [
-                'customer_id' => $advance['customer_id'],
-                'bid' => (float) $advance['amount'],
-                'type' => 'ADVANCED',
-                'created_at' => (string) ($advance['placed_at'] ?? ''),
-            ];
-        }
-        foreach ($lot['bids'] as $bid) {
-            if (($bid['source'] ?? '') === 'advance') {
-                continue;
-            }
-            $rows[] = [
-                'customer_id' => $bid['customer_id'] ?? null,
-                'bid' => (float) $bid['amount'],
-                'type' => 'DIRECT',
-                'created_at' => (string) ($bid['created_at'] ?? ''),
-            ];
-        }
-        return $rows;
-    }
 
     private static function plain(mixed $value): mixed
     {
