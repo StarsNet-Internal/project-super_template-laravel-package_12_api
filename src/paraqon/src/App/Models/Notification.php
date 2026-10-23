@@ -47,6 +47,7 @@ class Notification extends Model
     protected $casts = [
         'is_read' => 'boolean',
         'sent_at' => 'datetime',
+        'admin_archived_at' => 'datetime',
         'admin_deleted_at' => 'datetime',
     ];
 

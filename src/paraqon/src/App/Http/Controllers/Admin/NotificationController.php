@@ -87,7 +87,9 @@ class NotificationController extends Controller
 
     public function getSentMessages(Request $request): Collection
     {
+        $request->validate(['archive_status' => 'sometimes|in:all,archived']);
         $query = Notification::where('kind', 'direct')->where('type', 'customer')->whereNull('admin_deleted_at');
+        if ($request->input('archive_status') === 'archived') $query->whereNotNull('admin_archived_at');
 
         return $query->orderBy('sent_at', 'desc')->get()->groupBy('batch_id')->map(function ($rows, $batchId) {
             $first = $rows->first();
@@ -96,17 +98,22 @@ class NotificationController extends Controller
                 'recipient_type' => $first->recipient_type ?? 'selected',
                 'customer_ids' => $rows->pluck('customer_id')->unique()->values(),
                 'sent_by' => $first->sent_by, 'sent_by_name' => $first->sent_by_name,
-                'sent_at' => $first->sent_at,
+                'sent_at' => $first->sent_at, 'admin_archived_at' => $first->admin_archived_at,
             ];
         })->values();
     }
 
     public function manageSentMessage(Request $request): array
     {
-        $request->validate(['action' => 'required|in:delete']);
+        $data = $request->validate(['action' => 'required|in:archive,restore,delete']);
         $query = Notification::where('kind', 'direct')->where('type', 'customer')
             ->where('batch_id', $request->route('batch_id'))->whereNull('admin_deleted_at');
         abort_unless((clone $query)->exists(), 404, 'Message not found');
+        if ($data['action'] !== 'delete') {
+            // Archiving only organizes admin history; customer visibility and read state stay unchanged.
+            $query->update(['admin_archived_at' => $data['action'] === 'archive' ? now() : null]);
+            return ['message' => $data['action'] === 'archive' ? 'Message archived successfully' : 'Message restored successfully'];
+        }
         $deletedAt = now();
         // Delete the whole send batch from admin history and every recipient's inbox.
         $query->update([
