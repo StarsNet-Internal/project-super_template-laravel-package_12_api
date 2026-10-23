@@ -10,6 +10,8 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 use App\Models\Customer;
+use App\Models\CustomerGroup;
+use App\Enums\LoginType;
 
 // Enums
 use App\Enums\Status;
@@ -19,17 +21,13 @@ use Starsnet\Project\Paraqon\App\Models\Notification;
 
 class NotificationController extends Controller
 {
-    private function requireStaff(): void
-    {
-        abort_unless($this->user()->is_staff && $this->account(), 403, 'Staff access required');
-    }
-
     public function sendMessage(Request $request): array
     {
-        $this->requireStaff();
+        $request->mergeIfMissing(['recipient_type' => 'selected']);
         $data = $request->validate([
-            'customer_ids' => 'required|array|min:1|max:100',
-            'customer_ids.*' => 'required|string|distinct|regex:/^[a-fA-F0-9]{24}$/',
+            'recipient_type' => 'required|in:selected,all,vault_seller,vault_buyer_vip',
+            'customer_ids' => 'exclude_unless:recipient_type,selected|required|array|min:1',
+            'customer_ids.*' => 'exclude_unless:recipient_type,selected|required|string|distinct|regex:/^[a-fA-F0-9]{24}$/',
             'subject' => 'required|array:en,zh,cn',
             'subject.en' => 'required|string|max:300',
             'subject.zh' => 'nullable|string|max:300',
@@ -39,28 +37,49 @@ class NotificationController extends Controller
             'description.zh' => 'nullable|string|max:20000',
             'description.cn' => 'nullable|string|max:20000',
         ]);
-        $customers = Customer::with('account.user')->whereIn('_id', $data['customer_ids'])->get();
-        abort_unless($customers->count() === count($data['customer_ids']), 422, 'Some customers do not exist');
-        foreach ($customers as $customer) {
-            abort_unless($customer->account && $customer->account->user &&
-                !$customer->account->user->is_deleted, 422, 'A recipient account is unavailable');
+        // Match the existing customer picker: registered, non-deleted customer accounts.
+        $query = Customer::with('account.user')->whereHas('account', function ($account) {
+            $account->whereHas('user', function ($user) {
+                $user->where('type', '!=', LoginType::TEMP->value)->where('is_deleted', false);
+            });
+        });
+        if ($data['recipient_type'] === 'selected') {
+            $query->whereIn('_id', $data['customer_ids']);
+        } elseif ($data['recipient_type'] !== 'all') {
+            $slugs = ['vault_seller' => 'the-vault-seller-basic', 'vault_buyer_vip' => 'the-vault-buyer-vip'];
+            $groupIds = CustomerGroup::where('slug', $slugs[$data['recipient_type']])
+                ->where('item_type', 'Customer')->statusActive()->get()->pluck('_id')->all();
+            abort_if(!$groupIds, 422, 'The selected customer group is unavailable');
+            $query->whereIn('customer_group_ids', $groupIds);
         }
+        $customers = $query->get();
+        if ($data['recipient_type'] === 'selected') {
+            abort_unless($customers->count() === count($data['customer_ids']), 422, 'Some recipient accounts are unavailable');
+        }
+        $customers = $customers->unique(fn ($customer) => (string) $customer->account->_id)->values();
+        abort_if($customers->isEmpty(), 422, 'There are no eligible customers in this recipient selection');
         $batchId = (string) Str::uuid();
         $staff = $this->account();
+        abort_unless($staff, 401, 'A logged-in account is required');
         $sentAt = now();
         DB::connection('mongodb')->transaction(function () use ($customers, $data, $batchId, $staff, $sentAt) {
-            foreach ($customers as $customer) {
-                Notification::create([
-                    'type' => 'customer', 'kind' => 'direct',
-                    'account_id' => (string) $customer->account->_id,
-                    'customer_id' => (string) $customer->_id,
-                    'batch_id' => $batchId,
-                    // Each manual message has its own object key for existing badge deduplication.
-                    'document_id' => $batchId, 'path' => 'contact',
-                    'subject' => $data['subject'], 'description' => $data['description'],
-                    'sent_by' => (string) $staff->_id, 'sent_by_name' => $staff->username,
-                    'sent_at' => $sentAt, 'is_read' => false, 'status' => Status::ACTIVE->value,
-                ]);
+            foreach ($customers->chunk(500) as $chunk) {
+                $documents = $chunk->map(function ($customer) use ($data, $batchId, $staff, $sentAt) {
+                    return (new Notification([
+                        'type' => 'customer', 'kind' => 'direct',
+                        'recipient_type' => $data['recipient_type'],
+                        'account_id' => (string) $customer->account->_id,
+                        'customer_id' => (string) $customer->_id,
+                        'batch_id' => $batchId,
+                        // Each manual message has its own object key for existing badge deduplication.
+                        'document_id' => $batchId, 'path' => 'contact',
+                        'subject' => $data['subject'], 'description' => $data['description'],
+                        'sent_by' => (string) $staff->_id, 'sent_by_name' => $staff->username,
+                        'sent_at' => $sentAt, 'is_read' => false, 'status' => Status::ACTIVE->value,
+                        'created_at' => $sentAt, 'updated_at' => $sentAt,
+                    ]))->getAttributes();
+                })->values()->all();
+                Notification::insert($documents);
             }
         });
         return ['message' => 'Message sent successfully', 'batch_id' => $batchId, 'recipient_count' => $customers->count()];
@@ -68,7 +87,6 @@ class NotificationController extends Controller
 
     public function getSentMessages(Request $request): Collection
     {
-        $this->requireStaff();
         $request->validate(['archived' => 'sometimes|in:true,false,1,0']);
         $query = Notification::where('kind', 'direct')->where('type', 'customer')->whereNull('admin_deleted_at');
         if ($request->boolean('archived')) $query->whereNotNull('admin_archived_at');
@@ -78,6 +96,7 @@ class NotificationController extends Controller
             $first = $rows->first();
             return [
                 '_id' => $batchId, 'subject' => $first->subject, 'description' => $first->description,
+                'recipient_type' => $first->recipient_type ?? 'selected',
                 'customer_ids' => $rows->pluck('customer_id')->unique()->values(),
                 'sent_by' => $first->sent_by, 'sent_by_name' => $first->sent_by_name,
                 'sent_at' => $first->sent_at, 'admin_archived_at' => $first->admin_archived_at,
@@ -87,7 +106,6 @@ class NotificationController extends Controller
 
     public function manageSentMessage(Request $request): array
     {
-        $this->requireStaff();
         $data = $request->validate(['action' => 'required|in:archive,restore,delete']);
         $query = Notification::where('kind', 'direct')->where('type', 'customer')
             ->where('batch_id', $request->route('batch_id'))->whereNull('admin_deleted_at');
@@ -100,7 +118,6 @@ class NotificationController extends Controller
 
     public function createNotification(Request $request): array
     {
-        $this->requireStaff();
         abort_if($request->input('kind') === 'direct', 422, 'Use the message send endpoint');
         // Exclude pagination/sorting params before filtering
         $notification = Notification::create($request->all());
