@@ -422,7 +422,7 @@ class AuthenticationController extends Controller
 
         // Get Unread Message Count
         $account = $this->account();
-        $user->unread_notification_count = Notification::where('account_id', $account->_id)
+        $user->unread_notification_count = Notification::visibleToAccount((string) $account->_id)
             ->where('is_read', false)
             ->count();
 

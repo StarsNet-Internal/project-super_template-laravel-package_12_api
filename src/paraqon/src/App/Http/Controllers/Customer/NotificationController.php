@@ -6,7 +6,6 @@ namespace Starsnet\Project\Paraqon\App\Http\Controllers\Customer;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Arr;
 
 // Enums
 use App\Enums\Status;
@@ -18,23 +17,30 @@ class NotificationController extends Controller
 {
     public function getAllNotifications(Request $request): Collection
     {
-        // Exclude pagination/sorting params before filtering
-        $filterParams = Arr::except($request->query(), ['per_page', 'page', 'sort_by', 'sort_order']);
+        $request->validate([
+            'kind' => 'sometimes|in:system,direct',
+            'is_read' => 'sometimes|in:true,false,1,0',
+            'path' => 'sometimes|string|max:200',
+        ]);
+        $query = Notification::visibleToAccount((string) $this->account()->_id);
+        if ($request->has('is_read')) $query->where('is_read', $request->boolean('is_read'));
+        if ($request->filled('kind')) $query->ofKind($request->input('kind'));
+        if ($request->filled('path')) $query->where('path', $request->input('path'));
 
-        $query = Notification::where('account_id', $this->account()->id)
-            ->where('status', '!=', Status::DELETED->value);
-
-        foreach ($filterParams as $key => $value) {
-            $query->where($key, filter_var($value, FILTER_VALIDATE_BOOLEAN));
-        }
-
-        return $query->get();
+        // Do not expose staff identity or other recipients to the customer.
+        return $query->orderBy('created_at', 'desc')->get()->map(function ($notification) {
+            return array_merge($notification->only([
+                '_id', 'subject', 'description', 'category', 'collection', 'document_id',
+                'path', 'is_read', 'created_at', 'updated_at',
+            ]), ['kind' => $notification->kind ?? 'system']);
+        });
     }
 
     public function markNotificationsAsRead(Request $request): array
     {
         $account = $this->account();
-        $query = Notification::where('account_id', $account->_id)
+        $request->validate(['id' => 'sometimes|string|regex:/^[a-fA-F0-9]{24}$/', 'path' => 'sometimes|string|max:200']);
+        $query = Notification::visibleToAccount((string) $account->_id)
             ->where('is_read', false);
 
         if ($request->filled('id')) {
@@ -48,7 +54,7 @@ class NotificationController extends Controller
         $readNotificationIDs = $query->pluck('id')->all();
         $updatedCount = $query->update(['is_read' => true]);
 
-        $unreadNotificationCount = Notification::where('account_id', $account->id)
+        $unreadNotificationCount = Notification::visibleToAccount((string) $account->_id)
             ->where('is_read', false)
             ->count();
 
@@ -74,12 +80,12 @@ class NotificationController extends Controller
 
         // Delete Notification
         $updatedCount = $notification->update([
-            'status' => Status::ACTIVE->value,
+            'status' => Status::DELETED->value,
             'deleted_at' => now()
         ]);
 
         // Get Notifications unread count
-        $unreadNotificationCount = Notification::where('account_id', $account->_id)
+        $unreadNotificationCount = Notification::visibleToAccount((string) $account->_id)
             ->where('is_read', false)
             ->count();
 

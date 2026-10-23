@@ -5,6 +5,8 @@ namespace Starsnet\Project\Paraqon\App\Models;
 // Default
 use MongoDB\Laravel\Eloquent\Model;
 use MongoDB\Laravel\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Builder;
+use App\Enums\Status;
 
 // Traits
 use App\Models\Traits\ObjectIDTrait;
@@ -31,6 +33,8 @@ class Notification extends Model
         'account_id' => null,
         'path' => null,
         'subject' => null,
+        'description' => null,
+        'kind' => 'system',
         // Booleans
         'is_read' => false,
         // Timestamps
@@ -40,6 +44,27 @@ class Notification extends Model
     protected $guarded = [];
     protected $appends = ['_id'];
     protected $hidden = ['id'];
+    protected $casts = [
+        'is_read' => 'boolean',
+        'sent_at' => 'datetime',
+        'admin_archived_at' => 'datetime',
+        'admin_deleted_at' => 'datetime',
+    ];
+
+    public function scopeVisibleToAccount(Builder $query, string $accountId): Builder
+    {
+        return $query->where('account_id', $accountId)
+            ->where('status', '!=', Status::DELETED->value)
+            ->whereNull('deleted_at');
+    }
+
+    public function scopeOfKind(Builder $query, string $kind): Builder
+    {
+        // Legacy records have no kind and are automated system notifications.
+        return $kind === 'direct'
+            ? $query->where('kind', 'direct')
+            : $query->where('kind', '!=', 'direct');
+    }
 
     // -----------------------------
     // Relationship Begins

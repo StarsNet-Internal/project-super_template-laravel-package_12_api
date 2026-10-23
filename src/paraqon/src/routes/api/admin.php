@@ -312,6 +312,9 @@ Route::group(
             ['middleware' => 'auth:api'],
             function () {
                 Route::post('/', [NotificationController::class, 'createNotification']);
+                Route::post('/send', [NotificationController::class, 'sendMessage']);
+                Route::get('/messages', [NotificationController::class, 'getSentMessages'])->middleware(['pagination']);
+                Route::put('/messages/{batch_id}', [NotificationController::class, 'manageSentMessage']);
                 Route::get('/all', [NotificationController::class, 'getAllNotifications'])->middleware(['pagination']);
                 Route::put('/read', [NotificationController::class, 'markNotificationsAsRead']);
                 Route::put('/{id}/delete', [NotificationController::class, 'deleteNotification']);
