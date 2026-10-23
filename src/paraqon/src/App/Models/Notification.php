@@ -47,7 +47,6 @@ class Notification extends Model
     protected $casts = [
         'is_read' => 'boolean',
         'sent_at' => 'datetime',
-        'admin_archived_at' => 'datetime',
         'admin_deleted_at' => 'datetime',
     ];
 
@@ -55,7 +54,8 @@ class Notification extends Model
     {
         return $query->where('account_id', $accountId)
             ->where('status', '!=', Status::DELETED->value)
-            ->whereNull('deleted_at');
+            ->whereNull('deleted_at')
+            ->whereNull('admin_deleted_at');
     }
 
     public function scopeOfKind(Builder $query, string $kind): Builder

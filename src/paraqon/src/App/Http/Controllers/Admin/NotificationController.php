@@ -87,10 +87,7 @@ class NotificationController extends Controller
 
     public function getSentMessages(Request $request): Collection
     {
-        $request->validate(['archived' => 'sometimes|in:true,false,1,0']);
         $query = Notification::where('kind', 'direct')->where('type', 'customer')->whereNull('admin_deleted_at');
-        if ($request->boolean('archived')) $query->whereNotNull('admin_archived_at');
-        else $query->whereNull('admin_archived_at');
 
         return $query->orderBy('sent_at', 'desc')->get()->groupBy('batch_id')->map(function ($rows, $batchId) {
             $first = $rows->first();
@@ -99,21 +96,25 @@ class NotificationController extends Controller
                 'recipient_type' => $first->recipient_type ?? 'selected',
                 'customer_ids' => $rows->pluck('customer_id')->unique()->values(),
                 'sent_by' => $first->sent_by, 'sent_by_name' => $first->sent_by_name,
-                'sent_at' => $first->sent_at, 'admin_archived_at' => $first->admin_archived_at,
+                'sent_at' => $first->sent_at,
             ];
         })->values();
     }
 
     public function manageSentMessage(Request $request): array
     {
-        $data = $request->validate(['action' => 'required|in:archive,restore,delete']);
+        $request->validate(['action' => 'required|in:delete']);
         $query = Notification::where('kind', 'direct')->where('type', 'customer')
             ->where('batch_id', $request->route('batch_id'))->whereNull('admin_deleted_at');
         abort_unless((clone $query)->exists(), 404, 'Message not found');
-        $field = $data['action'] === 'delete' ? 'admin_deleted_at' : 'admin_archived_at';
-        // Staff history management must not remove recipients' inbox records.
-        $query->update([$field => $data['action'] === 'restore' ? null : now()]);
-        return ['message' => 'Message history updated'];
+        $deletedAt = now();
+        // Delete the whole send batch from admin history and every recipient's inbox.
+        $query->update([
+            'admin_deleted_at' => $deletedAt,
+            'status' => Status::DELETED->value,
+            'deleted_at' => $deletedAt,
+        ]);
+        return ['message' => 'Message deleted successfully'];
     }
 
     public function createNotification(Request $request): array
