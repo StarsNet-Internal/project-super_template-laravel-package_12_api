@@ -91,16 +91,88 @@ class NotificationController extends Controller
         $query = Notification::where('kind', 'direct')->where('type', 'customer')->whereNull('admin_deleted_at');
         if ($request->input('archive_status') === 'archived') $query->whereNotNull('admin_archived_at');
 
-        return $query->orderBy('sent_at', 'desc')->get()->groupBy('batch_id')->map(function ($rows, $batchId) {
+        return $query->orderBy('sent_at', 'desc')->get()->groupBy('batch_id')
+            ->map(fn ($rows, $batchId) => $this->sentMessageData($rows, $batchId))->values();
+    }
+
+    public function getSentMessageDetails(Request $request): array
+    {
+        $batchId = $request->route('batch_id');
+        $rows = Notification::where('kind', 'direct')->where('type', 'customer')
+            ->where('batch_id', $batchId)->whereNull('admin_deleted_at')->get();
+        abort_if($rows->isEmpty(), 404, 'Message not found');
+        return ['data' => $this->sentMessageData($rows, $batchId)];
+    }
+
+    private function sentMessageData(Collection $rows, string $batchId): array
+    {
+        $first = $rows->first();
+        return [
+            '_id' => $batchId, 'subject' => $first->subject, 'description' => $first->description,
+            'recipient_type' => $first->recipient_type ?? 'selected',
+            'customer_ids' => $rows->pluck('customer_id')->unique()->values(),
+            'sent_by' => $first->sent_by, 'sent_by_name' => $first->sent_by_name,
+            'sent_at' => $first->sent_at, 'admin_archived_at' => $first->admin_archived_at,
+        ];
+    }
+
+    public function updateSentMessage(Request $request): array
+    {
+        $data = $request->validate([
+            'subject' => 'required|array:en,zh,cn',
+            'subject.en' => 'required|string|max:300',
+            'subject.zh' => 'nullable|string|max:300',
+            'subject.cn' => 'nullable|string|max:300',
+            'description' => 'required|array:en,zh,cn',
+            'description.en' => 'required|string|max:20000',
+            'description.zh' => 'nullable|string|max:20000',
+            'description.cn' => 'nullable|string|max:20000',
+            'additional_customer_ids' => 'sometimes|array',
+            'additional_customer_ids.*' => 'required|string|distinct|regex:/^[a-fA-F0-9]{24}$/',
+        ]);
+        $query = Notification::where('kind', 'direct')->where('type', 'customer')
+            ->where('batch_id', $request->route('batch_id'))->whereNull('admin_deleted_at');
+        return DB::connection('mongodb')->transaction(function () use ($query, $data, $request) {
+            $rows = (clone $query)->get();
+            abort_if($rows->isEmpty(), 404, 'Message not found');
+            $customers = collect();
+            $ids = $data['additional_customer_ids'] ?? [];
+            if ($ids) {
+                $customers = Customer::with('account.user')->whereHas('account', function ($account) {
+                    $account->whereHas('user', function ($user) {
+                        $user->where('type', '!=', LoginType::TEMP->value)->where('is_deleted', false);
+                    });
+                })->whereIn('_id', $ids)->get();
+                abort_unless($customers->count() === count($ids), 422, 'Some recipient accounts are unavailable');
+                $existingAccounts = $rows->pluck('account_id')->all();
+                $customers = $customers->unique(fn ($customer) => (string) $customer->account->_id)
+                    ->reject(fn ($customer) => in_array((string) $customer->account->_id, $existingAccounts, true))->values();
+            }
+            // Edit existing copies without resetting read/delete state or sending them again.
+            $query->update(Arr::only($data, ['subject', 'description']));
             $first = $rows->first();
-            return [
-                '_id' => $batchId, 'subject' => $first->subject, 'description' => $first->description,
-                'recipient_type' => $first->recipient_type ?? 'selected',
-                'customer_ids' => $rows->pluck('customer_id')->unique()->values(),
-                'sent_by' => $first->sent_by, 'sent_by_name' => $first->sent_by_name,
-                'sent_at' => $first->sent_at, 'admin_archived_at' => $first->admin_archived_at,
-            ];
-        })->values();
+            $now = now();
+            foreach ($customers->chunk(500) as $chunk) {
+                $documents = $chunk->map(function ($customer) use ($first, $data, $request, $now) {
+                    return (new Notification([
+                        'type' => 'customer', 'kind' => 'direct',
+                        'recipient_type' => $first->recipient_type ?? 'selected',
+                        'account_id' => (string) $customer->account->_id,
+                        'customer_id' => (string) $customer->_id,
+                        'batch_id' => $request->route('batch_id'),
+                        'document_id' => $request->route('batch_id'), 'path' => 'contact',
+                        'subject' => $data['subject'], 'description' => $data['description'],
+                        'sent_by' => $first->sent_by, 'sent_by_name' => $first->sent_by_name,
+                        // Keep the batch's original send metadata; created_at is this recipient's receipt time.
+                        'sent_at' => $first->sent_at, 'admin_archived_at' => $first->admin_archived_at,
+                        'is_read' => false, 'status' => Status::ACTIVE->value,
+                        'created_at' => $now, 'updated_at' => $now,
+                    ]))->getAttributes();
+                })->values()->all();
+                Notification::insert($documents);
+            }
+            return ['message' => 'Message updated successfully', 'added_recipient_count' => $customers->count()];
+        });
     }
 
     public function manageSentMessage(Request $request): array

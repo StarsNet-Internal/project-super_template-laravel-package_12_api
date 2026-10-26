@@ -314,6 +314,8 @@ Route::group(
                 Route::post('/', [NotificationController::class, 'createNotification']);
                 Route::post('/send', [NotificationController::class, 'sendMessage']);
                 Route::get('/messages', [NotificationController::class, 'getSentMessages'])->middleware(['pagination']);
+                Route::get('/messages/{batch_id}', [NotificationController::class, 'getSentMessageDetails']);
+                Route::put('/messages/{batch_id}/content', [NotificationController::class, 'updateSentMessage']);
                 Route::put('/messages/{batch_id}', [NotificationController::class, 'manageSentMessage']);
                 Route::get('/all', [NotificationController::class, 'getAllNotifications'])->middleware(['pagination']);
                 Route::put('/read', [NotificationController::class, 'markNotificationsAsRead']);
