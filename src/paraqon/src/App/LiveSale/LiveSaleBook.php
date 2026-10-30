@@ -311,6 +311,8 @@ class LiveSaleBook
                 'title' => $title,
                 'starting_price' => $this->money($lot['starting_price'] ?? 0),
                 'reserve_price' => $this->money($lot['reserve_price'] ?? 0),
+                'is_no_reserve_lot' => (bool) ($lot['is_no_reserve_lot'] ?? false)
+                    || $this->money($lot['reserve_price'] ?? 0) <= 0,
                 'increment_override' => null,
                 'bid_incremental_settings' => $settings,
                 'is_permission_required' => (bool) ($lot['is_permission_required'] ?? false),
@@ -339,10 +341,18 @@ class LiveSaleBook
         $this->requireRunning();
         $lotId = (string) ($payload['lot_id'] ?? $this->nextUpcomingLotId() ?? '');
         $lot = $this->requireLot($lotId);
-        if (!in_array($lot['state'], ['upcoming', 'passed'], true)) {
+        if (!in_array($lot['state'], ['upcoming', 'passed', 'sold'], true)) {
             throw new LiveSaleException('That lot cannot be prepared');
         }
         $this->requireNoLotOnTheBlock($lotId);
+        // Same path as a passed lot. The hammer comes off now. The asking
+        // price stays, so Open keeps a raised ask. Reopen is what drops it.
+        if ($lot['state'] === 'sold') {
+            $lot['hammer_price'] = null;
+            $lot['hammer_paddle_id'] = null;
+            $lot['hammer_customer_id'] = null;
+            $lot['pending'] = [];
+        }
         $lot['state'] = 'preparing';
         $this->lots[$lotId] = $lot;
         $this->currentLotId = $lotId;
@@ -773,10 +783,6 @@ class LiveSaleBook
         if ($latest === null) {
             throw new LiveSaleException('There is no bid to sell');
         }
-        $reserve = (float) $lot['reserve_price'];
-        if ($reserve > 0 && $this->greater($reserve, (float) $latest['amount'])) {
-            throw new LiveSaleException('The reserve has not been met');
-        }
         $paddleId = $payload['paddle_id'] ?? null;
         if ($paddleId === '') {
             $paddleId = null;
@@ -993,6 +999,9 @@ class LiveSaleBook
                 'is_disabled' => $flags['is_disabled'],
                 'is_closed' => $flags['is_closed'],
                 'is_permission_required' => $lot['is_permission_required'],
+                'is_no_reserve_lot' => array_key_exists('is_no_reserve_lot', $lot)
+                    ? (bool) $lot['is_no_reserve_lot']
+                    : (float) ($lot['reserve_price'] ?? 0) <= 0,
                 'bid_incremental_settings' => $lot['bid_incremental_settings'],
                 'created_at' => $lot['created_at'],
                 'leading_paddle_id' => $latest['paddle_id'] ?? null,

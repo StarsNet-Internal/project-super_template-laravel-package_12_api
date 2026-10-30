@@ -207,6 +207,7 @@ class LiveSaleService
                 'title' => $title,
                 'starting_price' => $lot->starting_price,
                 'reserve_price' => $lot->reserve_price,
+                'is_no_reserve_lot' => (bool) ($lot->is_no_reserve_lot ?? false),
                 'bid_incremental_settings' => $this->plain($lot->bid_incremental_settings),
                 'is_permission_required' => (bool) $lot->is_permission_required,
                 'permission_requests' => is_array($requests) ? array_values($requests) : [],

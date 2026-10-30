@@ -186,8 +186,11 @@ check($sale->clerkPayload('t')['undo']['amount'] === 900.0, 'the absentee bid st
 check($sale->publicPayload('t')['asking_price'] === 950.0, 'the next ask is the next ladder price');
 check($sale->clerkPayload('t')['lots'][0]['reserve_met'] === false, '900 is under a 1000 reserve');
 check($sale->toArray()['lots'][0]['advance'] === $advanceBefore, 'an absentee bid does not spend the advance');
-expect(fn () => $sale->apply('sell', ['at' => 't']), 'reserve');
-expect(fn () => $sale->apply('sell', ['paddle_id' => 33, 'customer_id' => 'phone-33', 'at' => 't']), 'reserve');
+expect(fn () => $sale->apply('sell', ['at' => 't']), 'paddle number');
+$sale->apply('sell', ['paddle_id' => 33, 'customer_id' => 'phone-33', 'at' => 't']);
+check($sale->publicPayload('t')['lots'][0]['live_state'] === 'sold', 'a lot under the reserve can be sold');
+check($sale->publicPayload('t')['lots'][0]['current_bid'] === 900.0, 'the hammer can be under the reserve');
+$sale->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't-under']);
 $sale->apply('accept_bid', [
     'amount' => 1200,
     'source' => 'house',
@@ -1001,9 +1004,23 @@ $sold->apply('accept_bid', [
     'at' => 't',
 ]);
 $sold->apply('sell', ['at' => 't']);
-expect(fn () => $sold->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']), 'cannot be prepared');
-check($sold->publicPayload('t')['lots'][0]['live_state'] === 'sold', 'prepare does not reopen a sold lot');
-check($sold->publicPayload('t')['lots'][0]['current_bid'] === 800.0, 'a refused prepare leaves the hammer');
+$held = $sold->publicPayload('t');
+check($held['lots'][0]['live_state'] === 'sold', 'the lot is sold before it is prepared');
+check($held['lots'][0]['current_bid'] === 800.0, 'the hammer is the accepted bid');
+$sold->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$preparing = $sold->publicPayload('t');
+check($preparing['lots'][0]['live_state'] === 'preparing', 'a sold lot can be prepared');
+check($preparing['asking_price'] === $held['asking_price'], 'preparing a sold lot keeps the asking price');
+check($preparing['lots'][0]['current_bid'] === 800.0, 'preparing keeps the bid');
+check($sold->toArray()['lots'][0]['hammer_price'] === null, 'preparing clears the hammer');
+$sold->apply('open_lot', ['at' => 't']);
+$opened = $sold->publicPayload('t');
+check($opened['lots'][0]['live_state'] === 'open', 'opening a prepared sold lot puts it back');
+check($opened['asking_price'] === $held['asking_price'], 'prepare and open keep the asking price');
+check($opened['lots'][0]['current_bid'] === 800.0, 'the bid stays');
+check(count($opened['histories']) === 1, 'opening a sold lot does not replay bids');
+$settled = array_column($sold->clerkPayload('t')['settlement'], 'lot_id');
+check(!in_array('lot-1', $settled, true), 'the lot is no longer a hammer');
 
 
 $steps = book();
