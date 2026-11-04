@@ -90,8 +90,6 @@ Route::group(
             function () use ($defaultController) {
                 Route::get('/{auction_lot_id}/details', [$defaultController, 'getAuctionLotDetails']);
 
-                Route::get('/owned/all', [$defaultController, 'getAllOwnedAuctionLots'])->middleware(['pagination']);
-                Route::get('/participated/all', [$defaultController, 'getAllParticipatedAuctionLots'])->middleware(['pagination']);
                 Route::post('/{auction_lot_id}/bids', [$defaultController, 'createMaximumBid']);
             }
         );

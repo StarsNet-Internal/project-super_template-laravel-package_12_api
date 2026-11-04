@@ -16,6 +16,7 @@ use App\Models\Store;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\HidesBidderIdentity;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
 use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
@@ -23,6 +24,7 @@ use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 class AuctionController extends Controller
 {
     use CachesEndedAuctionData;
+    use HidesBidderIdentity;
 
     public function getAllAuctions(Request $request): Collection
     {
@@ -152,14 +154,20 @@ class AuctionController extends Controller
 
     public function getAllPaddles(Request $request): Collection
     {
-        return AuctionRegistrationRequest::where('store_id', $request->route('auction_id'))
+        $auctionId = $request->route('auction_id');
+        $viewerId = $this->viewerCustomerId();
+
+        return AuctionRegistrationRequest::where('store_id', $auctionId)
             ->whereNotNull('paddle_id')
             ->where('status', '!=', Status::DELETED->value)
             ->get()
             ->map(
-                function ($item) {
+                function ($item) use ($auctionId, $viewerId) {
+                    $customerId = $item['requested_by_customer_id'] ?? null;
+
                     return [
-                        'customer_id' => $item['requested_by_customer_id'],
+                        'bidder_key' => $this->bidderKey($auctionId, $customerId),
+                        'is_own' => $this->isOwnBidder($customerId, $viewerId),
                         'paddle_id' => $item['paddle_id'],
                         'bidding_channel' => AuctionRegistrationRequest::channel(
                             $item['bidding_channel'] ?? null

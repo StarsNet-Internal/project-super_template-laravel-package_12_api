@@ -12,7 +12,6 @@ use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuthController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\AuthenticationController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\BidController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\ConsignmentRequestController;
-use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\CustomerGroupController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\DepositController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\DocumentController;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Customer\OrderController;
@@ -177,18 +176,6 @@ Route::group(
                 Route::post('/', [ConsignmentRequestController::class, 'createConsignmentRequest']);
                 Route::get('/all', [ConsignmentRequestController::class, 'getAllConsignmentRequests'])->middleware(['pagination']);
                 Route::get('/{consignment_request_id}/details', [ConsignmentRequestController::class, 'getConsignmentRequestDetails']);
-            }
-        );
-    }
-);
-
-Route::group(
-    ['prefix' => 'customer-groups'],
-    function () {
-        Route::group(
-            ['middleware' => 'auth:api'],
-            function () {
-                Route::get('/all', [CustomerGroupController::class, 'filterCustomerGroups'])->middleware(['pagination']);
             }
         );
     }

@@ -13,8 +13,8 @@ use Carbon\Carbon;
 use App\Enums\Status;
 
 // Models
-use App\Models\Customer;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\HidesBidderIdentity;
 use Starsnet\Project\Paraqon\App\LiveSale\LiveSaleService;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Bid;
@@ -24,6 +24,7 @@ use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 class AuctionLotController extends Controller
 {
     use CachesEndedAuctionData;
+    use HidesBidderIdentity;
 
     public function requestForBidPermissions(Request $request): array
     {
@@ -117,21 +118,16 @@ class AuctionLotController extends Controller
         if (is_null($auctionLot)) abort(404, 'AuctionLot not found');
         if (!in_array($auctionLot->status, [Status::ACTIVE->value, Status::ARCHIVED->value])) abort(404, 'AuctionLot is not available for public');
 
-        $bids = Bid::where('auction_lot_id', $auctionLot->id)
+        $viewerId = $this->viewerCustomerId();
+        $auctionId = $auctionLot->store_id;
+
+        return Bid::where('auction_lot_id', $auctionLot->id)
             ->where('is_hidden', false)
             ->latest()
-            ->get();
-
-        // Attach customer and account information to each bid
-        foreach ($bids as $bid) {
-            $customerID = $bid->customer_id;
-            $customer = Customer::find($customerID);
-            $account = $customer->account;
-            $bid->username = optional($account)->username;
-            $bid->avatar = optional($account)->avatar;
-        }
-
-        return $bids;
+            ->get()
+            ->map(function ($bid) use ($viewerId, $auctionId) {
+                return $this->publicBidderRow($bid, $bid->customer_id, $auctionId, $viewerId);
+            });
     }
 
     public function getAllOwnedAuctionLots(): Collection
@@ -168,18 +164,17 @@ class AuctionLotController extends Controller
                 'histories' => []
             ]);
         }
-        $displayBidRecords = $bidHistory['histories'];
+        $viewerId = $this->viewerCustomerId();
+        $auctionId = $auctionLot->store_id;
 
-        // Attach customer and account information to each bid
-        foreach ($displayBidRecords as $bid) {
-            $winningBidCustomerID = $bid['winning_bid_customer_id'];
-            $winningCustomer = Customer::find($winningBidCustomerID);
-            $account = $winningCustomer->account;
-            $bid->username = optional($account)->username;
-            $bid->avatar = optional($account)->avatar;
-        }
-
-        return $displayBidRecords;
+        return collect($bidHistory['histories'])->map(function ($bid) use ($viewerId, $auctionId) {
+            return $this->publicBidderRow(
+                $bid,
+                $bid['winning_bid_customer_id'] ?? null,
+                $auctionId,
+                $viewerId
+            );
+        });
     }
 
     public function createMaximumBid(Request $request)

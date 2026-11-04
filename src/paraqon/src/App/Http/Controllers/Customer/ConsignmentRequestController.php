@@ -50,8 +50,7 @@ class ConsignmentRequestController extends Controller
         if (is_null($form)) abort(404, 'ConsignmentRequest not found');
         if ($form->status === Status::DELETED->value) abort(404, 'ConsignmentRequest not found');
 
-        $customer = $this->customer();
-        if ($form->requested_by_customer_id != $customer->_id) abort(404, 'Access denied');
+        if ($form->requested_by_customer_id != $this->customer()->id) abort(403, 'ConsignmentRequest does not belong to this Customer');
 
         $form->items = $form->items()->get();
         return $form;
