@@ -16,7 +16,6 @@ use App\Models\Store;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
-use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\HidesBidderIdentity;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
 use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
@@ -24,7 +23,6 @@ use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 class AuctionController extends Controller
 {
     use CachesEndedAuctionData;
-    use HidesBidderIdentity;
 
     public function getAllAuctions(Request $request): Collection
     {
@@ -157,27 +155,23 @@ class AuctionController extends Controller
         $auctionId = (string) $request->route('auction_id');
 
         // Paddles are final once the auction (Store) has ended; cache only then.
-        // The key changed so an older cache entry that still has customer_id is not served.
         $isEnded = $this->isStoreEnded(Store::find($auctionId));
-        $cacheKey = $this->mongoCacheKey('customer_auction_paddles_public:store_' . $auctionId);
+        $cacheKey = $this->mongoCacheKey('customer_auction_paddles:store_' . $auctionId);
 
-        $paddles = $this->rememberIfEnded($isEnded, $cacheKey, function () use ($auctionId): Collection {
+        return $this->rememberIfEnded($isEnded, $cacheKey, function () use ($auctionId): Collection {
             return AuctionRegistrationRequest::where('store_id', $auctionId)
                 ->whereNotNull('paddle_id')
                 ->where('status', '!=', Status::DELETED->value)
                 ->get()
-                ->map(function ($item) use ($auctionId) {
-                    $customerId = $item['requested_by_customer_id'] ?? null;
-
-                    return [
-                        'bidder_key' => $this->bidderKey($auctionId, $customerId),
-                        'is_own' => false,
-                        'paddle_id' => $item['paddle_id'],
-                    ];
-                });
+                ->map(
+                    function ($item) {
+                        return [
+                            'customer_id' => $item['requested_by_customer_id'],
+                            'paddle_id' => $item['paddle_id']
+                        ];
+                    }
+                );
         });
-
-        return $this->markOwnBidderRows($paddles, $auctionId);
     }
 
   /**

@@ -14,7 +14,6 @@ use App\Enums\Status;
 
 // Models
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
-use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\HidesBidderIdentity;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Bid;
 use Starsnet\Project\Paraqon\App\Models\BidHistory;
@@ -23,7 +22,6 @@ use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 class AuctionLotController extends Controller
 {
     use CachesEndedAuctionData;
-    use HidesBidderIdentity;
 
     public function requestForBidPermissions(Request $request): array
     {
@@ -121,22 +119,22 @@ class AuctionLotController extends Controller
         if (!in_array($auctionLot->status, [Status::ACTIVE->value, Status::ARCHIVED->value])) abort(404, 'AuctionLot is not available for public');
 
         // Bids are final once the lot has ended; cache only then.
-        // The key changed so an older cache entry that still has customer_id is not served.
+        // The key changed so an older cache entry that still has username and avatar is not served.
         $isEnded = $this->isAuctionLotEnded($auctionLot);
-        $cacheKey = $this->mongoCacheKey('customer_auction_lot_bids_public:lot_' . $auctionLotId);
-        $auctionId = $auctionLot->store_id;
+        $cacheKey = $this->mongoCacheKey('customer_auction_lot_bids_redacted:lot_' . $auctionLotId);
 
-        $bids = $this->rememberIfEnded($isEnded, $cacheKey, function () use ($auctionLot, $auctionId): Collection {
-            return Bid::where('auction_lot_id', $auctionLot->id)
+        return $this->rememberIfEnded($isEnded, $cacheKey, function () use ($auctionLot): Collection {
+            $bids = Bid::where('auction_lot_id', $auctionLot->id)
                 ->where('is_hidden', false)
                 ->latest()
-                ->get()
-                ->map(function ($bid) use ($auctionId) {
-                    return $this->publicBidderRow($bid, $bid->customer_id, $auctionId, null);
-                });
-        });
+                ->get();
 
-        return $this->markOwnBidderRows($bids, $auctionId);
+            foreach ($bids as $bid) {
+                unset($bid->username, $bid->avatar, $bid->account, $bid->customer);
+            }
+
+            return $bids;
+        });
     }
 
     public function getAllOwnedAuctionLots(): Collection
@@ -200,17 +198,16 @@ class AuctionLotController extends Controller
                 'histories' => []
             ]);
         }
-        $viewerId = $this->viewerCustomerId();
-        $auctionId = $auctionLot->store_id;
+        $displayBidRecords = $bidHistory['histories'];
 
-        return collect($bidHistory['histories'])->map(function ($bid) use ($viewerId, $auctionId) {
-            return $this->publicBidderRow(
-                $bid,
-                $bid['winning_bid_customer_id'] ?? null,
-                $auctionId,
-                $viewerId
-            );
-        });
+        foreach ($displayBidRecords as $bid) {
+            if (!is_object($bid)) {
+                continue;
+            }
+            unset($bid->username, $bid->avatar, $bid->account, $bid->customer);
+        }
+
+        return $displayBidRecords;
     }
 
     public function createMaximumBid(Request $request)
