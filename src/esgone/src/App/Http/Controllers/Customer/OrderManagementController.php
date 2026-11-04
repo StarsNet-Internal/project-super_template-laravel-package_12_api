@@ -52,26 +52,4 @@ class OrderManagementController extends Controller
             return $order;
         }, $orders->toArray());
     }
-
-    public function getOrderDetailsAsCustomer(Request $request): array
-    {
-        /** @var ?Order $order */
-        $order = Order::find($request->route('order_id'));
-        if (is_null($order)) abort(404, 'Order not found');
-        if (!$order->customer_id === $this->customer()->id) abort(403, 'Order does not belong to this Customer');
-
-        // Get Checkout
-        $order->checkout = $order->checkout()->latest()->first();
-
-        // Append keys
-        $order = $order->toArray();
-        $cartItems = $order['cart_items'];
-        foreach ($cartItems as $itemIndex => $item) {
-            $productVariantId = $item['product_variant_id'];
-            $variant = ProductVariant::find($productVariantId);
-            $order['cart_items'][$itemIndex]['variant'] = $variant;
-        }
-
-        return $order;
-    }
 }

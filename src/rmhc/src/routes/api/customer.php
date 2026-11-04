@@ -6,7 +6,6 @@ use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\AuctionLotController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\AuthenticationController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\BidController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\CreditCardController;
-use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\CustomerController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\OrderController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\ProductManagementController;
 use Starsnet\Project\Rmhc\App\Http\Controllers\Customer\TestingController;
@@ -62,7 +61,6 @@ Route::group(
             ['middleware' => 'auth:api'],
             function () {
                 Route::get('/{auction_lot_id}/details', [AuctionLotController::class, 'getAuctionLotDetails']);
-                Route::get('/participated/all', [AuctionLotController::class, 'getAllParticipatedAuctionLots'])->middleware(['pagination']);
                 Route::post('/{auction_lot_id}/bids', [AuctionLotController::class, 'createMaximumBid']);
             }
         );
@@ -91,17 +89,6 @@ Route::group(
     }
 );
 
-Route::group(
-    ['prefix' => 'customers'],
-    function () {
-        Route::group(
-            ['middleware' => 'auth:api'],
-            function () {
-                Route::get('/all', [CustomerController::class, 'getAllCustomers'])->middleware(['pagination']);
-            }
-        );
-    }
-);
 // Orders (Donation and Batch Payment related)
 Route::group(
     ['prefix' => 'orders'],

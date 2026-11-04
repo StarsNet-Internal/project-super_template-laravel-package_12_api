@@ -6,7 +6,6 @@ namespace Starsnet\Project\WhiskyWhiskers\App\Http\Controllers\Customer;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Carbon\Carbon;
 
@@ -53,50 +52,6 @@ class AuctionLotController extends Controller
         $auctionLot->setHidden(['reserve_price']);
 
         return $auctionLot;
-    }
-
-    public function getAllOwnedAuctionLots(): Collection
-    {
-        /** @var Collection $auctionLots */
-        $auctionLots = AuctionLot::where('owned_by_customer_id', $this->customer()->id)
-            ->where('status', '!=', Status::DELETED->value)
-            ->with([
-                'product',
-                'productVariant',
-                'store',
-                'latestBidCustomer',
-                'winningBidCustomer'
-            ])->get();
-
-        foreach ($auctionLots as $auctionLot) {
-            $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
-        }
-
-        return $auctionLots;
-    }
-
-    public function getAllParticipatedAuctionLots(): Collection
-    {
-        $customerId = $this->customer()->id;
-
-        /** @var Collection $auctionLots */
-        $auctionLots = AuctionLot::whereHas('bids', function ($query2) use ($customerId) {
-            return $query2->where('customer_id', $customerId);
-        })
-            ->where('status', '!=', Status::DELETED->value)
-            ->with([
-                'product',
-                'productVariant',
-                'store',
-                'winningBidCustomer'
-            ])
-            ->get();
-
-        foreach ($auctionLots as $auctionLot) {
-            $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
-        }
-
-        return $auctionLots;
     }
 
     public function getBiddingHistory(Request $request): array

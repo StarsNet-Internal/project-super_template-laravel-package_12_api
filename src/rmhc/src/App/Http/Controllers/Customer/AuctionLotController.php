@@ -4,7 +4,6 @@ namespace Starsnet\Project\Rmhc\App\Http\Controllers\Customer;
 
 // Laravel built-in
 use App\Http\Controllers\Controller;
-use Illuminate\Support\Collection;
 use Illuminate\Http\Request;
 use Carbon\Carbon;
 
@@ -49,43 +48,6 @@ class AuctionLotController extends Controller
         $auctionLot->winning_customers = $winnerHistory?->winning_customers;
 
         return $auctionLot;
-    }
-
-
-    public function getAllParticipatedAuctionLots(): Collection
-    {
-        $customer = $this->customer();
-        $auctionLots = AuctionLot::with([
-            'product',
-            'productVariant',
-            'store',
-            'winningBidCustomer'
-        ])
-            ->whereHas(
-                'bids',
-                function ($query2) use ($customer) {
-                    return $query2->where('customer_id', $customer->id);
-                }
-            )
-            ->where('status', '!=', Status::DELETED->value)
-            ->get();
-
-        $latestHistories = WinningCustomerHistory::query()
-            ->whereIn('auction_lot_id', $auctionLots->pluck('id')->all())
-            ->orderByDesc('created_at')
-            ->get()
-            ->unique('auction_lot_id')
-            ->keyBy('auction_lot_id');
-
-        // Calculate highest bid
-        foreach ($auctionLots as $auctionLot) {
-            $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
-
-            $winnerHistory = $latestHistories[$auctionLot->id] ?? null;
-            $auctionLot->winning_customers = $winnerHistory?->winning_customers;
-        }
-
-        return $auctionLots;
     }
 
     public function createMaximumBid(Request $request)

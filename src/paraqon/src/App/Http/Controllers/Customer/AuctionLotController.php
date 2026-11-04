@@ -13,8 +13,8 @@ use Carbon\Carbon;
 use App\Enums\Status;
 
 // Models
-use App\Models\Customer;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\HidesBidderIdentity;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\Bid;
 use Starsnet\Project\Paraqon\App\Models\BidHistory;
@@ -23,6 +23,7 @@ use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 class AuctionLotController extends Controller
 {
     use CachesEndedAuctionData;
+    use HidesBidderIdentity;
 
     public function requestForBidPermissions(Request $request): array
     {
@@ -120,26 +121,22 @@ class AuctionLotController extends Controller
         if (!in_array($auctionLot->status, [Status::ACTIVE->value, Status::ARCHIVED->value])) abort(404, 'AuctionLot is not available for public');
 
         // Bids are final once the lot has ended; cache only then.
+        // The key changed so an older cache entry that still has customer_id is not served.
         $isEnded = $this->isAuctionLotEnded($auctionLot);
-        $cacheKey = $this->mongoCacheKey('customer_auction_lot_bids:lot_' . $auctionLotId);
+        $cacheKey = $this->mongoCacheKey('customer_auction_lot_bids_public:lot_' . $auctionLotId);
+        $auctionId = $auctionLot->store_id;
 
-        return $this->rememberIfEnded($isEnded, $cacheKey, function () use ($auctionLot): Collection {
-            $bids = Bid::where('auction_lot_id', $auctionLot->id)
+        $bids = $this->rememberIfEnded($isEnded, $cacheKey, function () use ($auctionLot, $auctionId): Collection {
+            return Bid::where('auction_lot_id', $auctionLot->id)
                 ->where('is_hidden', false)
                 ->latest()
-                ->get();
-
-            // Attach customer and account information to each bid
-            foreach ($bids as $bid) {
-                $customerID = $bid->customer_id;
-                $customer = Customer::find($customerID);
-                $account = $customer->account;
-                $bid->username = optional($account)->username;
-                $bid->avatar = optional($account)->avatar;
-            }
-
-            return $bids;
+                ->get()
+                ->map(function ($bid) use ($auctionId) {
+                    return $this->publicBidderRow($bid, $bid->customer_id, $auctionId, null);
+                });
         });
+
+        return $this->markOwnBidderRows($bids, $auctionId);
     }
 
     public function getAllOwnedAuctionLots(): Collection
@@ -148,8 +145,6 @@ class AuctionLotController extends Controller
             'product',
             'productVariant',
             'store',
-            'latestBidCustomer',
-            'winningBidCustomer'
         ])
             ->where('owned_by_customer_id', $this->customer()->id)
             ->where('status', '!=', Status::DELETED->value)
@@ -170,7 +165,6 @@ class AuctionLotController extends Controller
             'product',
             'productVariant',
             'store',
-            'winningBidCustomer'
         ])
             ->whereHas(
                 'bids',
@@ -206,18 +200,17 @@ class AuctionLotController extends Controller
                 'histories' => []
             ]);
         }
-        $displayBidRecords = $bidHistory['histories'];
+        $viewerId = $this->viewerCustomerId();
+        $auctionId = $auctionLot->store_id;
 
-        // Attach customer and account information to each bid
-        foreach ($displayBidRecords as $bid) {
-            $winningBidCustomerID = $bid['winning_bid_customer_id'];
-            $winningCustomer = Customer::find($winningBidCustomerID);
-            $account = $winningCustomer->account;
-            $bid->username = optional($account)->username;
-            $bid->avatar = optional($account)->avatar;
-        }
-
-        return $displayBidRecords;
+        return collect($bidHistory['histories'])->map(function ($bid) use ($viewerId, $auctionId) {
+            return $this->publicBidderRow(
+                $bid,
+                $bid['winning_bid_customer_id'] ?? null,
+                $auctionId,
+                $viewerId
+            );
+        });
     }
 
     public function createMaximumBid(Request $request)

@@ -29,7 +29,7 @@ class DepositController extends Controller
         $deposit = Deposit::with(['auctionRegistrationRequest.store', 'depositStatuses'])
             ->find($request->route('id'));
         if (is_null($deposit)) abort(404, 'Deposit not found');
-        if ($deposit->requested_by_customer_id != $this->customer()->id) abort(400, 'Access denied');
+        if ($deposit->requested_by_customer_id != $this->customer()->id) abort(403, 'Deposit does not belong to this Customer');
 
         return $deposit;
     }
