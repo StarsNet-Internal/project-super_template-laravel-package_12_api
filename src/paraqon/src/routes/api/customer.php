@@ -96,7 +96,6 @@ Route::group(
                 Route::get('/{auction_lot_id}/details', [AuctionLotController::class, 'getAuctionLotDetails']);
 
                 Route::get('/owned/all', [AuctionLotController::class, 'getAllOwnedAuctionLots'])->middleware(['pagination']);
-                Route::get('/participated/all', [AuctionLotController::class, 'getAllParticipatedAuctionLots'])->middleware(['pagination']);
                 Route::post('/{auction_lot_id}/bids', [AuctionLotController::class, 'createMaximumBid']);
                 Route::put('/{auction_lot_id}/bid-requests', [AuctionLotController::class, 'requestForBidPermissions']);
 

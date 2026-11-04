@@ -140,39 +140,11 @@ class AuctionLotController extends Controller
             'product',
             'productVariant',
             'store',
-            'latestBidCustomer',
-            'winningBidCustomer'
         ])
             ->where('owned_by_customer_id', $this->customer()->id)
             ->where('status', '!=', Status::DELETED->value)
             ->get();
 
-        foreach ($auctionLots as $auctionLot) {
-            $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
-        }
-
-        return $auctionLots;
-    }
-
-    public function getAllParticipatedAuctionLots(): Collection
-    {
-        $customer = $this->customer();
-        $auctionLots = AuctionLot::with([
-            'product',
-            'productVariant',
-            'store',
-            'winningBidCustomer'
-        ])
-            ->whereHas(
-                'bids',
-                function ($query2) use ($customer) {
-                    return $query2->where('customer_id', $customer->id);
-                }
-            )
-            ->where('status', '!=', Status::DELETED->value)
-            ->get();
-
-        // Calculate highest bid
         foreach ($auctionLots as $auctionLot) {
             $auctionLot->current_bid = $auctionLot->getCurrentBidPrice();
         }

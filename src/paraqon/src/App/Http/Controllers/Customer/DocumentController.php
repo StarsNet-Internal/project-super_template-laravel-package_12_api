@@ -47,6 +47,7 @@ class DocumentController extends Controller
         /** @var ?Document $document */
         $document = Document::find($request->route('id'));
         if (is_null($document)) abort(404, 'Document not found');
+        if ($document->customer_id != $this->customer()->id) abort(403, 'Document does not belong to this Customer');
 
         return $document;
     }
@@ -56,6 +57,7 @@ class DocumentController extends Controller
         /** @var ?Document $document */
         $document = Document::find($request->route('id'));
         if (is_null($document)) abort(404, 'Document not found');
+        if ($document->customer_id != $this->customer()->id) abort(403, 'Document does not belong to this Customer');
 
         $document->update($request->all());
 
