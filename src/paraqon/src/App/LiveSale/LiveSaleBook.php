@@ -646,9 +646,9 @@ class LiveSaleBook
                 continue;
             }
             if (strcmp((string) $other['placed_at'], (string) $advance['placed_at']) < 0) {
-                $step = $this->incrementFor($lot, max(0, $amount - 0.01));
+                $step = $this->fullIncrement($lot, max(0, $amount - 0.01));
                 if (!$this->greater($step, 0)) {
-                    $step = $this->incrementFor($lot, $amount);
+                    $step = $this->fullIncrement($lot, $amount);
                 }
                 if ($this->greater($step, 0)) {
                     return round($amount - $step, 2);
@@ -1087,7 +1087,7 @@ class LiveSaleBook
             'histories' => $histories,
             'events' => $events,
             'asking_price' => $current['asking_price'] ?? null,
-            'increment' => $current ? $this->incrementFor($current, (float) ($latest['amount'] ?? $current['starting_price'])) : null,
+            'increment' => $current ? $this->shownIncrement($current, (float) ($latest['amount'] ?? $current['starting_price'])) : null,
             'increment_override' => $current['increment_override'] ?? null,
             'has_pending' => $current ? count($current['pending']) > 0 : false,
             'warning' => $current['warning'] ?? null,
@@ -1186,6 +1186,12 @@ class LiveSaleBook
     }
 
     /**
+     * Distance up to the next asking price. A typed increment is added as it
+     * stands. A lot band snaps an off-ladder figure onto the next rung, so
+     * 2,450,000 in a 200,000 band advances to 2,600,000. The shared ladder,
+     * including the 50,000 step from 1,000,000, is only the fallback when
+     * that price sits in no band.
+     *
      * @param array<string, mixed> $lot
      */
     private function incrementFor(array $lot, float $price): float
@@ -1193,9 +1199,122 @@ class LiveSaleBook
         if ($lot['increment_override'] !== null) {
             return (float) $lot['increment_override'];
         }
-        $next = $this->nextLadderPrice($price);
-        $step = round($next - $price, 2);
+        $next = $this->nextConfiguredPrice($lot, $price);
+        if ($next !== null) {
+            $step = round($next - $price, 2);
+            return $step > 0 ? $step : 0.0;
+        }
+        $shared = $this->nextLadderPrice($price);
+        $step = round($shared - $price, 2);
         return $step > 0 ? $step : 0.0;
+    }
+
+    /**
+     * The figure shown as the increment: the typed step, otherwise the full
+     * band, otherwise the distance the shared ladder actually moves.
+     *
+     * @param array<string, mixed> $lot
+     */
+    private function shownIncrement(array $lot, float $price): float
+    {
+        if ($lot['increment_override'] !== null) {
+            return (float) $lot['increment_override'];
+        }
+        $configured = $this->configuredIncrement($lot, $price);
+        if ($configured !== null) {
+            return $configured;
+        }
+        return $this->incrementFor($lot, $price);
+    }
+
+    /**
+     * One full band step. Tied absentees step back by this, not by the shorter
+     * distance from an off-ladder figure to the next rung.
+     *
+     * @param array<string, mixed> $lot
+     */
+    private function fullIncrement(array $lot, float $price): float
+    {
+        if ($lot['increment_override'] !== null) {
+            return (float) $lot['increment_override'];
+        }
+        $configured = $this->configuredIncrement($lot, $price);
+        if ($configured !== null) {
+            return $configured;
+        }
+        $shared = $this->nextLadderPrice($price);
+        $step = round($shared - $price, 2);
+        return $step > 0 ? $step : 0.0;
+    }
+
+    /**
+     * The next rung of the lot's own bands strictly above $price.
+     * A rung is `from + n * increment` and stays below the row's `to`.
+     *
+     * @param array<string, mixed> $lot
+     */
+    private function nextConfiguredPrice(array $lot, float $price): ?float
+    {
+        $rules = CurrentBidCalculation::incrementsFrom($lot['bid_incremental_settings'] ?? null);
+        if ($rules === null) {
+            return null;
+        }
+        $best = null;
+        foreach ($rules as $interval) {
+            $interval = (array) $interval;
+            if (!isset($interval['from'], $interval['to'], $interval['increment'])) {
+                continue;
+            }
+            $from = (float) $interval['from'];
+            $to = (float) $interval['to'];
+            $step = (float) $interval['increment'];
+            if ($step <= 0 || $to <= $from) {
+                continue;
+            }
+            if ($price < $from) {
+                $candidate = $from;
+            } else {
+                $steps = (int) floor((($price - $from) / $step) + 1e-8);
+                $candidate = round($from + ($steps + 1) * $step, 2);
+                if ($candidate <= $price + 0.001) {
+                    $candidate = round($candidate + $step, 2);
+                }
+            }
+            if ($candidate < $from || $candidate >= $to) {
+                continue;
+            }
+            if ($best === null || $candidate < $best) {
+                $best = $candidate;
+            }
+        }
+        return $best;
+    }
+
+    /**
+     * The increment row that contains $price. The row's `to` is excluded,
+     * matching the timed-auction bands.
+     *
+     * @param array<string, mixed> $lot
+     */
+    private function configuredIncrement(array $lot, float $price): ?float
+    {
+        $rules = CurrentBidCalculation::incrementsFrom($lot['bid_incremental_settings'] ?? null);
+        if ($rules === null) {
+            return null;
+        }
+        foreach ($rules as $interval) {
+            $interval = (array) $interval;
+            if (!isset($interval['from'], $interval['to'], $interval['increment'])) {
+                continue;
+            }
+            $from = (float) $interval['from'];
+            $to = (float) $interval['to'];
+            $step = (float) $interval['increment'];
+            if ($price >= $from && $price < $to && $step > 0) {
+                return $step;
+            }
+        }
+        return null;
     }
 
     /**
