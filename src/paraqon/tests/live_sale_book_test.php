@@ -7,6 +7,7 @@ use Starsnet\Project\Paraqon\App\LiveSale\LiveSaleException;
 require __DIR__ . '/../src/App/LiveSale/LiveSaleException.php';
 require __DIR__ . '/../src/App/LiveSale/CurrentBidCalculation.php';
 require __DIR__ . '/../src/App/LiveSale/LiveSaleBook.php';
+require __DIR__ . '/../src/App/LiveSale/LiveSaleService.php';
 
 function check(bool $condition, string $message): void
 {
@@ -1108,5 +1109,47 @@ $bands->apply('accept_bid', ['amount' => 2450000, 'source' => 'floor', 'at' => '
 check($bands->publicPayload('t')['asking_price'] === 2600000.0, 'an off-ladder bid returns to the next rung');
 $bands->apply('set_increment', ['increment' => 50000, 'at' => 't']);
 check($bands->publicPayload('t')['asking_price'] === 2500000.0, 'a typed increment replaces the lot band');
+
+$ranges = \Starsnet\Project\Paraqon\App\LiveSale\LiveSaleService::class;
+check($ranges::expandPrinterRange('1-3,6,9,10-11') === [1, 2, 3, 6, 9, 10, 11], 'a printer range expands');
+check($ranges::expandPrinterRange('  ') === [], 'an empty range expands to nothing');
+check($ranges::expandPrinterRange('4, 2,4') === [2, 4], 'a printer range drops duplicates');
+expect(fn () => $ranges::expandPrinterRange('3-1'), '1-3,6,9,10-11');
+expect(fn () => $ranges::expandPrinterRange('1-3,,6'), '1-3,6,9,10-11');
+check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => [], 'non_high_value_paddle_numbers' => []], 'lot-1', 5) === true, 'an empty pair leaves every lot open');
+check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => ['lot-1'], 'non_high_value_paddle_numbers' => []], 'lot-9', 5) === true, 'listed lots do nothing until a paddle is listed');
+check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => ['lot-1'], 'non_high_value_paddle_numbers' => [9]], 'lot-1', 9) === true, 'a listed paddle can bid a non-high-value lot');
+check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => ['lot-1'], 'non_high_value_paddle_numbers' => [9]], 'lot-9', 9) === false, 'a listed paddle cannot bid a high-value lot');
+check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => [], 'non_high_value_paddle_numbers' => [9]], 'lot-1', 9) === false, 'listed paddles are closed out of every lot when none is exempt');
+check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => [], 'non_high_value_paddle_numbers' => [8]], 'lot-1', 9) === true, 'a paddle outside the list can bid every lot');
+check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => [], 'non_high_value_paddle_numbers' => [9]], 'lot-1', null) === true, 'a missing paddle is not on the list');
+
+$batchPaddles = $ranges::expandPrinterRange('1-40,80-139');
+$batchLots = $ranges::expandPrinterRange('101,102,110,118');
+check($batchPaddles === array_merge(range(1, 40), range(80, 139)), 'the jewelry paddle batch expands');
+check($batchLots === [101, 102, 110, 118], 'the jewelry lot batch expands');
+$batchOpen = [
+    '6ae98f45ee40cbcc320305ca',
+    '6ae98e1baead010c6702edba',
+    '6ae99704136389b7bb0f879f',
+    '6ae99bd5136389b7bb0f87a4',
+];
+$batchStore = [
+    'non_high_value_paddle_numbers' => $batchPaddles,
+    'non_high_value_lot_ids' => $batchOpen,
+];
+check($ranges::paddleMayBidLot($batchStore, $batchOpen[0], 1) === true, 'paddle 1 can bid lot 101');
+check($ranges::paddleMayBidLot($batchStore, 'other-lot', 1) === false, 'paddle 1 cannot bid another lot');
+check($ranges::paddleMayBidLot($batchStore, 'other-lot', 40) === false, 'paddle 40 is in the batch');
+check($ranges::paddleMayBidLot($batchStore, 'other-lot', 41) === true, 'paddle 41 is outside the batch');
+check($ranges::paddleMayBidLot($batchStore, 'other-lot', 79) === true, 'paddle 79 is outside the batch');
+check($ranges::paddleMayBidLot($batchStore, $batchOpen[2], 80) === true, 'paddle 80 can bid lot 110');
+check($ranges::paddleMayBidLot($batchStore, 'other-lot', 80) === false, 'paddle 80 cannot bid a high-value lot');
+check($ranges::paddleMayBidLot($batchStore, $batchOpen[3], 139) === true, 'paddle 139 can bid lot 118');
+check($ranges::paddleMayBidLot($batchStore, 'other-lot', 139) === false, 'paddle 139 cannot bid a high-value lot');
+check($ranges::paddleMayBidLot($batchStore, 'other-lot', 140) === true, 'paddle 140 is outside the batch');
+check($ranges::paddleMayBidLot($batchStore, 'other-lot', 101) === false, 'paddle 101 is in the batch');
+check($ranges::paddleMayBidLot($batchStore, $batchOpen[1], 8001) === true, 'paddle 8001 can bid lot 102');
+check($ranges::paddleMayBidLot($batchStore, 'other-lot', 8002) === true, 'paddle 8002 can bid every lot');
 
 echo "ok\n";

@@ -52,6 +52,28 @@ class LiveSaleController extends Controller
         );
     }
 
+    public function saveNonHighValueRanges(Request $request): array
+    {
+        $paddleRange = $request->input('non_high_value_paddle_range');
+        $lotRange = $request->input('non_high_value_lot_range');
+        // The admin client turns an empty string into null before this runs.
+        if ($paddleRange === null) {
+            $paddleRange = '';
+        }
+        if ($lotRange === null) {
+            $lotRange = '';
+        }
+        if (!is_string($paddleRange) || !is_string($lotRange)) {
+            abort(422, 'Use a range such as 1-3,6,9,10-11');
+        }
+
+        return $this->sales->saveNonHighValueRanges(
+            (string) $request->route('store_id'),
+            $paddleRange,
+            $lotRange
+        );
+    }
+
     private function actorId(): ?string
     {
         $user = Auth::guard('api')->user();

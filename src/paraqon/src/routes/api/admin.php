@@ -288,6 +288,7 @@ Route::group(
             function () {
                 Route::get('/{store_id}/book', [LiveSaleController::class, 'show']);
                 Route::post('/{store_id}/commands', [LiveSaleController::class, 'command']);
+                Route::post('/{store_id}/non-high-value', [LiveSaleController::class, 'saveNonHighValueRanges']);
             }
         );
     }

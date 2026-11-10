@@ -105,7 +105,13 @@ class AuctionRegistrationRequestController extends Controller
         if (is_null($form)) abort(404, 'AuctionRegistrationRequest not found');
 
         // Update AuctionRegistrationRequest
-        $form->update($request->all());
+        $attributes = $request->all();
+        if (array_key_exists('bidding_channel', $attributes)) {
+            $attributes['bidding_channel'] = AuctionRegistrationRequest::channel(
+                $attributes['bidding_channel']
+            );
+        }
+        $form->update($attributes);
 
         return ['message' => 'Updated AuctionRegistrationRequest'];
     }

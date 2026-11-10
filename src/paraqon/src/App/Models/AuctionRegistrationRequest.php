@@ -47,12 +47,13 @@ class AuctionRegistrationRequest extends Model
     protected $hidden = ['id'];
 
     /**
-     * Room, phone, or online. A missing value is online. The paddle number is not a channel.
+     * Room, phone, absentee, or online. A missing value is online.
+     * The paddle number is not a channel.
      */
     public static function channel(mixed $value): string
     {
         $value = is_string($value) ? $value : null;
-        return in_array($value, ['online', 'room', 'phone'], true) ? $value : 'online';
+        return in_array($value, ['online', 'room', 'phone', 'absentee'], true) ? $value : 'online';
     }
 
     // -----------------------------

@@ -78,6 +78,13 @@ class LiveSaleService
             $ready = $payload;
             try {
                 $ready = $this->preparePayload($storeId, $command, $payload, $customerId);
+                if ($command === 'submit_online_bid') {
+                    $this->refuseHighValueCustomerBid(
+                        $store,
+                        (string) ($book->currentLotId() ?? ''),
+                        $ready['paddle_id'] ?? null
+                    );
+                }
                 if ($command === 'open_lot') {
                     $lotId = (string) ($ready['lot_id'] ?? $book->currentLotId() ?? '');
                     if ($lotId !== '') {
@@ -205,6 +212,7 @@ class LiveSaleService
                 'lot_number' => (int) $lot->lot_number,
                 'product_id' => $lot->product_id ? (string) $lot->product_id : null,
                 'title' => $title,
+                'brand' => $this->plain($lot->brand),
                 'starting_price' => $lot->starting_price,
                 'reserve_price' => $lot->reserve_price,
                 'is_no_reserve_lot' => (bool) ($lot->is_no_reserve_lot ?? false),
@@ -285,6 +293,165 @@ class LiveSaleService
     {
         $byLot = $this->advances($storeId, [$lotId => true], $this->paddleByCustomer($storeId));
         return $byLot[$lotId] ?? [];
+    }
+
+    /**
+     * A paddle on the non-high-value list can bid only the exempt lots.
+     * Clerk bids do not call this. An empty paddle list leaves every lot open.
+     */
+    public function assertCustomerMayBidLot(Store $store, string $lotId, string $customerId): void
+    {
+        $registration = $this->registrationForCustomer((string) $store->_id, $customerId);
+        $paddle = $registration ? $registration->paddle_id : null;
+        try {
+            $this->refuseHighValueCustomerBid($store, $lotId, $paddle);
+        } catch (LiveSaleException $e) {
+            abort(422, $e->getMessage());
+        }
+    }
+
+    /**
+     * The listed paddles cannot bid high-value lots. The listed lots stay open
+     * to every paddle. Both empty leaves every lot open. A timed auction cannot
+     * call this; the shared store save does not.
+     *
+     * @return array<string, mixed>
+     */
+    public function saveNonHighValueRanges(string $storeId, string $paddleRange, string $lotRange): array
+    {
+        $store = $this->requireLiveStore($storeId);
+        $paddleRaw = trim($paddleRange);
+        $lotRaw = trim($lotRange);
+        try {
+            $paddles = self::expandPrinterRange($paddleRaw);
+            $numbers = self::expandPrinterRange($lotRaw);
+        } catch (LiveSaleException $e) {
+            abort(422, $e->getMessage());
+        }
+        $ids = $this->exemptLotIds($store, $numbers);
+        $store->non_high_value_paddle_range = $paddleRaw;
+        $store->non_high_value_lot_range = $lotRaw;
+        $store->non_high_value_paddle_numbers = $paddles;
+        $store->non_high_value_lot_ids = $ids;
+        $store->unset([
+            'high_value_paddle_range',
+            'high_value_lot_range',
+            'high_value_paddle_numbers',
+            'high_value_lot_ids',
+        ]);
+        $store->save();
+        return [
+            'non_high_value_paddle_range' => $paddleRaw,
+            'non_high_value_lot_range' => $lotRaw,
+            'non_high_value_paddle_numbers' => $paddles,
+            'non_high_value_lot_ids' => $ids,
+        ];
+    }
+
+    /**
+     * @param array<int, int> $numbers
+     * @return array<int, string>
+     */
+    private function exemptLotIds(Store $store, array $numbers): array
+    {
+        $wanted = [];
+        foreach ($numbers as $number) {
+            $wanted[$number] = true;
+        }
+        if ($wanted === []) {
+            return [];
+        }
+        $ids = [];
+        $lots = AuctionLot::where('store_id', (string) $store->_id)
+            ->where('status', '!=', Status::DELETED->value)
+            ->get(['_id', 'lot_number']);
+        foreach ($lots as $lot) {
+            if ($lot->lot_number === null || $lot->lot_number === '') {
+                continue;
+            }
+            $number = (int) $lot->lot_number;
+            if ($number > 0 && isset($wanted[$number])) {
+                $ids[] = (string) $lot->_id;
+            }
+        }
+        return array_values(array_unique($ids));
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    public static function expandPrinterRange(string $raw): array
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return [];
+        }
+        $parts = preg_split('/\s*,\s*/', $raw);
+        if (!is_array($parts)) {
+            throw new LiveSaleException('Use a range such as 1-3,6,9,10-11');
+        }
+        $numbers = [];
+        foreach ($parts as $part) {
+            if ($part === '') {
+                throw new LiveSaleException('Use a range such as 1-3,6,9,10-11');
+            }
+            if (preg_match('/^(\d+)$/', $part, $single) === 1) {
+                $value = (int) $single[1];
+                if ($value < 1) {
+                    throw new LiveSaleException('Use a range such as 1-3,6,9,10-11');
+                }
+                $numbers[$value] = true;
+            } elseif (preg_match('/^(\d+)\s*-\s*(\d+)$/', $part, $span) === 1) {
+                $from = (int) $span[1];
+                $to = (int) $span[2];
+                if ($from < 1 || $to < $from || ($to - $from) > 10000) {
+                    throw new LiveSaleException('Use a range such as 1-3,6,9,10-11');
+                }
+                for ($n = $from; $n <= $to; $n++) {
+                    $numbers[$n] = true;
+                }
+            } else {
+                throw new LiveSaleException('Use a range such as 1-3,6,9,10-11');
+            }
+            if (count($numbers) > 10000) {
+                throw new LiveSaleException('Use a range such as 1-3,6,9,10-11');
+            }
+        }
+        $list = array_map('intval', array_keys($numbers));
+        sort($list);
+        return $list;
+    }
+
+    /**
+     * A listed paddle can bid only an exempt lot. Any other paddle can bid
+     * every lot. An empty paddle list leaves every lot open.
+     *
+     * @param array<string, mixed> $store
+     */
+    public static function paddleMayBidLot(array $store, string $lotId, mixed $paddleId): bool
+    {
+        $paddle = (int) $paddleId;
+        $blocked = false;
+        if ($paddle >= 1) {
+            foreach (self::listValue($store['non_high_value_paddle_numbers'] ?? []) as $item) {
+                if ((int) $item === $paddle) {
+                    $blocked = true;
+                    break;
+                }
+            }
+        }
+        if (!$blocked) {
+            return true;
+        }
+        if ($lotId === '') {
+            return false;
+        }
+        foreach (self::listValue($store['non_high_value_lot_ids'] ?? []) as $id) {
+            if ((string) $id === $lotId) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -613,9 +780,9 @@ class LiveSaleService
     private function present(LiveSaleBook $book, string $at, bool $clerk, ?string $customerId): array
     {
         if ($clerk) {
-            return $book->clerkPayload($at);
+            return $this->attachBrands($book->clerkPayload($at), (string) $book->toArray()['store_id']);
         }
-        $payload = $book->publicPayload($at);
+        $payload = $this->attachBrands($book->publicPayload($at), (string) $book->toArray()['store_id']);
         if ($customerId !== null && $customerId !== '') {
             $payload['you'] = $book->viewer($customerId);
             $payload = $book->forViewer($payload, $customerId);
@@ -638,6 +805,32 @@ class LiveSaleService
         }
         foreach ($payload['lots'] as $index => $row) {
             $payload['lots'][$index]['permission_requests'] = $saved[(string) $row['_id']] ?? [];
+        }
+        return $payload;
+    }
+
+    /**
+     * The stored book keeps the catalogue from the moment the sale started.
+     * Brand can be filled in later, so the payload reads it from the lot.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function attachBrands(array $payload, string $storeId): array
+    {
+        if ($storeId === '' || !isset($payload['lots']) || !is_array($payload['lots'])) {
+            return $payload;
+        }
+        $brands = [];
+        $lots = AuctionLot::where('store_id', $storeId)->get(['_id', 'brand']);
+        foreach ($lots as $lot) {
+            $brands[(string) $lot->_id] = $this->plain($lot->brand);
+        }
+        foreach ($payload['lots'] as $index => $row) {
+            $id = (string) ($row['_id'] ?? '');
+            if ($id !== '' && array_key_exists($id, $brands)) {
+                $payload['lots'][$index]['brand'] = $brands[$id];
+            }
         }
         return $payload;
     }
@@ -677,6 +870,31 @@ class LiveSaleService
             return (array) $value;
         }
         return [];
+    }
+
+    private function refuseHighValueCustomerBid(Store $store, string $lotId, mixed $paddleId): void
+    {
+        $allowed = self::paddleMayBidLot([
+            'non_high_value_lot_ids' => $store->non_high_value_lot_ids ?? [],
+            'non_high_value_paddle_numbers' => $store->non_high_value_paddle_numbers ?? [],
+        ], $lotId, $paddleId);
+        if (!$allowed) {
+            throw new LiveSaleException('This paddle cannot bid on this lot');
+        }
+    }
+
+    /**
+     * @return array<int, mixed>
+     */
+    private static function listValue(mixed $value): array
+    {
+        if ($value instanceof \Traversable) {
+            $value = iterator_to_array($value);
+        }
+        if (is_object($value) && method_exists($value, 'getArrayCopy')) {
+            $value = $value->getArrayCopy();
+        }
+        return is_array($value) ? array_values($value) : [];
     }
 
     private function instant(mixed $value): ?string

@@ -309,6 +309,7 @@ class LiveSaleBook
                 'lot_number' => (int) ($lot['lot_number'] ?? 0),
                 'product_id' => $lot['product_id'] ?? null,
                 'title' => $title,
+                'brand' => $lot['brand'] ?? null,
                 'starting_price' => $this->money($lot['starting_price'] ?? 0),
                 'reserve_price' => $this->money($lot['reserve_price'] ?? 0),
                 'is_no_reserve_lot' => (bool) ($lot['is_no_reserve_lot'] ?? false)
@@ -991,6 +992,7 @@ class LiveSaleBook
                 'store_id' => $this->storeId,
                 'lot_number' => $lot['lot_number'],
                 'title' => $lot['title'],
+                'brand' => $lot['brand'] ?? null,
                 'starting_price' => $lot['starting_price'],
                 'current_bid' => $lot['state'] === 'sold'
                     ? $lot['hammer_price']
