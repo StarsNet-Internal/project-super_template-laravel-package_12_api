@@ -217,9 +217,13 @@ check($sale->publicPayload('t')['lots'][0]['current_bid'] === 1000.0, 'hammer is
 check($sale->publicPayload('t')['lots'][0]['hammer_paddle_label'] === 'Paddle #33', 'the paddle is recorded when the lot is sold');
 
 $sale->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't10']);
-$sale->apply('undo_latest_bid', ['at' => 't11']);
-check($sale->clerkPayload('t')['undo']['paddle_label'] === 'Absentee bid', 'reopen lets the clerk undo the new latest bid');
-check(count($sale->publicPayload('t')['histories']) === 1, 'undo removes only the latest bid');
+check($sale->publicPayload('t')['histories'] === [], 'reopen clears the bid history');
+check($sale->publicPayload('t')['asking_price'] === 800.0, 'reopen returns to the opening price');
+check($sale->publicPayload('t')['lots'][0]['current_bid'] == 0, 'reopen clears the hammer from the ladder');
+check($sale->publicPayload('t')['lots'][0]['live_state'] === 'open', 'reopen puts the lot back on the block');
+check($sale->clerkPayload('t')['undo'] === null, 'reopen leaves nothing to undo');
+check($sale->toArray()['lots'][0]['advance'] === $advanceBefore, 'reopen keeps the absentee maximum');
+expect(fn () => $sale->apply('undo_latest_bid', ['at' => 't11']), 'no bid to undo');
 
 expect(fn () => $sale->apply('end_sale', ['at' => 't']), 'on the block');
 $sale->apply('pass', ['at' => 't12']);
@@ -686,7 +690,8 @@ $settle->apply('accept_bid', [
 ]);
 $settle->apply('sell', ['at' => 't']);
 $settle->apply('reopen', ['lot_id' => 'lot-3', 'at' => 't']);
-$settle->apply('undo_latest_bid', ['at' => 't']);
+check($settle->publicPayload('t')['histories'] === [], 'reopen clears the sold lot history');
+check($settle->publicPayload('t')['asking_price'] === 400.0, 'reopen returns the sold lot to its opening price');
 $settle->apply('pass', ['at' => 't']);
 $settle->apply('prepare_lot', ['lot_id' => 'lot-4', 'at' => 't']);
 $settle->apply('open_lot', ['at' => 't']);
@@ -704,7 +709,7 @@ check($settlement[0]['result'] === 'sold' && $settlement[0]['hammer_price'] === 
 check($settlement[0]['paddle_id'] === 10 && $settlement[0]['customer_id'] === 'buyer-10', 'a sold lot keeps the paddle and buyer');
 check($settlement[1]['result'] === 'passed' && $settlement[1]['hammer_price'] === null, 'a passed lot has no hammer');
 check($settlement[1]['customer_id'] === null && $settlement[1]['paddle_id'] === null, 'a passed lot has no buyer');
-check($settlement[2]['result'] === 'passed' && $settlement[2]['hammer_price'] === null, 'a sold lot that is reopened and undone is not a hammer');
+check($settlement[2]['result'] === 'passed' && $settlement[2]['hammer_price'] === null, 'a sold lot that is reopened and passed is not a hammer');
 check($settlement[3]['result'] === 'sold' && $settlement[3]['customer_id'] === null, 'a floor hammer without a customer stays empty');
 check($settlement[3]['paddle_id'] === 7, 'that hammer still names the paddle');
 check($settle->publicPayload('t')['lots'][0]['hammer_paddle_label'] === 'Paddle #10', 'the room sees the paddle recorded at the hammer');
@@ -1151,5 +1156,46 @@ check($ranges::paddleMayBidLot($batchStore, 'other-lot', 140) === true, 'paddle 
 check($ranges::paddleMayBidLot($batchStore, 'other-lot', 101) === false, 'paddle 101 is in the batch');
 check($ranges::paddleMayBidLot($batchStore, $batchOpen[1], 8001) === true, 'paddle 8001 can bid lot 102');
 check($ranges::paddleMayBidLot($batchStore, 'other-lot', 8002) === true, 'paddle 8002 can bid every lot');
+
+$later = book();
+$later->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$later->apply('open_lot', ['at' => 't', 'advances' => []]);
+$later->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 4,
+    'customer_id' => 'floor-4',
+    'at' => 't',
+]);
+$later->apply('sell', ['paddle_id' => 4, 'customer_id' => 'floor-4', 'at' => 't']);
+$later->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't']);
+$later->apply('open_lot', ['at' => 't']);
+$later->apply('pass', ['at' => 't']);
+$later->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't']);
+check($later->currentLotId() === 'lot-1', 'reopen makes the earlier sold lot current');
+check($later->publicPayload('t')['asking_price'] === 800.0, 'reopening an earlier lot returns to its opening price');
+check($later->publicPayload('t')['histories'] === [], 'reopening an earlier lot clears its bid history');
+check($later->publicPayload('t')['lots'][0]['live_state'] === 'open', 'the earlier lot is back on the block');
+check($later->publicPayload('t')['lots'][1]['live_state'] === 'passed', 'the later lot stays passed');
+
+$skipped = book();
+$skipped->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$skipped->apply('pass', ['at' => 't']);
+expect(fn () => $skipped->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't']), 'never opened');
+
+$busy = book();
+$busy->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$busy->apply('open_lot', ['at' => 't', 'advances' => []]);
+$busy->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 4,
+    'customer_id' => 'floor-4',
+    'at' => 't',
+]);
+$busy->apply('sell', ['paddle_id' => 4, 'customer_id' => 'floor-4', 'at' => 't']);
+$busy->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't']);
+$busy->apply('open_lot', ['at' => 't']);
+expect(fn () => $busy->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't']), 'on the block');
 
 echo "ok\n";

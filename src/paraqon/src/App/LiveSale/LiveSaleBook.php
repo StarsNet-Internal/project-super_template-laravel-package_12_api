@@ -948,6 +948,10 @@ class LiveSaleBook
         if (!in_array($lot['state'], ['sold', 'passed'], true)) {
             throw new LiveSaleException('Only a sold or passed lot can be reopened');
         }
+        // Preparing then Close never sets an opening price. That lot was not chanted.
+        if ($lot['opening_asking'] === null) {
+            throw new LiveSaleException('That lot was never opened');
+        }
         $this->requireNoLotOnTheBlock($lotId);
         $lot['state'] = 'open';
         $lot['warning'] = null;
@@ -955,10 +959,9 @@ class LiveSaleBook
         $lot['hammer_price'] = null;
         $lot['hammer_paddle_id'] = null;
         $lot['hammer_customer_id'] = null;
-        $current = $this->currentBid($lot);
-        $lot['asking_price'] = $current === null
-            ? (float) ($lot['opening_asking'] ?? $lot['starting_price'])
-            : round($current + $this->incrementFor($lot, $current), 2);
+        // The chant starts again. Earlier accepted bids are not kept as history.
+        $lot['bids'] = [];
+        $lot['asking_price'] = (float) ($lot['opening_asking'] ?? $lot['starting_price']);
         $this->lots[$lotId] = $lot;
         $this->currentLotId = $lotId;
         return ['lot_id' => $lotId];

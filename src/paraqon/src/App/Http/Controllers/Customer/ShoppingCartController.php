@@ -181,6 +181,7 @@ class ShoppingCartController extends Controller
             ],
             'service_charge' => number_format($totalServiceCharge, 2, '.', ''),
             'credit_card_charge_fee' => number_format($creditCardChargeFee, 2, '.', ''),
+            'credit_card_charge_percentage' => $creditCardChargePercentage,
             'deposit' => number_format($systemOrderDeposit, 2, '.', ''),
             'storage_fee' => '0.00',
             'shipping_fee' => number_format($shippingFee, 2, '.', '')
@@ -464,6 +465,7 @@ class ShoppingCartController extends Controller
             ],
             'service_charge' => number_format($totalServiceCharge, 2, '.', ''),
             'credit_card_charge_fee' => number_format($creditCardChargeFee, 2, '.', ''),
+            'credit_card_charge_percentage' => $creditCardChargePercentage,
             'deposit' => number_format($systemOrderDeposit, 2, '.', ''),
             'storage_fee' => '0.00',
             'shipping_fee' => number_format($shippingFee, 2, '.', '')

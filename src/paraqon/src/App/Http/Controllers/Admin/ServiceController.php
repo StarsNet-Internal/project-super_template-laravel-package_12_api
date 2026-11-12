@@ -573,7 +573,8 @@ class ServiceController extends Controller
         Store $store,
         Customer $customer,
         Collection $winningLots,
-        Collection $deposits
+        Collection $deposits,
+        bool $holdOnlineDeposits = false
     ): Order {
         // Create ShoppingCartItem(s) from each AuctionLot
         foreach ($winningLots as $lot) {
@@ -629,6 +630,14 @@ class ServiceController extends Controller
 
         // Get total price
         $orderTotalPrice = $itemTotalPrice;
+
+        // A live online deposit stays authorized. Staff cancel it in Stripe.
+        // The order then charges the full price. An offline deposit is still applied.
+        if ($holdOnlineDeposits) {
+            $deposits = $deposits
+                ->filter(fn ($deposit) => $deposit->payment_method !== OrderPaymentMethod::ONLINE->value)
+                ->values();
+        }
 
         // Calculate totalCapturedDeposit
         $totalCustomerOnHoldDepositAmount = $deposits->sum('amount');
@@ -819,17 +828,36 @@ class ServiceController extends Controller
         if ($store->status === Status::DELETED->value) abort(200, "Store is already DELETED. Skipping generating auction order sequences.");
 
         // An ended live book is the sale record. Passed lots have no buyer, and a
-        // hammer that was reopened and then undone is not invoiced. Deposit capture
-        // follows those final hammers. This write is once, after the chant, and it
-        // does not touch bid history.
+        // hammer that was reopened and then undone is not invoiced. Commission
+        // comes from the confirm sheet, as on a timed auction. This write is
+        // once, after the chant, and it does not touch bid history.
+        $clientLots = [];
+        foreach ($request->input('results', []) as $result) {
+            foreach ($result['lots'] ?? [] as $clientLot) {
+                if (!empty($clientLot['lot_id'])) {
+                    $clientLots[(string) $clientLot['lot_id']] = $clientLot;
+                }
+            }
+        }
         $settlement = app(LiveSaleService::class)->settlementForOrders((string) $store->_id);
         if ($settlement !== null) {
             foreach ($settlement['lots'] as $lot) {
                 if ($lot['result'] === 'sold') {
+                    $hammer = (float) $lot['hammer_price'];
+                    $clientLot = $clientLots[(string) $lot['lot_id']] ?? null;
+                    $auctionLot = AuctionLot::find($lot['lot_id']);
+                    $rate = $auctionLot ? (float) ($auctionLot->commission_rate ?? 0) : 0;
+                    $commission = is_array($clientLot) && array_key_exists('commission', $clientLot)
+                        ? (float) $clientLot['commission']
+                        : (float) floor($hammer * $rate / 100);
+                    $soldPrice = is_array($clientLot) && array_key_exists('sold_price', $clientLot)
+                        ? (float) $clientLot['sold_price']
+                        : $hammer + $commission;
                     AuctionLot::where('_id', $lot['lot_id'])->update([
                         'winning_bid_customer_id' => $lot['customer_id'],
-                        'current_bid' => $lot['hammer_price'],
-                        'sold_price' => $lot['hammer_price'],
+                        'current_bid' => $hammer,
+                        'sold_price' => $soldPrice,
+                        'commission' => $commission,
                     ]);
                     continue;
                 }
@@ -858,8 +886,12 @@ class ServiceController extends Controller
             ->where('current_deposit_status', 'on-hold')
             ->get();
 
-        // Full-refund all Deposit(s) from all non-winning Customer(s)
+        // Full-refund offline deposits from non-winning customers. An online
+        // deposit stays authorized until staff cancel it in Stripe.
         foreach ($allFullRefundDeposits as $deposit) {
+            if ($deposit->payment_method === OrderPaymentMethod::ONLINE->value) {
+                continue;
+            }
             $this->cancelDeposit($deposit);
         }
 
@@ -907,8 +939,8 @@ class ServiceController extends Controller
                     ->where('current_deposit_status', 'on-hold')
                     ->get();
 
-                // Create Order, and capture/refund deposits
-                $this->createAuctionOrder($store, $customer, $winningLots, $customerOnHoldDeposits);
+                // Create Order. Online deposits stay authorized.
+                $this->createAuctionOrder($store, $customer, $winningLots, $customerOnHoldDeposits, true);
 
                 $generatedOrderCount++;
             } catch (\Throwable $th) {

@@ -219,9 +219,13 @@ class OrderController extends Controller
         $total = (float) $document->calculations['price']['total'];
         $deposit = (float) $document->calculations['deposit'];
         $totalPrice = is_nan($total) || is_nan($deposit) ? NAN : number_format($total + $deposit, 2, '.', ',');
-        $totalPriceText = ($document->payment_method == "ONLINE" && $invoicePrefix == 'OA1')
-            ? "{$totalPrice} (includes credit card charge of 3.5%)"
-            : $totalPrice;
+        $cardFee = (float) ($document->calculations['credit_card_charge_fee'] ?? 0);
+        $cardPercent = (float) ($document->calculations['credit_card_charge_percentage'] ?? 0);
+        $totalPriceText = ($document->payment_method == "ONLINE" && $cardFee > 0 && $cardPercent > 0)
+            ? "{$totalPrice} (includes credit card charge of {$cardPercent}%)"
+            : (($document->payment_method == "ONLINE" && $invoicePrefix == 'OA1')
+                ? "{$totalPrice} (includes credit card charge of 3.5%)"
+                : $totalPrice);
         $depositText = number_format($deposit, 2, '.', ',');
         $formattedDepositText = $deposit > 0 ? "($depositText)" : $depositText;
         $amountPayableText = number_format($total, 2, '.', ',');

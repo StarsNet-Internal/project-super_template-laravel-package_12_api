@@ -175,6 +175,15 @@ class AuctionRegistrationRequestController extends Controller
             }
         }
 
+        // A live-sale registration is HKD 500,000. A lot permission deposit
+        // keeps the store figure above. A timed auction keeps the posted amount.
+        if (is_null($auctionLotID)) {
+            $store = Store::find($form->store_id);
+            if (!is_null($store) && ($store->auction_type ?? null) === 'LIVE') {
+                $amount = 500000;
+            }
+        }
+
         switch ($paymentMethod) {
             case 'ONLINE':
                 // Create Deposit
@@ -269,6 +278,11 @@ class AuctionRegistrationRequestController extends Controller
         if (is_null($form)) abort(404, 'Auction Registration Request not found');
         if ($form->status != Status::ACTIVE->value) abort(404, 'AuctionRegistrationRequest not found');
         if ($form->requested_by_customer_id != $customer->_id) abort(404, 'You do not have the permission to update this AuctionRegistrationRequest');
+
+        $store = Store::find($form->store_id);
+        if (!is_null($store) && ($store->auction_type ?? null) === 'LIVE') {
+            $amount = 500000;
+        }
 
         // Create Deposit
         /** @var Deposit $deposit */
