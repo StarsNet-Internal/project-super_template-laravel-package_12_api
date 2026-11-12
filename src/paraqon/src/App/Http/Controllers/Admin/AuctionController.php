@@ -139,16 +139,10 @@ class AuctionController extends Controller
         }
 
         if ($store->auction_type == 'ONLINE') {
-            /** @var ?int $latestPaddleId */
-            $latestPaddleId = AuctionRegistrationRequest::where('store_id', $request->route('store_id'))
-                ->whereNotNull('paddle_id')
-                ->orderByDesc('paddle_id')
-                ->value('paddle_id');
-
-            /** @var int $newPaddleId */
-            $newPaddleId = is_null($latestPaddleId)
-                ? ($store->paddle_number_start_from ?? 1)
-                : $latestPaddleId + 1;
+            $newPaddleId = AuctionRegistrationRequest::nextPaddleId(
+                $request->route('store_id'),
+                $store->paddle_number_start_from
+            );
 
             /** @var AuctionRegistrationRequest $newForm */
             $newForm = AuctionRegistrationRequest::create([

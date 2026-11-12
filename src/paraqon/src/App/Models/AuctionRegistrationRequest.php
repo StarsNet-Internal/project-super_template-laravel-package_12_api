@@ -56,6 +56,37 @@ class AuctionRegistrationRequest extends Model
         return in_array($value, ['online', 'room', 'phone', 'absentee'], true) ? $value : 'online';
     }
 
+    /**
+     * Next automatic paddle. A staff paddle below paddle_number_start_from
+     * does not pull the next online number down.
+     */
+    public static function nextPaddleNumber(iterable $paddleIds, mixed $startFrom): int
+    {
+        $start = is_numeric($startFrom) ? (int) $startFrom : 1;
+        $latest = null;
+        foreach ($paddleIds as $id) {
+            if (!is_numeric($id)) {
+                continue;
+            }
+            $number = (int) $id;
+            if ($latest === null || $number > $latest) {
+                $latest = $number;
+            }
+        }
+        if ($latest === null) {
+            return $start;
+        }
+        return max($latest + 1, $start);
+    }
+
+    public static function nextPaddleId(mixed $storeId, mixed $startFrom): int
+    {
+        return static::nextPaddleNumber(
+            static::where('store_id', $storeId)->pluck('paddle_id'),
+            $startFrom
+        );
+    }
+
     // -----------------------------
     // Relationship Begins
     // -----------------------------

@@ -99,19 +99,10 @@ class DepositController extends Controller
                         if (is_numeric($request->paddle_id)) {
                             $newPaddleID = $request->paddle_id;
                         } else if (is_null($auctionRegistrationRequest->paddle_id)) {
-                            $allPaddles = AuctionRegistrationRequest::where('store_id', $storeID)
-                                ->pluck('paddle_id')
-                                ->filter(fn($id) => is_numeric($id))
-                                ->map(fn($id) => (int) $id)
-                                ->sort()
-                                ->values();
-                            $latestPaddleId = $allPaddles->last();
-
-                            if (is_null($latestPaddleId)) {
-                                $newPaddleID = $store->paddle_number_start_from ?? 1;
-                            } else {
-                                $newPaddleID = $latestPaddleId + 1;
-                            }
+                            $newPaddleID = AuctionRegistrationRequest::nextPaddleId(
+                                $storeID,
+                                $store->paddle_number_start_from
+                            );
                         } else {
                             $newPaddleID = $auctionRegistrationRequest->paddle_id;
                         }
