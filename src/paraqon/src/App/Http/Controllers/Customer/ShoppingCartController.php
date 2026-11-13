@@ -40,11 +40,13 @@ use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 
 // Concerns
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\ReadsParaqonConfiguration;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\RedeemsExpressDiscount;
 
 class ShoppingCartController extends Controller
 {
     use DistributePointTrait;
     use ReadsParaqonConfiguration;
+    use RedeemsExpressDiscount;
 
     private function getStore(string $storeID): ?Store
     {
@@ -630,8 +632,8 @@ class ShoppingCartController extends Controller
         ];
         $order = $customer->createOrder($orderAttributes, $store);
 
-        // Discount redemption is deferred to payment success (Stripe callback for
-        // online, offline-proof approval) via RedeemsExpressDiscount — not here.
+        // Positive totals redeem on Stripe success or offline-proof approval.
+        // A zero total is paid at checkout and redeemed on the return below.
 
         // Create OrderCartItem(s)
         $checkoutItems = collect($checkoutDetails['cart_items'])
@@ -715,6 +717,10 @@ class ShoppingCartController extends Controller
                     return ['message' => 'Invalid payment_method'];
             }
         }
+
+        // Zero total is settled here (discount or deposit covered it). Redeem any
+        // attached code now, the same way marketplace auto-paid orders do.
+        $this->redeemExpressDiscountForOrder($order);
 
         return [
             'message' => 'Submitted Order successfully',

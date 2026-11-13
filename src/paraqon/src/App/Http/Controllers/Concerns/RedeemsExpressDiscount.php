@@ -8,8 +8,9 @@ trait RedeemsExpressDiscount
 {
     /**
      * Redeem an auction order's discount code on the Express marketplace backend,
-     * once the order is actually PAID (online Stripe callback / offline-proof
-     * approval) — mirroring how marketplace orders redeem only on payment success.
+     * once the order is actually PAID (zero-total checkout, online Stripe
+     * callback, or offline-proof approval) — mirroring how marketplace orders
+     * redeem only on payment success.
      *
      * Uses a static shared secret (MARKETPLACE_INTERNAL_SECRET) rather than a user
      * token, since the payment-success context has no customer session. Best-effort;
