@@ -19,11 +19,14 @@ use App\Models\Alias;
 use App\Models\Category;
 use App\Models\Product;
 use App\Models\Store;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
 class ProductManagementController extends Controller
 {
+    use CachesEndedAuctionData;
+
     /** @var Store $store */
     protected $store;
 
@@ -304,7 +307,7 @@ class ProductManagementController extends Controller
 
         // Cache response if store is ended
         if ($storeEnded) {
-            $cached = Cache::store('redis')->rememberForever($cacheKey, $compute);
+            $cached = Cache::store('redis')->remember($cacheKey, $this->endedAuctionCacheTtl(), $compute);
             // Re-apply per-customer is_watching so cached result is not tied to the user who filled the cache
             $watchingAuctionIDs = WatchlistItem::where('customer_id', $this->customer()->id)
                 ->where('item_type', 'auction-lot')

@@ -165,8 +165,8 @@ class AuctionLotController extends Controller
     }
 
     /**
-     * Ended-auction lots for one store: final data, cached forever under a stable
-     * per-store key. Reused across the unfiltered and single-store requests.
+     * Ended-auction lots for one store: final data, cached for 24 hours under a
+     * stable per-store key. Reused across the unfiltered and single-store requests.
      */
     private function endedLotsForStore(string $storeId): Collection
     {

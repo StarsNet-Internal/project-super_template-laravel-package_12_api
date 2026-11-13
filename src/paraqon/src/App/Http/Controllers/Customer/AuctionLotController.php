@@ -68,7 +68,7 @@ class AuctionLotController extends Controller
                 $auctionLot = $cached;
             } else {
                 $auctionLot = $this->buildAuctionLotDetails($auctionLotId);
-                Cache::store('redis')->forever($cacheKey, $auctionLot);
+                Cache::store('redis')->put($cacheKey, $auctionLot, $this->endedAuctionCacheTtl());
             }
         } else {
             $auctionLot = $this->buildAuctionLotDetails($auctionLotId);

@@ -16,6 +16,12 @@ trait CachesEndedAuctionData
      */
     protected int $cacheChunkBytes = 4194304; // 4 MB
 
+    /** Ended-auction payloads expire so Redis does not keep them forever. */
+    protected function endedAuctionCacheTtl(): \DateTimeInterface
+    {
+        return now()->addHours(24);
+    }
+
     protected function mongoCacheKey(string $suffix): string
     {
         $mongoDbName = config('database.connections.mongodb.database', 'default_database');
@@ -25,7 +31,7 @@ trait CachesEndedAuctionData
 
     /**
      * Only cache when the related auction/lot has ended (ended data is final and
-     * safe to serve forever). While still live, always recompute.
+     * safe to serve for 24 hours). While still live, always recompute.
      *
      * @template T
      * @param  callable(): T  $compute
@@ -49,25 +55,26 @@ trait CachesEndedAuctionData
     }
 
     /**
-     * Serialize and store a value forever, splitting it into byte-bounded chunks
-     * when it is too large for a single Redis key. A manifest key records how
-     * many chunks to read back.
+     * Serialize and store a value for 24 hours, splitting it into byte-bounded
+     * chunks when it is too large for a single Redis key. A manifest key records
+     * how many chunks to read back. Every piece of one payload shares one expiry.
      */
     protected function putChunkedToCache(string $key, mixed $value): void
     {
         $store = Cache::store('redis');
         $serialized = serialize($value);
+        $ttl = $this->endedAuctionCacheTtl();
 
         if (strlen($serialized) <= $this->cacheChunkBytes) {
-            $store->forever($key . ':manifest', ['chunked' => false, 'data' => $serialized]);
+            $store->put($key . ':manifest', ['chunked' => false, 'data' => $serialized], $ttl);
             return;
         }
 
         $chunks = str_split($serialized, $this->cacheChunkBytes);
         foreach ($chunks as $index => $chunk) {
-            $store->forever($key . ':chunk:' . $index, $chunk);
+            $store->put($key . ':chunk:' . $index, $chunk, $ttl);
         }
-        $store->forever($key . ':manifest', ['chunked' => true, 'count' => count($chunks)]);
+        $store->put($key . ':manifest', ['chunked' => true, 'count' => count($chunks)], $ttl);
     }
 
     /**
@@ -147,12 +154,12 @@ trait CachesEndedAuctionData
     }
 
     /**
-     * Read a value from the chunked cache, or compute and store it forever. Cold
-     * computes are guarded by a short lock so a concurrent cache miss runs the
-     * (potentially heavy) compute once, not once per request.
+     * Read a value from the chunked cache, or compute and store it for 24 hours.
+     * Cold computes are guarded by a short lock so a concurrent cache miss runs
+     * the (potentially heavy) compute once, not once per request.
      *
-     * For immutable data only — the cached value is never invalidated, so two
-     * writers racing on a cold key produce byte-identical chunks anyway.
+     * For immutable data only — two writers racing on a cold key produce
+     * byte-identical chunks anyway. The entry expires after 24 hours.
      *
      * @template T
      * @param  callable(): T  $compute
@@ -221,7 +228,7 @@ trait CachesEndedAuctionData
             ->merge($endedFromDb->keyBy(fn(Store $store) => (string) $store->id))
             ->values();
 
-        Cache::store('redis')->forever($cacheKey, $mergedEnded);
+        Cache::store('redis')->put($cacheKey, $mergedEnded, $this->endedAuctionCacheTtl());
 
         return $mergedEnded;
     }
@@ -240,7 +247,7 @@ trait CachesEndedAuctionData
             ->merge($endedFromDb->keyBy(fn(AuctionLot $lot) => (string) $lot->id))
             ->values();
 
-        Cache::store('redis')->forever($cacheKey, $mergedEnded);
+        Cache::store('redis')->put($cacheKey, $mergedEnded, $this->endedAuctionCacheTtl());
 
         return $mergedEnded;
     }

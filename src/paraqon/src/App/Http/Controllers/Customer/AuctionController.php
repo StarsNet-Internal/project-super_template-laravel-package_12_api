@@ -186,7 +186,7 @@ class AuctionController extends Controller
         }
 
         $auction = $compute();
-        Cache::store('redis')->forever($cacheKey, $auction);
+        Cache::store('redis')->put($cacheKey, $auction, $this->endedAuctionCacheTtl());
 
         return $auction;
     }

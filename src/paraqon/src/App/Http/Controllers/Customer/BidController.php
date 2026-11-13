@@ -50,7 +50,7 @@ class BidController extends Controller
     }
 
     /**
-     * A customer's bids in one ended auction store: final data, cached forever
+     * A customer's bids in one ended auction store: final data, cached for 24 hours
      * under a stable per-store key. Reused across requests.
      */
     private function endedBidsForStore(string $customerId, string $storeId): Collection
