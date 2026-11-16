@@ -24,12 +24,15 @@ use App\Models\ShoppingCartItem;
 use App\Models\Store;
 use App\Models\Warehouse;
 use App\Models\WarehouseInventory;
+use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\RedeemsExpressDiscount;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
 
 class ServiceController extends Controller
 {
+    use RedeemsExpressDiscount;
+
     public function paymentCallback(Request $request): array
     {
         $acceptableEventTypes = [
@@ -229,6 +232,10 @@ class ServiceController extends Controller
                                     ->whereIn('product_variant_id', $productVariantIDs)
                                     ->delete();
                             }
+
+                            // This is the callback Stripe actually hits for auction checkout.
+                            // Redeem once the order is paid, same as offline approval.
+                            $this->redeemExpressDiscountForOrder($order);
                         }
 
                         if ($customEventType === 'full_capture' || $customEventType === 'partial_capture') {
