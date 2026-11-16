@@ -959,8 +959,10 @@ class LiveSaleBook
         $lot['hammer_price'] = null;
         $lot['hammer_paddle_id'] = null;
         $lot['hammer_customer_id'] = null;
-        // The chant starts again. Earlier accepted bids are not kept as history.
+        // The chant starts again. Earlier accepted bids, and bids removed by
+        // undo, are not kept as history.
         $lot['bids'] = [];
+        $lot['withdrawn'] = [];
         $lot['asking_price'] = (float) ($lot['opening_asking'] ?? $lot['starting_price']);
         $this->lots[$lotId] = $lot;
         $this->currentLotId = $lotId;
@@ -1030,6 +1032,7 @@ class LiveSaleBook
 
         $histories = [];
         $events = [];
+        $withdrawals = [];
         $pending = [];
         if ($current) {
             foreach ($current['bids'] as $bid) {
@@ -1046,6 +1049,20 @@ class LiveSaleBook
                     $row['paddle_id'] = $bid['paddle_id'];
                 }
                 $histories[] = $row;
+            }
+            foreach ($current['withdrawn'] ?? [] as $bid) {
+                if (!is_array($bid)) {
+                    continue;
+                }
+                $withdrawals[] = [
+                    'current_bid' => $bid['amount'],
+                    'created_at' => $bid['created_at'] ?? ($bid['withdrawn_at'] ?? null),
+                    'paddle_label' => $this->paddleLabel($bid),
+                    'source' => $bid['source'] ?? '',
+                    'is_hidden' => false,
+                    'bid_id' => $bid['id'] ?? null,
+                    'withdrawn' => true,
+                ];
             }
             foreach ($current['notices'] as $notice) {
                 $events[] = [
@@ -1090,6 +1107,7 @@ class LiveSaleBook
             'current_lot_id' => $this->currentLotId,
             'lots' => $publicLots,
             'histories' => $histories,
+            'withdrawals' => $withdrawals,
             'events' => $events,
             'asking_price' => $current['asking_price'] ?? null,
             'increment' => $current ? $this->shownIncrement($current, (float) ($latest['amount'] ?? $current['starting_price'])) : null,

@@ -79,10 +79,11 @@ class LiveSaleService
             try {
                 $ready = $this->preparePayload($storeId, $command, $payload, $customerId);
                 if ($command === 'submit_online_bid') {
+                    $registration = $this->registrationForCustomer($storeId, (string) $customerId);
                     $this->refuseHighValueCustomerBid(
                         $store,
                         (string) ($book->currentLotId() ?? ''),
-                        $ready['paddle_id'] ?? null
+                        $registration ? ($registration->bidding_channel ?? null) : null
                     );
                 }
                 if ($command === 'open_lot') {
@@ -296,54 +297,51 @@ class LiveSaleService
     }
 
     /**
-     * A paddle on the non-high-value list can bid only the exempt lots.
-     * Clerk bids do not call this. An empty paddle list leaves every lot open.
+     * A bidder who is not online can bid only the non-high-value lots from
+     * the customer site. Clerk floor, phone, and absentee bids do not call this.
      */
     public function assertCustomerMayBidLot(Store $store, string $lotId, string $customerId): void
     {
         $registration = $this->registrationForCustomer((string) $store->_id, $customerId);
-        $paddle = $registration ? $registration->paddle_id : null;
+        $channel = $registration ? ($registration->bidding_channel ?? null) : null;
         try {
-            $this->refuseHighValueCustomerBid($store, $lotId, $paddle);
+            $this->refuseHighValueCustomerBid($store, $lotId, $channel);
         } catch (LiveSaleException $e) {
             abort(422, $e->getMessage());
         }
     }
 
     /**
-     * The listed paddles cannot bid high-value lots. The listed lots stay open
-     * to every paddle. Both empty leaves every lot open. A timed auction cannot
-     * call this; the shared store save does not.
+     * Lots in the list stay open to every bidder. Every other lot is high
+     * value. An empty list treats every lot as high value. A timed auction
+     * cannot call this; the shared store save does not. Any saved paddle list
+     * is cleared.
      *
      * @return array<string, mixed>
      */
-    public function saveNonHighValueRanges(string $storeId, string $paddleRange, string $lotRange): array
+    public function saveNonHighValueRanges(string $storeId, string $lotRange): array
     {
         $store = $this->requireLiveStore($storeId);
-        $paddleRaw = trim($paddleRange);
         $lotRaw = trim($lotRange);
         try {
-            $paddles = self::expandPrinterRange($paddleRaw);
             $numbers = self::expandPrinterRange($lotRaw);
         } catch (LiveSaleException $e) {
             abort(422, $e->getMessage());
         }
         $ids = $this->exemptLotIds($store, $numbers);
-        $store->non_high_value_paddle_range = $paddleRaw;
         $store->non_high_value_lot_range = $lotRaw;
-        $store->non_high_value_paddle_numbers = $paddles;
         $store->non_high_value_lot_ids = $ids;
         $store->unset([
             'high_value_paddle_range',
             'high_value_lot_range',
             'high_value_paddle_numbers',
             'high_value_lot_ids',
+            'non_high_value_paddle_range',
+            'non_high_value_paddle_numbers',
         ]);
         $store->save();
         return [
-            'non_high_value_paddle_range' => $paddleRaw,
             'non_high_value_lot_range' => $lotRaw,
-            'non_high_value_paddle_numbers' => $paddles,
             'non_high_value_lot_ids' => $ids,
         ];
     }
@@ -423,24 +421,16 @@ class LiveSaleService
     }
 
     /**
-     * A listed paddle can bid only an exempt lot. Any other paddle can bid
-     * every lot. An empty paddle list leaves every lot open.
+     * An online bidder, or a missing channel, can bid every lot. In-room,
+     * telephone, and absentee bidders can bid only lots in the list. An empty
+     * list leaves them no lot. The paddle number is not consulted.
      *
      * @param array<string, mixed> $store
      */
-    public static function paddleMayBidLot(array $store, string $lotId, mixed $paddleId): bool
+    public static function customerMayBidLot(array $store, string $lotId, mixed $channel): bool
     {
-        $paddle = (int) $paddleId;
-        $blocked = false;
-        if ($paddle >= 1) {
-            foreach (self::listValue($store['non_high_value_paddle_numbers'] ?? []) as $item) {
-                if ((int) $item === $paddle) {
-                    $blocked = true;
-                    break;
-                }
-            }
-        }
-        if (!$blocked) {
+        $channel = is_string($channel) ? $channel : null;
+        if (!in_array($channel, ['room', 'phone', 'absentee'], true)) {
             return true;
         }
         if ($lotId === '') {
@@ -872,14 +862,13 @@ class LiveSaleService
         return [];
     }
 
-    private function refuseHighValueCustomerBid(Store $store, string $lotId, mixed $paddleId): void
+    private function refuseHighValueCustomerBid(Store $store, string $lotId, mixed $channel): void
     {
-        $allowed = self::paddleMayBidLot([
+        $allowed = self::customerMayBidLot([
             'non_high_value_lot_ids' => $store->non_high_value_lot_ids ?? [],
-            'non_high_value_paddle_numbers' => $store->non_high_value_paddle_numbers ?? [],
-        ], $lotId, $paddleId);
+        ], $lotId, $channel);
         if (!$allowed) {
-            throw new LiveSaleException('This paddle cannot bid on this lot');
+            throw new LiveSaleException('Only an online bidder can bid on this lot');
         }
     }
 

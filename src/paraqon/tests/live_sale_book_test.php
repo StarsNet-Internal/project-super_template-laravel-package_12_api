@@ -172,6 +172,10 @@ $after = $sale->clerkPayload('t');
 check($after['undo'] === null, 'undo of the only bid leaves nothing to undo');
 check($after['asking_price'] === 800.0, 'asking returns to the opening price');
 check(count($after['histories']) === 0, 'the online bid leaves the ladder');
+check(count($sale->publicPayload('t')['withdrawals']) === 1, 'undo keeps the removed bid as withdrawn');
+check($sale->publicPayload('t')['withdrawals'][0]['paddle_label'] === 'Paddle #201', 'the withdrawn bid keeps its paddle wording');
+check($sale->publicPayload('t')['withdrawals'][0]['current_bid'] === 800.0, 'the withdrawn bid keeps its amount');
+check(containsKey($sale->publicPayload('t')['withdrawals'], 'customer_id') === false, 'a withdrawn bid does not name the bidder');
 check($after['highest_advanced_bid']['bid'] === 1500.0, 'undo does not replay the absentee');
 check($sale->toArray()['lots'][0]['advance'] === $advanceBefore, 'the absentee record is unchanged');
 
@@ -192,6 +196,7 @@ $sale->apply('sell', ['paddle_id' => 33, 'customer_id' => 'phone-33', 'at' => 't
 check($sale->publicPayload('t')['lots'][0]['live_state'] === 'sold', 'a lot under the reserve can be sold');
 check($sale->publicPayload('t')['lots'][0]['current_bid'] === 900.0, 'the hammer can be under the reserve');
 $sale->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't-under']);
+check($sale->publicPayload('t')['withdrawals'] === [], 'reopen clears a bid withdrawn earlier in the chant');
 $sale->apply('accept_bid', [
     'amount' => 1200,
     'source' => 'house',
@@ -218,7 +223,25 @@ check($sale->publicPayload('t')['lots'][0]['hammer_paddle_label'] === 'Paddle #3
 
 $sale->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't10']);
 check($sale->publicPayload('t')['histories'] === [], 'reopen clears the bid history');
+check($sale->publicPayload('t')['withdrawals'] === [], 'reopen clears withdrawn bids');
 check($sale->publicPayload('t')['asking_price'] === 800.0, 'reopen returns to the opening price');
+
+$raised = book();
+$raised->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$raised->apply('open_lot', ['at' => 't', 'advances' => []]);
+$raised->apply('set_asking_price', ['amount' => 1400, 'at' => 't']);
+$raised->apply('accept_bid', [
+    'amount' => 1400,
+    'source' => 'floor',
+    'paddle_id' => 4,
+    'customer_id' => 'floor-4',
+    'at' => 't',
+]);
+$raised->apply('sell', ['paddle_id' => 4, 'customer_id' => 'floor-4', 'at' => 't']);
+$raised->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't']);
+check($raised->publicPayload('t')['asking_price'] === 800.0, 'reopen returns to the starting price after a raised ask');
+check($raised->publicPayload('t')['histories'] === [], 'reopen clears the raised ladder');
+check($raised->toArray()['lots'][0]['opening_asking'] === 800.0, 'reopen keeps the preset starting price');
 check($sale->publicPayload('t')['lots'][0]['current_bid'] == 0, 'reopen clears the hammer from the ladder');
 check($sale->publicPayload('t')['lots'][0]['live_state'] === 'open', 'reopen puts the lot back on the block');
 check($sale->clerkPayload('t')['undo'] === null, 'reopen leaves nothing to undo');
@@ -769,6 +792,42 @@ $beforeUndoAll = $clear->sequence();
 $clear->apply('undo_all_bids', ['at' => 't3']);
 check($clear->sequence() === $beforeUndoAll + 1, 'undo all is one sequence step');
 check($clear->publicPayload('t')['histories'] === [], 'undo all clears the ladder');
+check(count($clear->publicPayload('t')['withdrawals']) === 1, 'undo all keeps the removed bid as withdrawn');
+check($clear->publicPayload('t')['withdrawals'][0]['paddle_label'] === 'Floor bid', 'undo all keeps the floor wording');
+check($clear->publicPayload('t')['withdrawals'][0]['current_bid'] === 800.0, 'undo all keeps the removed amount');
+check(containsKey($clear->publicPayload('t')['withdrawals'], 'customer_id') === false, 'undo all does not name the bidder');
+$stack = book();
+$stack->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$stack->apply('open_lot', ['at' => 't', 'advances' => []]);
+$stack->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 1,
+    'customer_id' => 'floor-1',
+    'at' => 't1',
+]);
+$stack->apply('accept_bid', [
+    'amount' => 900,
+    'source' => 'phone',
+    'paddle_id' => 1001,
+    'customer_id' => 'phone-1001',
+    'at' => 't2',
+]);
+$stack->apply('undo_all_bids', ['at' => 't3']);
+$stackLabels = array_column($stack->publicPayload('t')['withdrawals'], 'paddle_label');
+sort($stackLabels);
+check($stackLabels === ['Floor bid', 'Phone #1001'], 'undo all marks every removed bid');
+check($stack->publicPayload('t')['histories'] === [], 'undo all leaves no live bid');
+$stack->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 1,
+    'customer_id' => 'floor-1',
+    'at' => 't4',
+]);
+$stack->apply('sell', ['paddle_id' => 1, 'customer_id' => 'floor-1', 'at' => 't5']);
+$stack->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't6']);
+check($stack->publicPayload('t')['withdrawals'] === [], 'reopen clears bids withdrawn by undo all');
 check($clear->publicPayload('t')['asking_price'] === 800.0, 'undo all returns to the opening price');
 check($clear->publicPayload('t')['warning'] === null, 'undo all clears the warning');
 check($clear->clerkPayload('t')['undo'] === null, 'undo all leaves nothing to undo');
@@ -1121,17 +1180,17 @@ check($ranges::expandPrinterRange('  ') === [], 'an empty range expands to nothi
 check($ranges::expandPrinterRange('4, 2,4') === [2, 4], 'a printer range drops duplicates');
 expect(fn () => $ranges::expandPrinterRange('3-1'), '1-3,6,9,10-11');
 expect(fn () => $ranges::expandPrinterRange('1-3,,6'), '1-3,6,9,10-11');
-check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => [], 'non_high_value_paddle_numbers' => []], 'lot-1', 5) === true, 'an empty pair leaves every lot open');
-check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => ['lot-1'], 'non_high_value_paddle_numbers' => []], 'lot-9', 5) === true, 'listed lots do nothing until a paddle is listed');
-check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => ['lot-1'], 'non_high_value_paddle_numbers' => [9]], 'lot-1', 9) === true, 'a listed paddle can bid a non-high-value lot');
-check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => ['lot-1'], 'non_high_value_paddle_numbers' => [9]], 'lot-9', 9) === false, 'a listed paddle cannot bid a high-value lot');
-check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => [], 'non_high_value_paddle_numbers' => [9]], 'lot-1', 9) === false, 'listed paddles are closed out of every lot when none is exempt');
-check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => [], 'non_high_value_paddle_numbers' => [8]], 'lot-1', 9) === true, 'a paddle outside the list can bid every lot');
-check($ranges::paddleMayBidLot(['non_high_value_lot_ids' => [], 'non_high_value_paddle_numbers' => [9]], 'lot-1', null) === true, 'a missing paddle is not on the list');
+check($ranges::customerMayBidLot(['non_high_value_lot_ids' => []], 'lot-1', 'online') === true, 'an online bidder can bid when every lot is high value');
+check($ranges::customerMayBidLot(['non_high_value_lot_ids' => []], 'lot-1', null) === true, 'a missing channel counts as online');
+check($ranges::customerMayBidLot(['non_high_value_lot_ids' => []], 'lot-1', 'room') === false, 'an in-room bidder cannot bid when every lot is high value');
+check($ranges::customerMayBidLot(['non_high_value_lot_ids' => []], 'lot-1', 'phone') === false, 'a telephone bidder cannot bid when every lot is high value');
+check($ranges::customerMayBidLot(['non_high_value_lot_ids' => []], 'lot-1', 'absentee') === false, 'an absentee bidder cannot bid when every lot is high value');
+check($ranges::customerMayBidLot(['non_high_value_lot_ids' => ['lot-1']], 'lot-1', 'room') === true, 'an in-room bidder can bid a non-high-value lot');
+check($ranges::customerMayBidLot(['non_high_value_lot_ids' => ['lot-1']], 'lot-9', 'phone') === false, 'a telephone bidder cannot bid a high-value lot');
+check($ranges::customerMayBidLot(['non_high_value_lot_ids' => ['lot-1']], 'lot-9', 'online') === true, 'an online bidder can bid a high-value lot');
+check($ranges::customerMayBidLot(['non_high_value_lot_ids' => ['lot-1']], '', 'room') === false, 'a missing lot id refuses a non-online bidder');
 
-$batchPaddles = $ranges::expandPrinterRange('1-40,80-139');
 $batchLots = $ranges::expandPrinterRange('101,102,110,118');
-check($batchPaddles === array_merge(range(1, 40), range(80, 139)), 'the jewelry paddle batch expands');
 check($batchLots === [101, 102, 110, 118], 'the jewelry lot batch expands');
 $batchOpen = [
     '6ae98f45ee40cbcc320305ca',
@@ -1140,22 +1199,14 @@ $batchOpen = [
     '6ae99bd5136389b7bb0f87a4',
 ];
 $batchStore = [
-    'non_high_value_paddle_numbers' => $batchPaddles,
     'non_high_value_lot_ids' => $batchOpen,
 ];
-check($ranges::paddleMayBidLot($batchStore, $batchOpen[0], 1) === true, 'paddle 1 can bid lot 101');
-check($ranges::paddleMayBidLot($batchStore, 'other-lot', 1) === false, 'paddle 1 cannot bid another lot');
-check($ranges::paddleMayBidLot($batchStore, 'other-lot', 40) === false, 'paddle 40 is in the batch');
-check($ranges::paddleMayBidLot($batchStore, 'other-lot', 41) === true, 'paddle 41 is outside the batch');
-check($ranges::paddleMayBidLot($batchStore, 'other-lot', 79) === true, 'paddle 79 is outside the batch');
-check($ranges::paddleMayBidLot($batchStore, $batchOpen[2], 80) === true, 'paddle 80 can bid lot 110');
-check($ranges::paddleMayBidLot($batchStore, 'other-lot', 80) === false, 'paddle 80 cannot bid a high-value lot');
-check($ranges::paddleMayBidLot($batchStore, $batchOpen[3], 139) === true, 'paddle 139 can bid lot 118');
-check($ranges::paddleMayBidLot($batchStore, 'other-lot', 139) === false, 'paddle 139 cannot bid a high-value lot');
-check($ranges::paddleMayBidLot($batchStore, 'other-lot', 140) === true, 'paddle 140 is outside the batch');
-check($ranges::paddleMayBidLot($batchStore, 'other-lot', 101) === false, 'paddle 101 is in the batch');
-check($ranges::paddleMayBidLot($batchStore, $batchOpen[1], 8001) === true, 'paddle 8001 can bid lot 102');
-check($ranges::paddleMayBidLot($batchStore, 'other-lot', 8002) === true, 'paddle 8002 can bid every lot');
+check($ranges::customerMayBidLot($batchStore, $batchOpen[0], 'room') === true, 'an in-room bidder can bid lot 101');
+check($ranges::customerMayBidLot($batchStore, 'other-lot', 'room') === false, 'an in-room bidder cannot bid a high-value lot');
+check($ranges::customerMayBidLot($batchStore, 'other-lot', 'phone') === false, 'a telephone bidder cannot bid a high-value lot');
+check($ranges::customerMayBidLot($batchStore, 'other-lot', 'absentee') === false, 'an absentee bidder cannot bid a high-value lot');
+check($ranges::customerMayBidLot($batchStore, 'other-lot', 'online') === true, 'an online bidder can bid a high-value lot');
+check($ranges::customerMayBidLot($batchStore, $batchOpen[2], 'absentee') === true, 'an absentee bidder can bid lot 110');
 
 $later = book();
 $later->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
