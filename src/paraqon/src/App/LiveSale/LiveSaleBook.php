@@ -141,6 +141,7 @@ class LiveSaleBook
             'undo_latest_bid' => $this->undoLatestBid($payload, $at),
             'undo_all_bids' => $this->undoAllBids($payload, $at),
             'remove_participant' => $this->removeParticipant($payload, $at),
+            'prepare_reopen' => $this->prepareReopen($payload, $at),
             'reopen' => $this->reopen($payload, $at),
             'end_sale' => $this->endSale($at),
             default => throw new LiveSaleException('Unknown live sale command'),
@@ -365,7 +366,7 @@ class LiveSaleBook
         $this->requireRunning();
         $lotId = (string) ($payload['lot_id'] ?? $this->currentLotId ?? '');
         $lot = $this->requireLot($lotId);
-        if ($lot['state'] !== 'preparing') {
+        if (!in_array($lot['state'], ['preparing', 'reopening'], true)) {
             throw new LiveSaleException('Prepare the lot before opening it');
         }
         $this->requireNoLotOnTheBlock($lotId);
@@ -821,7 +822,7 @@ class LiveSaleBook
         $this->requireRunning();
         $lotId = (string) ($this->currentLotId ?? '');
         $lot = $this->requireLot($lotId);
-        if (!in_array($lot['state'], ['preparing', 'open', 'fair_warning'], true)) {
+        if (!in_array($lot['state'], ['preparing', 'reopening', 'open', 'fair_warning'], true)) {
             throw new LiveSaleException('That lot is not on the block');
         }
         $lot['state'] = 'passed';
@@ -940,7 +941,32 @@ class LiveSaleBook
         ];
     }
 
+    private function prepareReopen(array $payload, string $at): array
+    {
+        $lot = $this->reopenLot($payload);
+        $lot['state'] = 'reopening';
+        $this->lots[$lot['lot_id']] = $lot;
+        $this->currentLotId = $lot['lot_id'];
+        return ['lot_id' => $lot['lot_id']];
+    }
+
     private function reopen(array $payload, string $at): array
+    {
+        $lot = $this->reopenLot($payload);
+        $lot['state'] = 'open';
+        $this->lots[$lot['lot_id']] = $lot;
+        $this->currentLotId = $lot['lot_id'];
+        return ['lot_id' => $lot['lot_id']];
+    }
+
+    /**
+     * Clears a sold or passed lot back to its opening ask. Prepare reopen
+     * holds it there. Reopen opens it for bids in the same step.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function reopenLot(array $payload): array
     {
         $this->requireRunning();
         $lotId = (string) ($payload['lot_id'] ?? $this->currentLotId ?? '');
@@ -953,7 +979,6 @@ class LiveSaleBook
             throw new LiveSaleException('That lot was never opened');
         }
         $this->requireNoLotOnTheBlock($lotId);
-        $lot['state'] = 'open';
         $lot['warning'] = null;
         $lot['pending'] = [];
         $lot['hammer_price'] = null;
@@ -963,17 +988,15 @@ class LiveSaleBook
         // undo, are not kept as history.
         $lot['bids'] = [];
         $lot['withdrawn'] = [];
-        $lot['asking_price'] = (float) ($lot['opening_asking'] ?? $lot['starting_price']);
-        $this->lots[$lotId] = $lot;
-        $this->currentLotId = $lotId;
-        return ['lot_id' => $lotId];
+        $lot['asking_price'] = (float) $lot['opening_asking'];
+        return $lot;
     }
 
     private function endSale(string $at): array
     {
         $this->requireRunning();
         foreach ($this->lots as $lot) {
-            if (in_array($lot['state'], ['open', 'fair_warning', 'preparing'], true)) {
+            if (in_array($lot['state'], ['open', 'fair_warning', 'preparing', 'reopening'], true)) {
                 throw new LiveSaleException('Sell or pass the lot on the block before ending the sale');
             }
         }
@@ -1186,7 +1209,7 @@ class LiveSaleBook
     private function flagsFor(string $state): array
     {
         return match ($state) {
-            'preparing' => ['status' => 'ARCHIVED', 'is_disabled' => false, 'is_closed' => true],
+            'preparing', 'reopening' => ['status' => 'ARCHIVED', 'is_disabled' => false, 'is_closed' => true],
             'open', 'fair_warning' => ['status' => 'ACTIVE', 'is_disabled' => false, 'is_closed' => false],
             'sold' => ['status' => 'ACTIVE', 'is_disabled' => true, 'is_closed' => false],
             'passed' => ['status' => 'ACTIVE', 'is_disabled' => true, 'is_closed' => true],
@@ -1451,7 +1474,7 @@ class LiveSaleBook
             if ($lot['lot_id'] === $exceptLotId) {
                 continue;
             }
-            if (in_array($lot['state'], ['preparing', 'open', 'fair_warning'], true)) {
+            if (in_array($lot['state'], ['preparing', 'reopening', 'open', 'fair_warning'], true)) {
                 throw new LiveSaleException('Another lot is still on the block');
             }
         }

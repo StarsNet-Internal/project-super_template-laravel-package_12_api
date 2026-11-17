@@ -1249,4 +1249,49 @@ $busy->apply('prepare_lot', ['lot_id' => 'lot-2', 'at' => 't']);
 $busy->apply('open_lot', ['at' => 't']);
 expect(fn () => $busy->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't']), 'on the block');
 
+$announce = book();
+$announce->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$announce->apply('open_lot', ['at' => 't', 'advances' => []]);
+$announce->apply('set_asking_price', ['amount' => 1400, 'at' => 't']);
+$announce->apply('accept_bid', [
+    'amount' => 1400,
+    'source' => 'floor',
+    'paddle_id' => 4,
+    'customer_id' => 'floor-4',
+    'at' => 't',
+]);
+$announce->apply('sell', ['paddle_id' => 4, 'customer_id' => 'floor-4', 'at' => 't']);
+$announce->apply('prepare_reopen', ['lot_id' => 'lot-1', 'at' => 't']);
+$held = $announce->publicPayload('t');
+check($held['lots'][0]['live_state'] === 'reopening', 'prepare reopen holds the lot');
+check($held['lots'][0]['status'] === 'ARCHIVED', 'prepare reopen is not open for bids');
+check($held['lots'][0]['current_bid'] == 0, 'prepare reopen clears the hammer');
+check($held['histories'] === [], 'prepare reopen clears the bid history');
+check($held['withdrawals'] === [], 'prepare reopen clears withdrawn bids');
+check($held['asking_price'] === 800.0, 'prepare reopen returns to the opening price');
+check($announce->clerkPayload('t')['undo'] === null, 'prepare reopen leaves nothing to undo');
+check($announce->toArray()['lots'][0]['opening_asking'] === 800.0, 'prepare reopen keeps the opening price');
+expect(fn () => $announce->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 4,
+    'at' => 't',
+]), 'Open the lot');
+expect(fn () => $announce->apply('end_sale', ['at' => 't']), 'before ending');
+$announce->apply('open_lot', ['at' => 't', 'advances' => []]);
+check($announce->publicPayload('t')['lots'][0]['live_state'] === 'open', 'open starts bidding after prepare reopen');
+check($announce->publicPayload('t')['asking_price'] === 800.0, 'opening a prepared reopen keeps the opening price');
+$announce->apply('pass', ['at' => 't']);
+$announce->apply('prepare_reopen', ['lot_id' => 'lot-1', 'at' => 't']);
+check($announce->publicPayload('t')['lots'][0]['live_state'] === 'reopening', 'a passed lot can be prepared for reopen');
+$announce->apply('pass', ['at' => 't']);
+check($announce->publicPayload('t')['lots'][0]['live_state'] === 'passed', 'close during prepare reopen passes the lot');
+
+$neverHeld = book();
+$neverHeld->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$neverHeld->apply('pass', ['at' => 't']);
+expect(fn () => $neverHeld->apply('prepare_reopen', ['lot_id' => 'lot-1', 'at' => 't']), 'never opened');
+
+expect(fn () => $busy->apply('prepare_reopen', ['lot_id' => 'lot-1', 'at' => 't']), 'on the block');
+
 echo "ok\n";
