@@ -193,9 +193,7 @@ class AuctionController extends Controller
                         'bidder_key' => $this->bidderKey($auctionId, $customerId),
                         'is_own' => $this->isOwnBidder($customerId, $viewerId),
                         'paddle_id' => $item['paddle_id'],
-                        'bidding_channel' => AuctionRegistrationRequest::channel(
-                            $item['bidding_channel'] ?? null
-                        ),
+                        'bidding_channel' => $item['bidding_channel'] ?? null,
                     ];
                 }
             );

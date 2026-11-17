@@ -88,9 +88,7 @@ class AuctionController extends Controller
             ->each(function ($customer) use ($registeredCustomers) {
                 $registration = $registeredCustomers[$customer->id] ?? null;
                 $customer->paddle_id = $registration->paddle_id ?? '';
-                $customer->bidding_channel = AuctionRegistrationRequest::channel(
-                    $registration->bidding_channel ?? null
-                );
+                $customer->bidding_channel = $registration->bidding_channel ?? null;
             });
     }
 
@@ -159,15 +157,21 @@ class AuctionController extends Controller
                 'id' => $newForm->id
             ];
         } else if ($store->auction_type == 'LIVE') {
-            /** @var AuctionRegistrationRequest $newForm */
-            $newForm = AuctionRegistrationRequest::create([
+            // Staff add does not choose a bidding type. Leave it unset until they do.
+            $attributes = [
                 'requested_by_customer_id' => $request->route('customer_id'),
                 'store_id' => $request->route('store_id'),
                 'paddle_id' => $request->paddle_id,
                 'status' => Status::ACTIVE->value,
                 'reply_status' => ReplyStatus::APPROVED->value,
-                'bidding_channel' => AuctionRegistrationRequest::channel($request->input('bidding_channel')),
-            ]);
+            ];
+            if ($request->filled('bidding_channel')) {
+                $attributes['bidding_channel'] = AuctionRegistrationRequest::channel(
+                    $request->input('bidding_channel')
+                );
+            }
+            /** @var AuctionRegistrationRequest $newForm */
+            $newForm = AuctionRegistrationRequest::create($attributes);
 
             return [
                 'message' => 'Created New AuctionRegistrationRequest successfully',
