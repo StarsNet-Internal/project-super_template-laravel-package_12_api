@@ -605,6 +605,87 @@ class LiveSaleService
     }
 
     /**
+     * Public hammers for a sale the clerk has ended. Null while the book is still open.
+     * Passed and unopened lots are unsold. The hammer customer stays off this payload.
+     *
+     * @return array{lots: array<string, array{result: string, hammer_price: float|null}>}|null
+     */
+    public function publicResults(string $storeId): ?array
+    {
+        $doc = LiveSaleState::where('store_id', $storeId)->first();
+        if ($doc === null) {
+            return null;
+        }
+        $book = $this->bookFromDocument($doc);
+        if ($book->status() !== 'ended') {
+            return null;
+        }
+        $lots = [];
+        foreach ($book->toArray()['lots'] as $lot) {
+            if (!is_array($lot)) {
+                continue;
+            }
+            $lotId = (string) ($lot['lot_id'] ?? '');
+            if ($lotId === '') {
+                continue;
+            }
+            $sold = ($lot['state'] ?? '') === 'sold' && is_numeric($lot['hammer_price'] ?? null);
+            $lots[$lotId] = [
+                'result' => $sold ? 'sold' : 'unsold',
+                'hammer_price' => $sold ? (float) $lot['hammer_price'] : null,
+            ];
+        }
+        return ['lots' => $lots];
+    }
+
+    /**
+     * Store ids whose live book status is ended.
+     *
+     * @param array<int, string> $storeIds
+     * @return array<string, true>
+     */
+    public function endedStoreIds(array $storeIds): array
+    {
+        $storeIds = array_values(array_unique(array_filter(array_map('strval', $storeIds))));
+        if ($storeIds === []) {
+            return [];
+        }
+        $ended = [];
+        foreach (LiveSaleState::whereIn('store_id', $storeIds)->get() as $doc) {
+            $book = $this->asArray($doc->book);
+            if (($book['status'] ?? null) === 'ended') {
+                $ended[(string) $doc->store_id] = true;
+            }
+        }
+        return $ended;
+    }
+
+    /**
+     * Copy one public hammer onto a lot or product. Sold price includes commission,
+     * matching a timed-auction result. An unsold lot does not keep an advance as its price.
+     *
+     * @param array{lots: array<string, array{result: string, hammer_price: float|null}>}|null $results
+     */
+    public function applyPublicResult(object $model, ?array $results, string $lotId, float $commissionRate = 0): void
+    {
+        if ($results === null) {
+            return;
+        }
+        $row = $results['lots'][$lotId] ?? ['result' => 'unsold', 'hammer_price' => null];
+        $model->live_result = $row['result'];
+        if ($row['result'] !== 'sold' || $row['hammer_price'] === null) {
+            $model->is_bid_placed = false;
+            $model->sold_price = null;
+            return;
+        }
+        $hammer = (float) $row['hammer_price'];
+        $model->current_bid = $hammer;
+        $model->sold_price = $hammer + (float) floor($hammer * $commissionRate / 100);
+        $model->is_bid_placed = true;
+        $model->is_reserve_price_met = true;
+    }
+
+    /**
      * Orders and deposits use the ended book. Passed lots have no buyer.
      * A sale that was reopened and then undone contributes only the final stack.
      *

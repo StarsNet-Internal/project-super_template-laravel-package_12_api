@@ -82,6 +82,7 @@ class AuctionLotController extends Controller
             ->pluck('item_id')
             ->all();
         $auctionLot->is_watching = in_array($auctionLot->id, $watchingAuctionIDs, true);
+        $this->applyEndedLiveLot($auctionLot);
 
         return $auctionLot;
     }
@@ -102,6 +103,25 @@ class AuctionLotController extends Controller
         $auctionLot->is_reserve_price_met = $auctionLot->current_bid >= $auctionLot->reserve_price;
 
         return $auctionLot;
+    }
+
+    /**
+     * The lot page reads the ended book, including when the catalogue row is cached.
+     */
+    private function applyEndedLiveLot(AuctionLot $auctionLot): void
+    {
+        $store = $auctionLot->store;
+        if ($store === null || ($store->auction_type ?? null) !== 'LIVE') {
+            return;
+        }
+        $results = app(LiveSaleService::class)->publicResults((string) $store->_id);
+        $store->ended = $results !== null;
+        app(LiveSaleService::class)->applyPublicResult(
+            $auctionLot,
+            $results,
+            (string) $auctionLot->_id,
+            (float) ($auctionLot->commission_rate ?? 0)
+        );
     }
 
     private function isAuctionLotEndedById(string $auctionLotId): bool

@@ -17,6 +17,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\CachesEndedAuctionData;
 use Starsnet\Project\Paraqon\App\Http\Controllers\Concerns\HidesBidderIdentity;
+use Starsnet\Project\Paraqon\App\LiveSale\LiveSaleService;
 use Starsnet\Project\Paraqon\App\Models\AuctionRegistrationRequest;
 use Starsnet\Project\Paraqon\App\Models\Deposit;
 use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
@@ -89,6 +90,8 @@ class AuctionController extends Controller
                 ->get();
         }
 
+        $this->attachLiveEnded($auctions);
+
         return $auctions;
     }
 
@@ -149,7 +152,28 @@ class AuctionController extends Controller
             ->latest()
             ->get();
 
+        $this->attachLiveEnded(collect([$auction]));
+
         return $auction;
+    }
+
+    /**
+     * A live sale is ended when its book says so. The scheduled end does not set this flag.
+     */
+    private function attachLiveEnded(Collection $auctions): void
+    {
+        $ids = [];
+        foreach ($auctions as $auction) {
+            if (($auction->auction_type ?? null) === 'LIVE') {
+                $ids[] = (string) $auction->_id;
+            }
+        }
+        $ended = app(LiveSaleService::class)->endedStoreIds($ids);
+        foreach ($auctions as $auction) {
+            if (($auction->auction_type ?? null) === 'LIVE') {
+                $auction->ended = isset($ended[(string) $auction->_id]);
+            }
+        }
     }
 
     public function getAllPaddles(Request $request): Collection

@@ -19,6 +19,7 @@ use App\Models\Alias;
 use App\Models\Category;
 use App\Models\Product;
 use App\Models\Store;
+use Starsnet\Project\Paraqon\App\LiveSale\LiveSaleService;
 use Starsnet\Project\Paraqon\App\Models\AuctionLot;
 use Starsnet\Project\Paraqon\App\Models\WatchlistItem;
 
@@ -26,6 +27,11 @@ class ProductManagementController extends Controller
 {
     /** @var Store $store */
     protected $store;
+
+    /** @var array{lots: array<string, array{result: string, hammer_price: float|null}>}|null */
+    private ?array $liveEndedLots = null;
+
+    private bool $liveEndedLoaded = false;
 
     public function __construct(Request $request)
     {
@@ -93,6 +99,7 @@ class ProductManagementController extends Controller
 
             $product->max_estimated_price = data_get($auctionLot, 'bid_incremental_settings.estimate_price.max') ?? 0;
             $product->min_estimated_price = data_get($auctionLot, 'bid_incremental_settings.estimate_price.min') ?? 0;
+            $this->stampLiveProduct($product, $auctionLot);
 
             // is_watching
             $auctionLot->is_watching = in_array($auctionLotID, $watchingAuctionIDs);
@@ -192,6 +199,7 @@ class ProductManagementController extends Controller
                     'is_watching' => in_array($auctionLot->_id, $watchingAuctionIDs, true),
                     'store' => $this->store
                 ]);
+                $this->stampLiveProduct($product, $auctionLot);
 
                 unset($product->reserve_price);
 
@@ -289,6 +297,7 @@ class ProductManagementController extends Controller
                         'is_watching' => in_array($auctionLot->_id, $watchingAuctionIDs, true),
                         'store' => $this->store
                     ]);
+                    $this->stampLiveProduct($product, $auctionLot);
 
                     unset($product->reserve_price);
 
@@ -492,6 +501,7 @@ class ProductManagementController extends Controller
 
             $product->max_estimated_price = data_get($auctionLot, 'bid_incremental_settings.estimate_price.max') ?? 0;
             $product->min_estimated_price = data_get($auctionLot, 'bid_incremental_settings.estimate_price.min') ?? 0;
+            $this->stampLiveProduct($product, $auctionLot);
 
             // is_watching
             $product->is_watching = in_array($auctionLotID, $watchingAuctionLotIDs);
@@ -540,6 +550,7 @@ class ProductManagementController extends Controller
             $product->current_bid = $auctionLot->getCurrentBidPrice();
             $product->is_reserve_price_met = $product->current_bid >= $product->reserve_price ? true : false;
             $product->lot_number = $auctionLot->lot_number;
+            $this->stampLiveProduct($product, $auctionLot);
 
             unset(
                 $product->bids,
@@ -1008,5 +1019,53 @@ class ProductManagementController extends Controller
         });
 
         return $products;
+    }
+
+    /**
+     * An ended live book supplies the hammer. The scheduled end does not.
+     *
+     * @return array{lots: array<string, array{result: string, hammer_price: float|null}>}|null
+     */
+    private function liveEndedLots(): ?array
+    {
+        if ($this->liveEndedLoaded) {
+            return $this->liveEndedLots;
+        }
+        $this->liveEndedLoaded = true;
+        if ($this->store === null || ($this->store->auction_type ?? null) !== 'LIVE') {
+            return null;
+        }
+        $this->liveEndedLots = app(LiveSaleService::class)->publicResults((string) $this->store->_id);
+        $this->store->ended = $this->liveEndedLots !== null;
+        return $this->liveEndedLots;
+    }
+
+    private function stampLiveProduct(object $product, $auctionLot): void
+    {
+        if ($this->store === null || ($this->store->auction_type ?? null) !== 'LIVE') {
+            return;
+        }
+        $ended = $this->liveEndedLots();
+        $product->store = $this->flagEnded($product->store ?? $this->store, $ended !== null);
+        if ($auctionLot === null) {
+            return;
+        }
+        $lotId = (string) (data_get($auctionLot, '_id') ?? $product->auction_lot_id ?? '');
+        $rate = (float) (data_get($auctionLot, 'commission_rate') ?? 0);
+        app(LiveSaleService::class)->applyPublicResult($product, $ended, $lotId, $rate);
+    }
+
+    private function flagEnded($store, bool $ended)
+    {
+        if (is_array($store)) {
+            if (($store['auction_type'] ?? null) === 'LIVE') {
+                $store['ended'] = $ended;
+            }
+            return $store;
+        }
+        if (is_object($store) && ($store->auction_type ?? null) === 'LIVE') {
+            $store->ended = $ended;
+        }
+        return $store;
     }
 }
