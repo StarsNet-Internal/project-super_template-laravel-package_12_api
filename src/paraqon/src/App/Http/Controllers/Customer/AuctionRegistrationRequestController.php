@@ -52,6 +52,16 @@ class AuctionRegistrationRequestController extends Controller
             ? ReplyStatus::APPROVED->value
             : ReplyStatus::PENDING->value;
 
+        // A second register must not demote an approved or pending bidder.
+        // That includes a paid deposit, an offline deposit, a waived group,
+        // and a bidder added by staff.
+        if (!is_null($oldForm) && $this->isCurrentRegistration($oldForm)) {
+            return response()->json([
+                'message' => 'Already registered for this auction',
+                'error_status' => 2,
+            ], 400);
+        }
+
         if (!is_null($oldForm)) {
             $oldFormAttributes = [
                 'approved_by_account_id' => null,
@@ -341,5 +351,17 @@ class AuctionRegistrationRequestController extends Controller
         $form->update(['status' => Status::ARCHIVED->value]);
 
         return ['message' => 'Updated AuctionRegistrationRequest status to ARCHIVED'];
+    }
+
+    private function isCurrentRegistration(AuctionRegistrationRequest $form): bool
+    {
+        if (in_array($form->status, [Status::ARCHIVED->value, Status::DELETED->value], true)) {
+            return false;
+        }
+        if ($form->reply_status === ReplyStatus::REJECTED->value) {
+            return false;
+        }
+
+        return true;
     }
 }
