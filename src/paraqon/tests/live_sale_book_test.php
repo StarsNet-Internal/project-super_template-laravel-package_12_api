@@ -792,10 +792,7 @@ $beforeUndoAll = $clear->sequence();
 $clear->apply('undo_all_bids', ['at' => 't3']);
 check($clear->sequence() === $beforeUndoAll + 1, 'undo all is one sequence step');
 check($clear->publicPayload('t')['histories'] === [], 'undo all clears the ladder');
-check(count($clear->publicPayload('t')['withdrawals']) === 1, 'undo all keeps the removed bid as withdrawn');
-check($clear->publicPayload('t')['withdrawals'][0]['paddle_label'] === 'Floor bid', 'undo all keeps the floor wording');
-check($clear->publicPayload('t')['withdrawals'][0]['current_bid'] === 800.0, 'undo all keeps the removed amount');
-check(containsKey($clear->publicPayload('t')['withdrawals'], 'customer_id') === false, 'undo all does not name the bidder');
+check($clear->publicPayload('t')['withdrawals'] === [], 'undo all drops the bids instead of marking them withdrawn');
 $stack = book();
 $stack->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
 $stack->apply('open_lot', ['at' => 't', 'advances' => []]);
@@ -814,9 +811,7 @@ $stack->apply('accept_bid', [
     'at' => 't2',
 ]);
 $stack->apply('undo_all_bids', ['at' => 't3']);
-$stackLabels = array_column($stack->publicPayload('t')['withdrawals'], 'paddle_label');
-sort($stackLabels);
-check($stackLabels === ['Floor bid', 'Phone #1001'], 'undo all marks every removed bid');
+check($stack->publicPayload('t')['withdrawals'] === [], 'undo all drops every bid from the ladder');
 check($stack->publicPayload('t')['histories'] === [], 'undo all leaves no live bid');
 $stack->apply('accept_bid', [
     'amount' => 800,
@@ -827,7 +822,74 @@ $stack->apply('accept_bid', [
 ]);
 $stack->apply('sell', ['paddle_id' => 1, 'customer_id' => 'floor-1', 'at' => 't5']);
 $stack->apply('reopen', ['lot_id' => 'lot-1', 'at' => 't6']);
-check($stack->publicPayload('t')['withdrawals'] === [], 'reopen clears bids withdrawn by undo all');
+check($stack->publicPayload('t')['withdrawals'] === [], 'reopen leaves the ladder clear');
+$keptWithdrawn = book();
+$keptWithdrawn->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$keptWithdrawn->apply('open_lot', ['at' => 't']);
+$keptWithdrawn->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 41,
+    'customer_id' => 'floor-41',
+    'at' => 't1',
+]);
+$keptWithdrawn->apply('undo_latest_bid', ['at' => 't2']);
+$keptWithdrawn->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'paddle_id' => 42,
+    'customer_id' => 'floor-42',
+    'at' => 't3',
+]);
+$keptWithdrawn->apply('undo_all_bids', ['at' => 't4']);
+check($keptWithdrawn->publicPayload('t')['histories'] === [], 'undo all clears the later bid');
+check($keptWithdrawn->publicPayload('t')['withdrawals'] === [], 'undo all also drops a bid withdrawn earlier');
+$hold = book();
+$hold->apply('prepare_lot', ['lot_id' => 'lot-1', 'at' => 't']);
+$hold->apply('open_lot', ['at' => 't']);
+$hold->apply('accept_bid', [
+    'amount' => 800,
+    'source' => 'floor',
+    'at' => 't',
+]);
+check($hold->publicPayload('t')['selling'] === false, 'the lot is open for online bids');
+$hold->apply('begin_sell', ['at' => 't']);
+check($hold->publicPayload('t')['selling'] === true, 'the sold prompt blocks online bids');
+check($hold->toArray()['selling'] === true, 'the sold prompt is saved with the book');
+expect(fn () => $hold->apply('submit_online_bid', [
+    'amount' => 900,
+    'customer_id' => 'online-201',
+    'paddle_id' => 201,
+    'at' => 't',
+]), 'being sold');
+$hold->apply('accept_bid', [
+    'amount' => 900,
+    'source' => 'floor',
+    'paddle_id' => 41,
+    'customer_id' => 'floor-41',
+    'at' => 't',
+]);
+check(count($hold->publicPayload('t')['histories']) === 2, 'a floor bid is taken while the lot is being sold');
+$heldBook = LiveSaleBook::fromArray($hold->toArray());
+check($heldBook->publicPayload('t')['selling'] === true, 'a reloaded book still blocks online bids');
+expect(fn () => $heldBook->apply('submit_online_bid', [
+    'amount' => 1000,
+    'customer_id' => 'online-201',
+    'paddle_id' => 201,
+    'at' => 't',
+]), 'being sold');
+$hold->apply('cancel_sell', ['at' => 't']);
+check($hold->publicPayload('t')['selling'] === false, 'closing the sold prompt allows online bids');
+$hold->apply('submit_online_bid', [
+    'amount' => 1000,
+    'customer_id' => 'online-201',
+    'paddle_id' => 201,
+    'at' => 't',
+]);
+check($hold->publicPayload('t')['histories'][2]['paddle_label'] === 'Paddle #201', 'an online bid is taken after the prompt closes');
+$hold->apply('begin_sell', ['at' => 't']);
+$hold->apply('sell', ['paddle_id' => 201, 'customer_id' => 'online-201', 'at' => 't']);
+check($hold->publicPayload('t')['selling'] === false, 'selling the lot clears the prompt');
 check($clear->publicPayload('t')['asking_price'] === 800.0, 'undo all returns to the opening price');
 check($clear->publicPayload('t')['warning'] === null, 'undo all clears the warning');
 check($clear->clerkPayload('t')['undo'] === null, 'undo all leaves nothing to undo');

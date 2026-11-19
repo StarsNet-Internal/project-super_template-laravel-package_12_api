@@ -17,6 +17,12 @@ class LiveSaleBook
     private string $status = 'idle';
     private ?string $currentLotId = null;
 
+    /**
+     * True while the clerk's sold prompt is open. Online bids wait.
+     * Floor, phone, and absentee bids still go on the book.
+     */
+    private bool $selling = false;
+
     /** @var array<string, array<string, mixed>> */
     private array $lots = [];
 
@@ -42,6 +48,7 @@ class LiveSaleBook
         $book->sequence = (int) ($data['sequence'] ?? 0);
         $book->status = (string) ($data['status'] ?? 'idle');
         $book->currentLotId = $data['current_lot_id'] ?? null;
+        $book->selling = (bool) ($data['selling'] ?? false);
         $book->removed = [];
         foreach ($data['removed'] ?? [] as $row) {
             $row = (array) self::plain($row);
@@ -83,6 +90,7 @@ class LiveSaleBook
             'sequence' => $this->sequence,
             'status' => $this->status,
             'current_lot_id' => $this->currentLotId,
+            'selling' => $this->selling,
             'lots' => array_values($this->lots),
             'removed' => array_values($this->removed),
         ];
@@ -137,6 +145,8 @@ class LiveSaleBook
             'take_book' => $this->takeBook($payload, $at),
             'warn' => $this->warn($payload, $at),
             'sell' => $this->sell($payload, $at),
+            'begin_sell' => $this->beginSell(),
+            'cancel_sell' => $this->cancelSell(),
             'pass' => $this->pass($at),
             'undo_latest_bid' => $this->undoLatestBid($payload, $at),
             'undo_all_bids' => $this->undoAllBids($payload, $at),
@@ -347,6 +357,7 @@ class LiveSaleBook
             throw new LiveSaleException('That lot cannot be prepared');
         }
         $this->requireNoLotOnTheBlock($lotId);
+        $this->selling = false;
         // Same path as a passed lot. The hammer comes off now. The asking
         // price stays, so Open keeps a raised ask. Reopen is what drops it.
         if ($lot['state'] === 'sold') {
@@ -517,6 +528,9 @@ class LiveSaleBook
     private function submitOnlineBid(array $payload, string $at): array
     {
         $lot = $this->requireOnTheBlock();
+        if ($this->selling) {
+            throw new LiveSaleException('The lot is being sold');
+        }
         $amount = $this->money($payload['amount'] ?? null);
         $asking = (float) ($lot['asking_price'] ?? 0);
         if (!$this->same($amount, $asking)) {
@@ -813,8 +827,23 @@ class LiveSaleBook
         $lot['hammer_price'] = $latest['amount'];
         $lot['hammer_paddle_id'] = $paddleId;
         $lot['hammer_customer_id'] = $customerId;
+        $this->selling = false;
         $this->lots[$lot['lot_id']] = $lot;
         return ['lot_id' => $lot['lot_id'], 'amount' => $latest['amount'], 'paddle_id' => $paddleId];
+    }
+
+    private function beginSell(): array
+    {
+        $lot = $this->requireOnTheBlock();
+        $this->selling = true;
+        return ['lot_id' => $lot['lot_id']];
+    }
+
+    private function cancelSell(): array
+    {
+        $this->requireRunning();
+        $this->selling = false;
+        return ['lot_id' => $this->currentLotId];
     }
 
     private function pass(string $at): array
@@ -825,6 +854,7 @@ class LiveSaleBook
         if (!in_array($lot['state'], ['preparing', 'reopening', 'open', 'fair_warning'], true)) {
             throw new LiveSaleException('That lot is not on the block');
         }
+        $this->selling = false;
         $lot['state'] = 'passed';
         $lot['warning'] = null;
         $lot['pending'] = [];
@@ -869,7 +899,8 @@ class LiveSaleBook
     }
 
     /**
-     * Withdraws every bid on the lot on the block in one step.
+     * Clears the lot on the block from the ladder, including a row already
+     * marked withdrawn by a single undo. Those rows are not marked withdrawn again.
      * The asking price returns to the opening price. Absentee bids are not placed again.
      *
      * @param array<string, mixed> $payload
@@ -881,14 +912,9 @@ class LiveSaleBook
         if (($lot['bids'] ?? []) === []) {
             throw new LiveSaleException('There is no bid to undo');
         }
-        $lot['withdrawn'] = array_values($lot['withdrawn'] ?? []);
-        $count = 0;
-        while ($lot['bids'] !== []) {
-            $latest = array_pop($lot['bids']);
-            $latest['withdrawn_at'] = $at;
-            $lot['withdrawn'][] = $latest;
-            $count++;
-        }
+        $count = count($lot['bids']);
+        $lot['bids'] = [];
+        $lot['withdrawn'] = [];
         $lot['pending'] = [];
         $lot['state'] = 'open';
         $lot['warning'] = null;
@@ -899,7 +925,7 @@ class LiveSaleBook
         return [
             'lot_id' => $lot['lot_id'],
             'count' => $count,
-            'withdrawn' => true,
+            'withdrawn' => false,
         ];
     }
 
@@ -979,6 +1005,7 @@ class LiveSaleBook
             throw new LiveSaleException('That lot was never opened');
         }
         $this->requireNoLotOnTheBlock($lotId);
+        $this->selling = false;
         $lot['warning'] = null;
         $lot['pending'] = [];
         $lot['hammer_price'] = null;
@@ -1000,6 +1027,7 @@ class LiveSaleBook
                 throw new LiveSaleException('Sell or pass the lot on the block before ending the sale');
             }
         }
+        $this->selling = false;
         $this->status = 'ended';
         return ['lot_id' => $this->currentLotId];
     }
@@ -1127,6 +1155,7 @@ class LiveSaleBook
             'time' => $at,
             'started' => $this->status !== 'idle',
             'ended' => $this->status === 'ended',
+            'selling' => $this->selling,
             'current_lot_id' => $this->currentLotId,
             'lots' => $publicLots,
             'histories' => $histories,

@@ -32,6 +32,8 @@ class LiveSaleController extends Controller
             'take_book',
             'warn',
             'sell',
+            'begin_sell',
+            'cancel_sell',
             'pass',
             'undo_latest_bid',
             'undo_all_bids',
