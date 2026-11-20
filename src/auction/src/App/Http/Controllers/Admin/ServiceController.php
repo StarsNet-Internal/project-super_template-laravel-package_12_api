@@ -435,7 +435,7 @@ class ServiceController extends Controller
         // Update for starting from 2025/09 Auction, partial capture
         $chargeCalculator = function ($amount): int {
             if ($amount <= 1000) return $amount; // For 0 - 1000
-            return floor(($amount * 0.15) / 10) * 10;
+            return floor(($amount * 0.10) / 10) * 10;
             // return $amount <= 10000
             //     ? $amount % 1000 + (intval($amount / 1000)) * 1000 / 5 // remainder + thousands
             //     : $amount % 1000 + (intval($amount / 1000)) * 1000 / 4; // remainder + thousands
