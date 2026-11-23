@@ -335,6 +335,22 @@ class ServiceController extends Controller
                         'Payment verified by Stripe'
                     );
 
+                    if (
+                        $customEventType === 'five_day_delay'
+                        && $vaultPaymentService->isVaultOrder($order)
+                        && !empty($order->customer_id)
+                        && Str::lower((string) $order->current_status) !== Str::slug(ShipmentDeliveryStatus::CANCELLED->value)
+                        && is_null($order->payment_expired_at)
+                        && is_null($order->inventory_released_at)
+                    ) {
+                        $productIDs = collect($order->cart_items)->pluck('product_id')->filter()->unique()->values()->all();
+                        if ($productIDs) {
+                            Product::objectIDs($productIDs)
+                                ->whereNull('buyer_id')
+                                ->update(['buyer_id' => $order->customer_id]);
+                        }
+                    }
+
                     // Update Order
                     if ($order->current_status !== ShipmentDeliveryStatus::PROCESSING->value) {
                         $order->updateStatus(ShipmentDeliveryStatus::PROCESSING->value);
